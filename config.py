@@ -92,13 +92,15 @@ FOLLOW_UP_TIMEOUT: float = _get_float("FOLLOW_UP_TIMEOUT", 30.0)
 # ==========================================
 # 🧠 LLM / RAISONNEMENT (Ollama)
 # ==========================================
-OLLAMA_MODEL: str = _get_str("OLLAMA_MODEL", "gemma4:12b")
+OLLAMA_MODEL: str = _get_str("OLLAMA_MODEL", "qwen2.5:7b")
 OLLAMA_HOST: str = _get_str("OLLAMA_HOST", "http://localhost:11434")
 LLM_SYSTEM_PROMPT: str = _get_str(
     "LLM_SYSTEM_PROMPT",
     "Tu es un assistant vocal domotique. Réponds en français de manière claire, concise et directe (1 à 2 phrases max). N'utilise pas de markdown complexe."
 )
 LLM_STREAM: bool = _get_bool("LLM_STREAM", True)
+LLM_THINK: bool = _get_bool("LLM_THINK", False)
+
 
 # ==========================================
 # 🔊 SYNTHÈSE VOCALE / TTS (Piper TTS)
@@ -159,6 +161,7 @@ if __name__ == "__main__":
     print(f"  • OLLAMA_MODEL            : {OLLAMA_MODEL}")
     print(f"  • OLLAMA_HOST             : {OLLAMA_HOST}")
     print(f"  • LLM_STREAM              : {LLM_STREAM}")
+    print(f"  • LLM_THINK               : {LLM_THINK}")
     print(f"  • TTS_MODEL_PATH          : {TTS_MODEL_PATH}")
     print(f"  • TTS_CONFIG_PATH         : {TTS_CONFIG_PATH}")
     print(f"  • TTS_SPEECH_SPEED        : {TTS_SPEECH_SPEED}")
