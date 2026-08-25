@@ -1,28 +1,47 @@
 import numpy as np
 import pyaudio
-from wakeword import WakeWordDetector, CHUNK, RATE, FORMAT
+from config import (
+     CHUNK,
+     RATE,
+     CHANNELS,
+     AUDIO_INPUT_DEVICE_INDEX,
+     FOLLOW_UP_TIMEOUT,
+)
+from wakeword import WakeWordDetector, FORMAT
 from transcribe import VoiceTranscriber
 from llm import ask_llm
 from tts import TextToSpeech
+from feedback import FeedbackManager
 
-FOLLOW_UP_TIMEOUT = 30.0
+
+def flush_stream(stream):
+    """Purge les données audio résiduelles du flux micro."""
+    try:
+        avail = stream.get_read_available()
+        if avail > 0:
+            stream.read(avail, exception_on_overflow=False)
+    except Exception:
+        pass
+
 
 def main():
     print("Initialisation des composants... ⏳")
     detector = WakeWordDetector()
-    transcriber = VoiceTranscriber(model_name="base")
+    transcriber = VoiceTranscriber()
     tts = TextToSpeech()
+    feedback = FeedbackManager(tts=tts)
 
     p = pyaudio.PyAudio()
     stream = p.open(
         format=FORMAT,
-        channels=1,
+        channels=CHANNELS,
         rate=RATE,
         input=True,
+        input_device_index=AUDIO_INPUT_DEVICE_INDEX,
         frames_per_buffer=CHUNK
     )
 
-    print("\n🟢 Assistant prêt avec voix active ! En attente du mot-clé... 🎙️\n")
+    print("\n🟢 Démarrage\n")
 
     try:
         while True:
@@ -31,7 +50,10 @@ def main():
             detected, score = detector.process_chunk(chunk)
 
             if detected:
-                print(f"✨ Mot-clé détecté ! (Score : {score:.2f})")
+                print(f"✨ Mot-clé détecté ! (Score: : {score:.2f})")
+                
+                # Signal / Phrase de prise en compte du mot-clé
+                feedback.on_wakeword_detected()
                 in_conversation = True
 
                 while in_conversation:
@@ -41,8 +63,8 @@ def main():
                     )
 
                     if text:
-                        print(f"👉 Toi : « {text} » ({inf_t:.2f} s)")
-                        print("🤖 Assistant : ", end="", flush=True)
+                        print(f"👤 : « {text} » ({inf_t:.2f} s)")
+                        print("🤖 : ", end="", flush=True)
 
                         # 1. Génération de la réponse Ollama
                         response_text = ask_llm(text)
@@ -51,12 +73,20 @@ def main():
                         if response_text:
                             tts.speak(response_text)
 
+                        # 3. Signal de fin de réponse (passage de la parole)
+                        feedback.on_response_end()
+
                         print("\n" + "-" * 40)
                     else:
-                        print("\n😴 Fin de la session.")
+                        # print("\n😴 Fin de la session.")
+                        
+                        # Signal / Phrase de mise en veille
+                        feedback.on_timeout()
+                        flush_stream(stream)
+                        detector.oww.reset()
                         in_conversation = False
 
-                print("\n🟢 En veille : en attente du mot-clé... 🎙️\n")
+                print("\n🟢 Veille...\n")
 
     except KeyboardInterrupt:
         print("\nArrêt de l'assistant.")
@@ -67,3 +97,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+

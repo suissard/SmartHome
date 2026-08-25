@@ -6,16 +6,39 @@ from collections import deque
 import numpy as np
 import pyaudio
 from faster_whisper import WhisperModel
+from config import (
+    AUDIO_CHUNK,
+    AUDIO_RATE,
+    AUDIO_INPUT_DEVICE_INDEX,
+    WHISPER_MODEL,
+    WHISPER_DEVICE,
+    WHISPER_COMPUTE_TYPE,
+    WHISPER_LANGUAGE,
+    WHISPER_BEAM_SIZE,
+    VOICE_THRESHOLD,
+    SILENCE_DURATION,
+    MAX_SPEECH_DURATION,
+    FOLLOW_UP_TIMEOUT,
+)
 
-CHUNK = 1280
-RATE = 16000
+CHUNK = AUDIO_CHUNK
+RATE = AUDIO_RATE
 FORMAT = pyaudio.paInt16
 
 class VoiceTranscriber:
-    def __init__(self, model_name="base", voice_threshold=700, silence_duration=0.8):
-        self.model = WhisperModel(model_name, device="cpu", compute_type="int8")
+    def __init__(
+        self,
+        model_name=WHISPER_MODEL,
+        device=WHISPER_DEVICE,
+        compute_type=WHISPER_COMPUTE_TYPE,
+        voice_threshold=VOICE_THRESHOLD,
+        silence_duration=SILENCE_DURATION
+    ):
+        self.model = WhisperModel(model_name, device=device, compute_type=compute_type)
         self.voice_threshold = voice_threshold
-        self.silence_duration = silence_duration  # 0.8s pour plus de nervosité
+        self.silence_duration = silence_duration
+        self.language = WHISPER_LANGUAGE
+        self.beam_size = WHISPER_BEAM_SIZE
 
     def _flush_stream(self, stream):
         """Purge les paquets résiduels dans le micro"""
@@ -26,7 +49,12 @@ class VoiceTranscriber:
         except Exception:
             pass
 
-    def record_and_transcribe(self, stream, timeout_silence=30.0, max_speech_duration=12.0):
+    def record_and_transcribe(
+        self,
+        stream,
+        timeout_silence=FOLLOW_UP_TIMEOUT,
+        max_speech_duration=MAX_SPEECH_DURATION
+    ):
         self._flush_stream(stream)
         start_wait = time.time()
         pre_buffer = deque(maxlen=4)
@@ -92,8 +120,8 @@ class VoiceTranscriber:
                     t0 = time.perf_counter()
                     segments, _ = self.model.transcribe(
                         wav_buffer,
-                        language="fr",
-                        beam_size=3,
+                        language=self.language,
+                        beam_size=self.beam_size,
                         condition_on_previous_text=False
                     )
                     text = " ".join([seg.text for seg in segments]).strip()
@@ -111,14 +139,21 @@ class VoiceTranscriber:
                 pre_buffer.clear()
 
 if __name__ == "__main__":
-    print("🧪 [DEBUG] Mode test Transcription (Timer 15s)...")
+    print(f"🧪 [DEBUG] Mode test Transcription (Modèle={WHISPER_MODEL}, Timer {FOLLOW_UP_TIMEOUT}s)...")
     transcriber = VoiceTranscriber()
     p = pyaudio.PyAudio()
-    stream = p.open(format=FORMAT, channels=1, rate=RATE, input=True, frames_per_buffer=CHUNK)
+    stream = p.open(
+        format=FORMAT,
+        channels=1,
+        rate=RATE,
+        input=True,
+        input_device_index=AUDIO_INPUT_DEVICE_INDEX,
+        frames_per_buffer=CHUNK
+    )
 
     try:
         while True:
-            text, inf_t, aud_t = transcriber.record_and_transcribe(stream, timeout_silence=15.0)
+            text, inf_t, aud_t = transcriber.record_and_transcribe(stream, timeout_silence=FOLLOW_UP_TIMEOUT)
             if text:
                 print(f"👉 Texte : « {text} »\n")
             else:
@@ -129,3 +164,4 @@ if __name__ == "__main__":
         stream.stop_stream()
         stream.close()
         p.terminate()
+

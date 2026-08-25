@@ -1,18 +1,25 @@
 import ollama
+from config import (
+    OLLAMA_MODEL,
+    OLLAMA_HOST,
+    LLM_SYSTEM_PROMPT,
+    LLM_STREAM,
+)
 
-DEFAULT_MODEL = "qwen2.5:7b"
+DEFAULT_MODEL = OLLAMA_MODEL
+_client = ollama.Client(host=OLLAMA_HOST) if OLLAMA_HOST else ollama.Client()
 
-def ask_llm(prompt, model=DEFAULT_MODEL, stream=True):
+def ask_llm(prompt, model=DEFAULT_MODEL, system_prompt=LLM_SYSTEM_PROMPT, stream=LLM_STREAM):
     """Envoie un prompt à Ollama et retourne la réponse"""
     messages = [
         {
             "role": "system",
-            "content": "Tu es un assistant vocal domotique. Réponds en français de manière claire, concise et directe (1 à 2 phrases max). N'utilise pas de markdown complexe."
+            "content": system_prompt
         },
         {"role": "user", "content": prompt}
     ]
 
-    response = ollama.chat(model=model, messages=messages, stream=stream)
+    response = _client.chat(model=model, messages=messages, stream=stream)
     full_text = ""
 
     if stream:
@@ -27,7 +34,7 @@ def ask_llm(prompt, model=DEFAULT_MODEL, stream=True):
     return full_text
 
 if __name__ == "__main__":
-    print(f"🧪 [DEBUG] Mode test Ollama ({DEFAULT_MODEL})...")
+    print(f"🧪 [DEBUG] Mode test Ollama (Modèle: {DEFAULT_MODEL}, Host: {OLLAMA_HOST})...")
     while True:
         try:
             user_input = input("\nToi > ")
@@ -37,3 +44,4 @@ if __name__ == "__main__":
             ask_llm(user_input)
         except KeyboardInterrupt:
             break
+

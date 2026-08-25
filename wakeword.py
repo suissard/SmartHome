@@ -2,14 +2,21 @@ import sys
 import numpy as np
 import pyaudio
 from openwakeword.model import Model
+from config import (
+    WAKEWORD_MODEL_PATH,
+    WAKEWORD_THRESHOLD,
+    AUDIO_CHUNK,
+    AUDIO_RATE,
+    AUDIO_INPUT_DEVICE_INDEX,
+)
 
-MODEL_PATH = "wakewords/Salut_Jarvisse_20260601_005854.onnx"
-CHUNK = 1280
-RATE = 16000
+MODEL_PATH = WAKEWORD_MODEL_PATH
+CHUNK = AUDIO_CHUNK
+RATE = AUDIO_RATE
 FORMAT = pyaudio.paInt16
 
 class WakeWordDetector:
-    def __init__(self, model_path=MODEL_PATH, threshold=0.5):
+    def __init__(self, model_path=WAKEWORD_MODEL_PATH, threshold=WAKEWORD_THRESHOLD):
         self.oww = Model(wakeword_model_paths=[model_path])
         # Récupération du nom du modèle depuis le dictionnaire des modèles chargés
         self.model_name = list(self.oww.models.keys())[0]
@@ -25,7 +32,7 @@ class WakeWordDetector:
         return False, score
 
 if __name__ == "__main__":
-    print("🧪 [DEBUG] Mode test Détecteur de mot-clé...")
+    print(f"🧪 [DEBUG] Mode test Détecteur de mot-clé ({MODEL_PATH}, seuil={WAKEWORD_THRESHOLD})...")
     detector = WakeWordDetector()
     p = pyaudio.PyAudio()
     stream = p.open(
@@ -33,6 +40,7 @@ if __name__ == "__main__":
         channels=1,
         rate=RATE,
         input=True,
+        input_device_index=AUDIO_INPUT_DEVICE_INDEX,
         frames_per_buffer=CHUNK
     )
 
@@ -59,3 +67,4 @@ if __name__ == "__main__":
         stream.stop_stream()
         stream.close()
         p.terminate()
+
