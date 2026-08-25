@@ -17,36 +17,36 @@ Ce document est destiné aux agents IA (et aux développeurs) qui lisent, mainti
 ## 📐 2. Cartographie Technique des Composants
 
 ```
-┌────────────────────────────────────────────────────────────────────────────────────────┐
-│                                       main.py                                          │
-│                          (Orchestrateur & Machine à États)                             │
-└────────┬───────────────────┬───────────────────┬───────────────────┬───────────────────┘
-         │                   │                   │                   │                   
-         ▼                   ▼                   ▼                   ▼                   ▼
-┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐
-│   wakeword.py   │ │  transcribe.py  │ │     llm.py      │ │     tts.py      │ │   feedback.py   │
-│  (openWakeWord) │ │ (faster-whisper)│ │ (Ollama Client) │ │   (Piper TTS)   │ │ (Sons & Signaux)│
-└────────┬────────┘ └────────┬────────┘ └────────┬────────┘ └────────┬────────┘ └────────┬────────┘
+┌─────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                                 main.py                                                 │
+│                                    (Orchestrateur & Machine à États)                                    │
+└────────┬───────────────────┬───────────────────┬───────────────────┬───────────────────┬────────────────┘
          │                   │                   │                   │                   │
-         └───────────────────┴─────────┬─────────┴───────────────────┴───────────────────┘
-                                       ▼
-                       ┌───────────────────────────────┐
-                       │           config.py           │
-                       │   (Chargeur .env & Typage)    │
-                       └───────────────────────────────┘
+         ▼                   ▼                   ▼                   ▼                   ▼                   ▼
+┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐
+│   wakeword.py   │ │  transcribe.py  │ │     llm.py      │ │     tts.py      │ │   feedback.py   │ │   ducking.py    │
+│  (openWakeWord) │ │ (faster-whisper)│ │ (Ollama Client) │ │   (Piper TTS)   │ │ (Sons & Signaux)│ │(PipeWire/Pulse) │
+└────────┬────────┘ └────────┬────────┘ └────────┬────────┘ └────────┬────────┘ └────────┬────────┘ └────────┬────────┘
+         │                   │                   │                   │                   │                   │
+         └───────────────────┴───────────────────┴─────────┬─────────┴───────────────────┴───────────────────┘
+                                                           ▼
+                                           ┌───────────────────────────────┐
+                                           │           config.py           │
+                                           │   (Chargeur .env & Typage)    │
+                                           └───────────────────────────────┘
 ```
 
 
 ### 2.1 [main.py](file:///home/suissard/PROGRAMMATIONS/SmartHome/main.py) — Orchestrateur Principal
-- **Responsabilité** : Initialise le flux d'entrée micro partagé (`PyAudio`), gère la boucle d'événements et maintient l'état conversationnel.
+- **Responsabilité** : Initialise le flux d'entrée micro partagé (`PyAudio`), gère la boucle d'événements, le ducking sonore et maintient l'état conversationnel.
 - **Paramètres Clés** :
   - `FOLLOW_UP_TIMEOUT = 30.0` : Durée (en secondes) pendant laquelle l'assistant reste en écoute active après une réponse.
 - **Cycle de Fonctionnement** :
   1. Écoute passive par paquets (`CHUNK = 1280` à `RATE = 16000`).
-  2. Si le mot-clé est validé (`score > threshold`), notification `feedback.on_wakeword_detected()` puis passage en mode `in_conversation = True`.
+  2. Si le mot-clé est validé (`score > threshold`), atténuation audio globale via `ducker.duck()`, notification `feedback.on_wakeword_detected()`, puis passage en mode `in_conversation = True`.
   3. Boucle de follow-up : appel de `transcriber.record_and_transcribe(...)`.
   4. Si du texte est reçu : inférence LLM (`ask_llm`), vocalisation (`tts.speak`), puis signal sonore de fin de tour `feedback.on_response_end()`.
-  5. Si timeout de silence : notification de mise en veille `feedback.on_timeout()`, purge du flux et retour en veille passive.
+  5. Si timeout de silence : notification de mise en veille `feedback.on_timeout()`, purge du flux, restauration du son système via `ducker.unduck()`, et retour en veille passive.
 
 ### 2.2 [wakeword.py](file:///home/suissard/PROGRAMMATIONS/SmartHome/wakeword.py) — Détection de Mot-Clé
 - **Technologie** : `openwakeword` avec moteur d'inférence ONNX Runtime.
@@ -82,9 +82,13 @@ Ce document est destiné aux agents IA (et aux développeurs) qui lisent, mainti
 - **Technologie** : Synthèse harmonique procédurale (`numpy` + `sounddevice`) & lecteur WAV.
 - **Rôle** : Gère les retours sonores (bips, carillons, accords ascendants/descendants, ding) et vocaux (phrases TTS) pour la détection du wake word, la fin de parole de l'IA et le timeout d'écoute active.
 
-### 2.7 [config.py](file:///home/suissard/PROGRAMMATIONS/SmartHome/config.py) — Chargeur de Configuration & Variables d'Environnement
+### 2.7 [ducking.py](file:///home/suissard/PROGRAMMATIONS/SmartHome/ducking.py) — Atténuation Audio Système (Ducking)
+- **Technologie** : `pactl` JSON (compatible PipeWire & PulseAudio).
+- **Rôle** : Réduit le volume de toutes les applications tierces (musique, vidéos, jeux, etc.) à un niveau paramétrable (ex: 20%) dès que l'assistant écoute ou parle, et rétablit les volumes initiaux à la mise en veille. Filtre le PID de l'assistant pour ne pas altérer la voix de sortie.
+
+### 2.8 [config.py](file:///home/suissard/PROGRAMMATIONS/SmartHome/config.py) — Chargeur de Configuration & Variables d'Environnement
 - **Technologie** : `python-dotenv`.
-- **Rôle** : Charge `.env` avec conversion de types stricte (`int`, `float`, `bool`, `str`, `Optional`) et fallbacks par défaut pour toutes les constantes du projet (audio, wake word, whisper, ollama, piper, feedbacks).
+- **Rôle** : Charge `.env` avec conversion de types stricte (`int`, `float`, `bool`, `str`, `Optional`) et fallbacks par défaut pour toutes les constantes du projet (audio, wake word, whisper, ollama, piper, feedbacks, ducking).
 
 ---
 
@@ -99,7 +103,7 @@ stateDiagram-v2
         EcouteWakeWord --> EcouteWakeWord : Chunk analysé (score < seuil)
     }
 
-    VEILLE_PASSIVE --> SESSION_ACTIVE : Mot-clé détecté (score >= seuil) -> Feedback Wake Word
+    VEILLE_PASSIVE --> SESSION_ACTIVE : Mot-clé détecté (score >= seuil) -> ducker.duck() + Feedback Wake Word
 
     state SESSION_ACTIVE {
         [*] --> ECOUTE_VAD
@@ -112,7 +116,7 @@ stateDiagram-v2
         ATTENTE_FOLLOW_UP --> ECOUTE_VAD : Parole détectée (< 30s)
     }
 
-    SESSION_ACTIVE --> VEILLE_PASSIVE : Timeout silence global (30s) -> Feedback Veille
+    SESSION_ACTIVE --> VEILLE_PASSIVE : Timeout silence global (30s) -> Feedback Veille + ducker.unduck()
 ```
 
 ---
@@ -122,7 +126,8 @@ stateDiagram-v2
 Lors de toute intervention sur ce codebase, veillez à respecter les règles suivantes :
 
 ### 1. Préservation des Points d'Entrée de Test Autonomes
-Chaque module Python (`config.py`, `wakeword.py`, `transcribe.py`, `llm.py`, `tts.py`, `feedback.py`, `test_sound.py`) **doit impérativement conserver son bloc `if __name__ == "__main__":`**. Ces blocs permettent un diagnostic isolé sans charger toute la pile applicative.
+Chaque module Python (`config.py`, `wakeword.py`, `transcribe.py`, `llm.py`, `tts.py`, `feedback.py`, `ducking.py`, `test_sound.py`) **doit impérativement conserver son bloc `if __name__ == "__main__":`**. Ces blocs permettent un diagnostic isolé sans charger toute la pile applicative.
+
 
 
 ### 2. Gestion des Flux Audio & Synchronisation

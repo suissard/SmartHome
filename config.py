@@ -92,7 +92,7 @@ FOLLOW_UP_TIMEOUT: float = _get_float("FOLLOW_UP_TIMEOUT", 30.0)
 # ==========================================
 # 🧠 LLM / RAISONNEMENT (Ollama)
 # ==========================================
-OLLAMA_MODEL: str = _get_str("OLLAMA_MODEL", "qwen2.5:7b")
+OLLAMA_MODEL: str = _get_str("OLLAMA_MODEL", "gemma4:12b")
 OLLAMA_HOST: str = _get_str("OLLAMA_HOST", "http://localhost:11434")
 LLM_SYSTEM_PROMPT: str = _get_str(
     "LLM_SYSTEM_PROMPT",
@@ -132,6 +132,13 @@ FEEDBACK_TIMEOUT_SOUND: str = _get_str("FEEDBACK_TIMEOUT_SOUND", "sleep")
 # Volume global des signaux sonores (0.0 à 1.0)
 FEEDBACK_SOUND_VOLUME: float = _get_float("FEEDBACK_SOUND_VOLUME", 0.5)
 
+# ==========================================
+# 🔉 DUCKING / ATTÉNUATION SONORE SYSTÈME
+# ==========================================
+DUCKING_ENABLED: bool = _get_bool("DUCKING_ENABLED", True)
+DUCKING_VOLUME_PERCENT: int = _get_int("DUCKING_VOLUME_PERCENT", 20)
+DUCKING_RESTORE_ON_EXIT: bool = _get_bool("DUCKING_RESTORE_ON_EXIT", True)
+
 if __name__ == "__main__":
     print("📋 [CONFIG] Configuration chargée :")
     print(f"  • AUDIO_RATE              : {AUDIO_RATE}")
@@ -159,4 +166,8 @@ if __name__ == "__main__":
     print(f"  • FEEDBACK_RESPONSE_END   : {FEEDBACK_RESPONSE_END_TYPE} ('{FEEDBACK_RESPONSE_END_SOUND}' / '{FEEDBACK_RESPONSE_END_TEXT}')")
     print(f"  • FEEDBACK_TIMEOUT        : {FEEDBACK_TIMEOUT_TYPE} ('{FEEDBACK_TIMEOUT_TEXT}' / '{FEEDBACK_TIMEOUT_SOUND}')")
     print(f"  • FEEDBACK_SOUND_VOLUME   : {FEEDBACK_SOUND_VOLUME}")
+    print(f"  • DUCKING_ENABLED         : {DUCKING_ENABLED}")
+    print(f"  • DUCKING_VOLUME_PERCENT  : {DUCKING_VOLUME_PERCENT}%")
+    print(f"  • DUCKING_RESTORE_ON_EXIT : {DUCKING_RESTORE_ON_EXIT}")
+
 
