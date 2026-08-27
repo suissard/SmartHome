@@ -6,11 +6,11 @@ SmartHome est un assistant vocal intelligent, modulaire, ultra-réactif et enti�
 
 ## 🌟 Points Forts & Fonctionnalités
 
-- **🔒 100% Hors-Ligne & Respect de la Vie Privée** : Vos conversations ne quittent jamais votre machine.
+- **🔒 100% Souverain ou Cloud Flexible** : Choisissez une exécution 100% hors-ligne (local) ou basculez facilement vers **OpenRouter** pour le LLM, le STT et le TTS via `.env`.
 - **⚡ Détection de Mot-Clé Instantanée** : Propulsé par **openWakeWord** (modèles ONNX légers et optimisés).
-- **🎙️ Transcription Vocale Énergique (STT)** : Utilisation de **faster-whisper** (Whisper `base` en int8 sur CPU) avec détection d'activité vocale (VAD) et buffer circulaire pour capturer dès la première syllabe sans coupure.
-- **🧠 Intelligence & Raisonnement (LLM)** : Connecté en local à **Ollama** (modèle `qwen2.5:7b` configuré pour des réponses concises et adaptées à la voix).
-- **🔊 Synthèse Vocale Fluide (TTS)** : Basé sur **Piper TTS** (moteur neural ONNX français) avec traitement post-audio (atténuation des clics/pops et fondu progressif).
+- **🎙️ Transcription Vocale (STT)** : Support de **faster-whisper** en local (CPU/GPU) ou **OpenRouter / Whisper API** en cloud, avec VAD temps réel.
+- **🧠 Intelligence & Raisonnement (LLM)** : Connecté au choix à **Ollama** en local (`qwen2.5:7b`, `gemma`, etc.) ou à **OpenRouter** (`meta-llama/llama-3.3-70b-instruct`, `gpt-4o-mini`, `claude-3.5-sonnet`, `gemini-2.5-flash`, etc.).
+- **🔊 Synthèse Vocale Fluide (TTS)** : Basé sur **Piper TTS** (moteur neural ONNX local) ou **OpenRouter Speech API** avec traitement post-audio (atténuation des clics/pops et fondu progressif).
 - **🔔 Signaux Sonores & Retours Vocaux** : Accords harmoniques, carillons (*ding* de fin de phrase), et phrases personnalisables (*"Que puis je pour toi ?"*, *"Bisous a plus tard"*).
 - **💬 Mode Conversation Suivie (*Follow-up*)** : Après le réveil par mot-clé, l'assistant reste en veille active pendant 30 secondes pour enchaîner les questions sans répéter le mot d'activation.
 
@@ -168,6 +168,19 @@ Toutes les variables sont désormais centralisées dans le fichier `.env` (gér�
 ### Exemple de configuration `.env` :
 
 ```ini
+# --- Fournisseurs de Services (ollama / whisper / piper OU openrouter) ---
+LLM_PROVIDER=ollama
+STT_PROVIDER=whisper
+TTS_PROVIDER=piper
+
+# --- Configuration OpenRouter (si activé) ---
+OPENROUTER_API_KEY=sk-or-v1-xxxxxxxx
+OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+OPENROUTER_MODEL=meta-llama/llama-3.3-70b-instruct
+OPENROUTER_STT_MODEL=openai/whisper-large-v3
+OPENROUTER_TTS_MODEL=openai/tts-1
+OPENROUTER_TTS_VOICE=nova
+
 # --- Paramètres Audio ---
 AUDIO_RATE=16000
 AUDIO_CHUNK=1280
@@ -178,7 +191,7 @@ AUDIO_OUTPUT_DEVICE_INDEX=
 WAKEWORD_MODEL_PATH=wakewords/Salut_Jarvisse_20260601_005854.onnx
 WAKEWORD_THRESHOLD=0.5
 
-# --- Transcription (Whisper) ---
+# --- Transcription Locale (Whisper) ---
 WHISPER_MODEL=base
 WHISPER_DEVICE=cpu
 WHISPER_COMPUTE_TYPE=int8
@@ -186,13 +199,13 @@ VOICE_THRESHOLD=700
 SILENCE_DURATION=0.8
 FOLLOW_UP_TIMEOUT=30.0
 
-# --- Cerveau LLM (Ollama) ---
+# --- Cerveau LLM Local (Ollama) ---
 OLLAMA_MODEL=qwen2.5:7b
 OLLAMA_HOST=http://localhost:11434
 LLM_SYSTEM_PROMPT="Tu es un assistant vocal domotique. Réponds en français de manière claire, concise et directe (1 à 2 phrases max)."
 LLM_STREAM=true
 
-# --- Synthèse Vocale (Piper TTS) ---
+# --- Synthèse Vocale Locale (Piper TTS) ---
 TTS_MODEL_PATH=voice.onnx
 TTS_CONFIG_PATH=voice.onnx.json
 TTS_SPEECH_SPEED=1.15

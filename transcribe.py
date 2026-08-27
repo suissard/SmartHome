@@ -5,8 +5,11 @@ import wave
 from collections import deque
 import numpy as np
 import pyaudio
-from faster_whisper import WhisperModel
 from config import (
+    STT_PROVIDER,
+    OPENROUTER_API_KEY,
+    OPENROUTER_BASE_URL,
+    OPENROUTER_STT_MODEL,
     AUDIO_CHUNK,
     AUDIO_RATE,
     AUDIO_INPUT_DEVICE_INDEX,
@@ -25,20 +28,38 @@ CHUNK = AUDIO_CHUNK
 RATE = AUDIO_RATE
 FORMAT = pyaudio.paInt16
 
+
 class VoiceTranscriber:
     def __init__(
         self,
+        provider=STT_PROVIDER,
         model_name=WHISPER_MODEL,
         device=WHISPER_DEVICE,
         compute_type=WHISPER_COMPUTE_TYPE,
         voice_threshold=VOICE_THRESHOLD,
         silence_duration=SILENCE_DURATION
     ):
-        self.model = WhisperModel(model_name, device=device, compute_type=compute_type)
+        self.provider = provider.lower()
         self.voice_threshold = voice_threshold
         self.silence_duration = silence_duration
         self.language = WHISPER_LANGUAGE
         self.beam_size = WHISPER_BEAM_SIZE
+
+        if self.provider == "openrouter":
+            print(f"Chargement STT OpenRouter (Modèle: {OPENROUTER_STT_MODEL})... ⏳")
+            from openai import OpenAI
+            self.client = OpenAI(
+                base_url=OPENROUTER_BASE_URL,
+                api_key=OPENROUTER_API_KEY or "missing-key"
+            )
+            self.model = None
+            print("STT OpenRouter prêt ✅")
+        else:
+            print(f"Chargement Whisper local ({model_name} sur {device})... ⏳")
+            from faster_whisper import WhisperModel
+            self.model = WhisperModel(model_name, device=device, compute_type=compute_type)
+            self.client = None
+            print("Whisper local prêt ✅")
 
     def _flush_stream(self, stream):
         """Purge les paquets résiduels dans le micro"""
@@ -118,13 +139,31 @@ class VoiceTranscriber:
                     wav_buffer.seek(0)
 
                     t0 = time.perf_counter()
-                    segments, _ = self.model.transcribe(
-                        wav_buffer,
-                        language=self.language,
-                        beam_size=self.beam_size,
-                        condition_on_previous_text=False
-                    )
-                    text = " ".join([seg.text for seg in segments]).strip()
+                    text = ""
+
+                    try:
+                        if self.provider == "openrouter":
+                            if not OPENROUTER_API_KEY:
+                                print("\n⚠️ Clé API OpenRouter manquante pour la transcription STT.")
+                            else:
+                                audio_tuple = ("audio.wav", wav_buffer.getvalue(), "audio/wav")
+                                transcription = self.client.audio.transcriptions.create(
+                                    model=OPENROUTER_STT_MODEL,
+                                    file=audio_tuple,
+                                    language=self.language if self.language else None
+                                )
+                                text = transcription.text.strip() if hasattr(transcription, "text") else ""
+                        else:
+                            segments, _ = self.model.transcribe(
+                                wav_buffer,
+                                language=self.language,
+                                beam_size=self.beam_size,
+                                condition_on_previous_text=False
+                            )
+                            text = " ".join([seg.text for seg in segments]).strip()
+                    except Exception as e:
+                        print(f"\n⚠️ Erreur de transcription : {e}")
+
                     inf_t = time.perf_counter() - t0
                     aud_d = (len(frames) * CHUNK) / RATE
 
@@ -138,8 +177,10 @@ class VoiceTranscriber:
                 self._flush_stream(stream)
                 pre_buffer.clear()
 
+
 if __name__ == "__main__":
-    print(f"🧪 [DEBUG] Mode test Transcription (Modèle={WHISPER_MODEL}, Timer {FOLLOW_UP_TIMEOUT}s)...")
+    active_stt = OPENROUTER_STT_MODEL if STT_PROVIDER == "openrouter" else WHISPER_MODEL
+    print(f"🧪 [DEBUG] Mode test Transcription (Fournisseur: {STT_PROVIDER.upper()}, Modèle: {active_stt}, Timer: {FOLLOW_UP_TIMEOUT}s)...")
     transcriber = VoiceTranscriber()
     p = pyaudio.PyAudio()
     stream = p.open(

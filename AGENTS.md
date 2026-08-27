@@ -38,7 +38,7 @@ Ce document est destiné aux agents IA (et aux développeurs) qui lisent, mainti
 
 
 ### 2.1 [main.py](file:///home/suissard/PROGRAMMATIONS/SmartHome/main.py) — Orchestrateur Principal
-- **Responsabilité** : Initialise le flux d'entrée micro partagé (`PyAudio`), gère la boucle d'événements, le ducking sonore et maintient l'état conversationnel.
+- **Responsabilité** : Initialise le flux d'entrée micro partagé (`PyAudio`), gère la boucle d'événements, le ducking sonore et maintient l'état conversationnel. Affiche les fournisseurs actifs au démarrage (LLM, STT, TTS).
 - **Paramètres Clés** :
   - `FOLLOW_UP_TIMEOUT = 30.0` : Durée (en secondes) pendant laquelle l'assistant reste en écoute active après une réponse.
 - **Cycle de Fonctionnement** :
@@ -56,22 +56,22 @@ Ce document est destiné aux agents IA (et aux développeurs) qui lisent, mainti
   - Si le score dépasse `threshold` (par défaut `0.5`), le buffer interne est purgé via `self.oww.reset()` pour éviter les détections fantômes consécutives.
 
 ### 2.3 [transcribe.py](file:///home/suissard/PROGRAMMATIONS/SmartHome/transcribe.py) — Enregistrement & STT
-- **Technologie** : `faster-whisper` (modèle `base`, quantifié en `int8` sur CPU).
+- **Technologie** : Modulaire selon `STT_PROVIDER` (`whisper` via `faster-whisper` ou `openrouter` via `/api/v1/audio/transcriptions`).
 - **Gestion VAD & Audio** :
   - `pre_buffer` (`deque(maxlen=4)`) : Conserve les 4 dernières trames (320 ms) pour ne jamais couper l'attaque de la voix.
   - `voice_threshold = 700` : Détection du début de parole par calcul de la moyenne absolue des amplitudes (`np.abs(chunk).mean()`).
   - `silence_duration = 0.8s` : Seuil de silence consécutif marquant la fin naturelle d'une phrase.
   - `_flush_stream()` : Purge le buffer résiduel de la carte son avant chaque écoute pour éliminer les bruits résiduels ou l'écho de la synthèse précédente.
-- **Conversion** : Assemblage des trames dans un buffer WAV en mémoire (`io.BytesIO`) avant passage dans Whisper.
+- **Conversion & Transcription** : Assemblage des trames dans un buffer WAV en mémoire (`io.BytesIO`) avant passage dans Whisper local ou l'API OpenRouter STT.
 
 ### 2.4 [llm.py](file:///home/suissard/PROGRAMMATIONS/SmartHome/llm.py) — Raisonnement & Génération
-- **Technologie** : API locale `ollama` (`qwen2.5:7b` par défaut).
+- **Technologie** : Modulaire selon `LLM_PROVIDER` (`ollama` en local ou `openrouter` via l'API OpenAI compatible).
 - **Prompt Système** :
   > *"Tu es un assistant vocal domotique. Réponds en français de manière claire, concise et directe (1 à 2 phrases max). N'utilise pas de markdown complexe."*
-- **Streaming** : Supporte le streaming console immédiat pour un retour visuel en temps réel pendant la génération.
+- **Streaming** : Supporte le streaming console immédiat pour un retour visuel en temps réel pendant la génération quel que soit le fournisseur actif.
 
 ### 2.5 [tts.py](file:///home/suissard/PROGRAMMATIONS/SmartHome/tts.py) — Synthèse Vocale
-- **Technologie** : `piper-tts` avec modèle neural ONNX (`voice.onnx` + `voice.onnx.json`).
+- **Technologie** : Modulaire selon `TTS_PROVIDER` (`piper` via ONNX neural local ou `openrouter` via `/api/v1/audio/speech`).
 - **Post-Traitement Audio Anti-Pops & Fluidité** :
   1. *Ponctuation forcée* : Ajout automatique d'un point final si manquant pour garantir une intonation descendante naturelle.
   2. *Fade-Out (50 ms)* : Atténuation linéaire en fin de signal pour supprimer les clics numériques de fin de flux.
@@ -88,7 +88,7 @@ Ce document est destiné aux agents IA (et aux développeurs) qui lisent, mainti
 
 ### 2.8 [config.py](file:///home/suissard/PROGRAMMATIONS/SmartHome/config.py) — Chargeur de Configuration & Variables d'Environnement
 - **Technologie** : `python-dotenv`.
-- **Rôle** : Charge `.env` avec conversion de types stricte (`int`, `float`, `bool`, `str`, `Optional`) et fallbacks par défaut pour toutes les constantes du projet (audio, wake word, whisper, ollama, piper, feedbacks, ducking).
+- **Rôle** : Charge `.env` avec conversion de types stricte (`int`, `float`, `bool`, `str`, `Optional`) et fallbacks par défaut pour toutes les constantes du projet (providers LLM/STT/TTS, OpenRouter, audio, wake word, whisper, ollama, piper, feedbacks, ducking).
 
 ---
 

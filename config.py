@@ -1,6 +1,16 @@
 import os
+import sys
 from pathlib import Path
 from dotenv import load_dotenv
+
+# Encodage UTF-8 pour la console Windows
+if sys.platform == "win32" and hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        if hasattr(sys.stderr, "reconfigure"):
+            sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
 
 # Chargement du fichier .env
 BASE_DIR = Path(__file__).resolve().parent
@@ -57,6 +67,23 @@ def _get_optional_int(key: str, default=None):
 
 
 # ==========================================
+# 🌐 FOURNISSEURS DE SERVICES (Providers)
+# ==========================================
+LLM_PROVIDER: str = _get_str("LLM_PROVIDER", "ollama").lower()
+STT_PROVIDER: str = _get_str("STT_PROVIDER", "whisper").lower()
+TTS_PROVIDER: str = _get_str("TTS_PROVIDER", "piper").lower()
+
+# ==========================================
+# ☁️ OPENROUTER / CLOUD
+# ==========================================
+OPENROUTER_API_KEY: str = _get_str("OPENROUTER_API_KEY", "")
+OPENROUTER_BASE_URL: str = _get_str("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+OPENROUTER_MODEL: str = _get_str("OPENROUTER_MODEL", "meta-llama/llama-3.3-70b-instruct")
+OPENROUTER_STT_MODEL: str = _get_str("OPENROUTER_STT_MODEL", "openai/whisper-large-v3")
+OPENROUTER_TTS_MODEL: str = _get_str("OPENROUTER_TTS_MODEL", "openai/tts-1")
+OPENROUTER_TTS_VOICE: str = _get_str("OPENROUTER_TTS_VOICE", "nova")
+
+# ==========================================
 # 🎙️ AUDIO GLOBAL
 # ==========================================
 AUDIO_RATE: int = _get_int("AUDIO_RATE", 16000)
@@ -90,7 +117,7 @@ MAX_SPEECH_DURATION: float = _get_float("MAX_SPEECH_DURATION", 12.0)
 FOLLOW_UP_TIMEOUT: float = _get_float("FOLLOW_UP_TIMEOUT", 30.0)
 
 # ==========================================
-# 🧠 LLM / RAISONNEMENT (Ollama)
+# 🧠 LLM / RAISONNEMENT (Ollama & OpenRouter)
 # ==========================================
 OLLAMA_MODEL: str = _get_str("OLLAMA_MODEL", "qwen2.5:7b")
 OLLAMA_HOST: str = _get_str("OLLAMA_HOST", "http://localhost:11434")
@@ -143,6 +170,14 @@ DUCKING_RESTORE_ON_EXIT: bool = _get_bool("DUCKING_RESTORE_ON_EXIT", True)
 
 if __name__ == "__main__":
     print("📋 [CONFIG] Configuration chargée :")
+    print(f"  • FOURNISSEUR LLM         : {LLM_PROVIDER}")
+    print(f"  • FOURNISSEUR STT         : {STT_PROVIDER}")
+    print(f"  • FOURNISSEUR TTS         : {TTS_PROVIDER}")
+    print(f"  • OPENROUTER_API_KEY      : {'Configurée (' + OPENROUTER_API_KEY[:8] + '...)' if OPENROUTER_API_KEY else 'Non configurée'}")
+    print(f"  • OPENROUTER_BASE_URL     : {OPENROUTER_BASE_URL}")
+    print(f"  • OPENROUTER_MODEL        : {OPENROUTER_MODEL}")
+    print(f"  • OPENROUTER_STT_MODEL    : {OPENROUTER_STT_MODEL}")
+    print(f"  • OPENROUTER_TTS_MODEL    : {OPENROUTER_TTS_MODEL} (Voix: {OPENROUTER_TTS_VOICE})")
     print(f"  • AUDIO_RATE              : {AUDIO_RATE}")
     print(f"  • AUDIO_CHUNK             : {AUDIO_CHUNK}")
     print(f"  • AUDIO_CHANNELS          : {AUDIO_CHANNELS}")

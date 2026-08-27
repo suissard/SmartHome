@@ -6,6 +6,7 @@ onnxruntime>=1.18.0
 faster-whisper>=1.0.0
 ctranslate2>=4.0.0
 ollama>=0.3.0
+openai>=1.0.0
 piper-tts>=1.2.0
 scipy>=1.10.0
 python-dotenv>=1.0.0

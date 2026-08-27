@@ -7,7 +7,15 @@ from config import (
      CHANNELS,
      AUDIO_INPUT_DEVICE_INDEX,
      FOLLOW_UP_TIMEOUT,
+     LLM_PROVIDER,
      OLLAMA_MODEL,
+     OPENROUTER_MODEL,
+     STT_PROVIDER,
+     WHISPER_MODEL,
+     OPENROUTER_STT_MODEL,
+     TTS_PROVIDER,
+     TTS_MODEL_PATH,
+     OPENROUTER_TTS_MODEL,
 )
 from wakeword import WakeWordDetector, FORMAT
 from transcribe import VoiceTranscriber
@@ -49,7 +57,14 @@ def main():
         frames_per_buffer=CHUNK
     )
 
-    print(f"\n🟢 Démarrage (Modèle : {OLLAMA_MODEL})\n")
+    llm_info = f"OpenRouter ({OPENROUTER_MODEL})" if LLM_PROVIDER == "openrouter" else f"Ollama ({OLLAMA_MODEL})"
+    stt_info = f"OpenRouter ({OPENROUTER_STT_MODEL})" if STT_PROVIDER == "openrouter" else f"Whisper ({WHISPER_MODEL})"
+    tts_info = f"OpenRouter ({OPENROUTER_TTS_MODEL})" if TTS_PROVIDER == "openrouter" else f"Piper ({TTS_MODEL_PATH})"
+
+    print(f"\n🟢 Démarrage de SmartHome")
+    print(f"  • Cerveau LLM : {llm_info}")
+    print(f"  • Écoute STT  : {stt_info}")
+    print(f"  • Voix TTS    : {tts_info}\n")
 
     try:
         while True:
