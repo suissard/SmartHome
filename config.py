@@ -164,6 +164,12 @@ FEEDBACK_TIMEOUT_SOUND: str = _get_str("FEEDBACK_TIMEOUT_SOUND", "sleep")
 FEEDBACK_SOUND_VOLUME: float = _get_float("FEEDBACK_SOUND_VOLUME", 0.5)
 
 # ==========================================
+# ⚡ ACTIONS & COMMANDES SYSTÈME (Bash / Scripts)
+# ==========================================
+ACTIONS_ENABLED: bool = _get_bool("ACTIONS_ENABLED", True)
+ACTIONS_DYNAMIC_PROMPT: bool = _get_bool("ACTIONS_DYNAMIC_PROMPT", True)
+
+# ==========================================
 # 🔉 DUCKING / ATTÉNUATION SONORE SYSTÈME
 # ==========================================
 DUCKING_ENABLED: bool = _get_bool("DUCKING_ENABLED", True)
@@ -172,6 +178,8 @@ DUCKING_RESTORE_ON_EXIT: bool = _get_bool("DUCKING_RESTORE_ON_EXIT", True)
 
 if __name__ == "__main__":
     print("📋 [CONFIG] Configuration chargée :")
+    print(f"  • ACTIONS ACTIVÉES        : {ACTIONS_ENABLED}")
+    print(f"  • PROMPT DYNAMIQUE        : {ACTIONS_DYNAMIC_PROMPT}")
     print(f"  • FOURNISSEUR LLM         : {LLM_PROVIDER}")
     print(f"  • FOURNISSEUR STT         : {STT_PROVIDER}")
     print(f"  • FOURNISSEUR TTS         : {TTS_PROVIDER}")

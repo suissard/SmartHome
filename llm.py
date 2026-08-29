@@ -11,6 +11,7 @@ from config import (
     LLM_STREAM,
     LLM_THINK,
     LLM_HISTORY_MESSAGES,
+    ACTIONS_DYNAMIC_PROMPT,
 )
 
 # Initialisation conditionnelle selon le fournisseur configuré
@@ -31,6 +32,18 @@ else:
 
 # Historique conversationnel en mémoire
 _conversation_history: list[dict] = []
+
+
+def get_default_system_prompt() -> str:
+    """Retourne le prompt système enrichi dynamiquement avec les commandes d'actions."""
+    if ACTIONS_DYNAMIC_PROMPT:
+        try:
+            from actions.manager import get_action_manager
+            return get_action_manager().build_dynamic_system_prompt(LLM_SYSTEM_PROMPT)
+        except Exception as e:
+            print(f"⚠️ [LLM] Erreur lors de la construction du prompt dynamique : {e}")
+            return LLM_SYSTEM_PROMPT
+    return LLM_SYSTEM_PROMPT
 
 
 def get_history() -> list[dict]:
@@ -57,7 +70,7 @@ def _ask_openrouter(
     prompt: str = None,
     audio_bytes: bytes = None,
     model: str = None,
-    system_prompt: str = LLM_SYSTEM_PROMPT,
+    system_prompt: str = None,
     stream: bool = LLM_STREAM,
     use_history: bool = True,
 ) -> str:
@@ -68,9 +81,10 @@ def _ask_openrouter(
         return error_msg
 
     target_model = model or OPENROUTER_MODEL
+    effective_system_prompt = system_prompt or get_default_system_prompt()
 
     # Construction de la liste des messages avec prompt système
-    messages = [{"role": "system", "content": system_prompt}]
+    messages = [{"role": "system", "content": effective_system_prompt}]
 
     # Injection de l'historique conversationnel récent
     if use_history and LLM_HISTORY_MESSAGES > 0 and _conversation_history:
@@ -138,19 +152,20 @@ def _ask_ollama(
     prompt: str = None,
     audio_bytes: bytes = None,
     model: str = None,
-    system_prompt: str = LLM_SYSTEM_PROMPT,
+    system_prompt: str = None,
     stream: bool = LLM_STREAM,
     think: bool = LLM_THINK,
     use_history: bool = True,
 ) -> str:
     """Envoie un prompt à Ollama local et retourne la réponse."""
     target_model = model or OLLAMA_MODEL
+    effective_system_prompt = system_prompt or get_default_system_prompt()
 
     if audio_bytes and not prompt:
         prompt = "Veuillez traiter cet enregistrement audio."
 
     # Construction de la liste des messages avec prompt système
-    messages = [{"role": "system", "content": system_prompt}]
+    messages = [{"role": "system", "content": effective_system_prompt}]
 
     # Injection de l'historique conversationnel récent
     if use_history and LLM_HISTORY_MESSAGES > 0 and _conversation_history:
@@ -198,7 +213,7 @@ def ask_llm(
     prompt: str = None,
     audio_bytes: bytes = None,
     model: str = None,
-    system_prompt: str = LLM_SYSTEM_PROMPT,
+    system_prompt: str = None,
     stream: bool = LLM_STREAM,
     think: bool = LLM_THINK,
     use_history: bool = True,

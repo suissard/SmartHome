@@ -17,6 +17,7 @@ from config import (
      TTS_MODEL_PATH,
      OPENROUTER_TTS_MODEL,
      LLM_HISTORY_MESSAGES,
+     ACTIONS_ENABLED,
 )
 from wakeword import WakeWordDetector, FORMAT
 from transcribe import VoiceTranscriber
@@ -24,6 +25,8 @@ from llm import ask_llm
 from tts import TextToSpeech
 from feedback import FeedbackManager
 from ducking import AudioDucker
+from actions import get_action_manager
+
 
 
 def flush_stream(stream):
@@ -47,6 +50,7 @@ def main():
     tts = TextToSpeech()
     feedback = FeedbackManager(tts=tts)
     ducker = AudioDucker()
+    action_manager = get_action_manager()
 
     p = pyaudio.PyAudio()
     stream = p.open(
@@ -66,11 +70,13 @@ def main():
     else:
         stt_info = f"Whisper ({WHISPER_MODEL})"
     tts_info = f"OpenRouter ({OPENROUTER_TTS_MODEL})" if TTS_PROVIDER == "openrouter" else f"Piper ({TTS_MODEL_PATH})"
+    actions_info = "Activées (12 commandes prêtes)" if ACTIONS_ENABLED else "Désactivées"
 
     print(f"\n🟢 Démarrage de SmartHome")
     print(f"  • Cerveau LLM   : {llm_info} (Mémoire: {LLM_HISTORY_MESSAGES} msgs)")
     print(f"  • Écoute STT    : {stt_info}")
     print(f"  • Voix TTS      : {tts_info}")
+    print(f"  • Actions OS    : {actions_info}")
     print(f"  • Veille active : {FOLLOW_UP_TIMEOUT}s\n")
 
     try:
@@ -104,11 +110,16 @@ def main():
                                 print("🤖 : ", end="", flush=True)
                                 response_text = ask_llm(prompt=user_input)
 
-                            # 2. Vocalisation de la réponse
-                            if response_text:
-                                tts.speak(response_text)
+                            # 2. Exécution des actions système & Nettoyage du texte pour la voix
+                            clean_voice_text = response_text
+                            if response_text and ACTIONS_ENABLED:
+                                clean_voice_text = action_manager.process_response(response_text)
 
-                            # 3. Signal de fin de réponse (passage de la parole)
+                            # 3. Vocalisation de la réponse
+                            if clean_voice_text:
+                                tts.speak(clean_voice_text)
+
+                            # 4. Signal de fin de réponse (passage de la parole)
                             feedback.on_response_end()
 
                             print("\n" + "-" * 40)
