@@ -1,10 +1,52 @@
 """
 Module d'action pour l'affichage de notifications sur le bureau.
+Contient les métadonnées et le script bash embarqué.
 """
 
-from pathlib import Path
 from typing import List
 from actions.base import BaseAction
+
+_NOTIFY_SCRIPT = r"""
+if [ $# -eq 0 ]; then
+    echo "Usage : notify.sh [titre] <message>" >&2
+    exit 1
+fi
+
+TITLE="SmartHome"
+MSG=""
+
+if [ $# -eq 1 ]; then
+    MSG="$1"
+elif [ $# -eq 2 ]; then
+    TITLE="$1"
+    MSG="$2"
+else
+    TITLE="$1"
+    shift
+    MSG="$*"
+fi
+
+# 1. notify-send (standard freedesktop)
+if command -v notify-send >/dev/null 2>&1; then
+    notify-send "$TITLE" "$MSG"
+    exit 0
+fi
+
+# 2. kdialog (KDE)
+if command -v kdialog >/dev/null 2>&1; then
+    kdialog --title "$TITLE" --passivepopup "$MSG" 5 >/dev/null 2>&1
+    exit 0
+fi
+
+# 3. zenity (GNOME / multi)
+if command -v zenity >/dev/null 2>&1; then
+    zenity --notification --text="[$TITLE] $MSG" >/dev/null 2>&1
+    exit 0
+fi
+
+echo "[$TITLE] $MSG"
+exit 0
+"""
 
 
 class NotifyAction(BaseAction):
@@ -12,19 +54,16 @@ class NotifyAction(BaseAction):
         super().__init__(
             tag="NOTIFY",
             description="Afficher une notification sur le bureau.",
-            script_name="notify.sh",
+            script_code=_NOTIFY_SCRIPT,
             has_args=True,
             args_hint="<message>",
             example_prompt="Affiche un rappel pour sortir le chien.",
             example_response="[NOTIFY Sortir le chien] Notification affichée."
         )
 
-    def build_command(self, scripts_dir: Path, args: str = "") -> List[str]:
-        cmd_exec = [str(self.get_script_path(scripts_dir))]
+    def build_args(self, args: str = "") -> List[str]:
         msg = (args or "").strip()
-        if msg:
-            cmd_exec.append(msg)
-        return cmd_exec
+        return [msg] if msg else []
 
 
 ACTIONS = [NotifyAction()]
@@ -32,5 +71,5 @@ ACTIONS = [NotifyAction()]
 
 if __name__ == "__main__":
     print("🧪 [DEBUG] Test du module actions/definitions/notify.py")
-    scripts = Path(__file__).resolve().parent.parent / "scripts"
-    print(ACTIONS[0].build_command(scripts, "Rappel important"))
+    code, out, err = ACTIONS[0].execute_sync("Test de notification directe")
+    print(f"Code : {code} | Sortie : {out.strip()}")

@@ -51,11 +51,11 @@ Ce document est destiné aux agents IA (et aux développeurs) qui lisent, mainti
 ### 2.2 [actions/](file:///home/suissard/PROGRAMMATIONS/SmartHome/actions) — Système Modulaire de Commandes & Actions OS
 - **Responsabilité** : Détection des tags d'actions insérés par le LLM (`[SHUTDOWN]`, `[REBOOT]`, `[LOCK]`, `[VOLUME]`, `[MUTE]`, `[OPEN]`, etc.), exécution asynchrone non-bloquante et purification du texte transmis à la synthèse vocale.
 - **Architecture Modulaire & Auto-Découverte** :
-  - `actions/base.py` : Classe de base abstraite `BaseAction` encapsulant métadonnées et méthode `build_command()`.
-  - `actions/definitions/*.py` : Modules d'actions autonomes (`volume.py`, `media.py`, `notify.py`, `open_app.py`, `lock.py`, `screen_off.py`, `shutdown.py`, `reboot.py`).
+  - `actions/base.py` : Classe de base abstraite `BaseAction` encapsulant métadonnées, script bash embarqué (`script_code`) et méthode `execute()`.
+  - `actions/definitions/*.py` : Modules d'actions 100% autonomes (`volume.py`, `media.py`, `notify.py`, `open_app.py`, `lock.py`, `screen_off.py`, `shutdown.py`, `reboot.py`).
   - `actions/registry.py` : Chargeur dynamique avec auto-découverte des définitions sans couplage.
-  - `actions/manager.py` : Moteur d'extraction regex générique et d'exécution asynchrone déléguée.
-  - `actions/scripts/*.sh` : Scripts bash multi-environnements (KDE Wayland/X11, GNOME, PulseAudio, PipeWire, ALSA, MPRIS2).
+  - `actions/manager.py` : Moteur d'extraction regex générique et d'exécution asynchrone déléguée sans logique en dur.
+
 
 
 ### 2.3 [wakeword.py](file:///home/suissard/PROGRAMMATIONS/SmartHome/wakeword.py) — Détection de Mot-Clé

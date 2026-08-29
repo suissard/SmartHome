@@ -1,22 +1,23 @@
 """
 Base d'abstraction pour les actions système de SmartHome.
-Chaque action hérite de BaseAction et encapsule ses métadonnées et sa logique d'exécution.
+Chaque action hérite de BaseAction et encapsule ses métadonnées et son script d'exécution embarqué.
 """
 
 from dataclasses import dataclass, field
 import os
 import re
 import shlex
+import subprocess
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, Tuple
 
 
 @dataclass
 class BaseAction:
-    """Classe de base représentant une commande système exécutable."""
+    """Classe de base représentant une commande système autonome avec son script embarqué."""
     tag: str
     description: str
-    script_name: str
+    script_code: str = ""
     has_args: bool = False
     args_hint: str = ""
     example_prompt: str = ""
@@ -42,25 +43,52 @@ class BaseAction:
             self._init_pattern()
         return self._pattern
 
-    def get_script_path(self, scripts_dir: Path) -> Path:
-        """Retourne le chemin absolu vers le script bash associé."""
-        return scripts_dir / self.script_name
+    def build_args(self, args: str = "") -> List[str]:
+        """Découpe les arguments passés pour le script bash. Peut être surchargé."""
+        args_clean = (args or "").strip()
+        if not args_clean:
+            return []
+        try:
+            return shlex.split(args_clean)
+        except Exception:
+            return args_clean.split()
 
-    def build_command(self, scripts_dir: Path, args: str = "") -> List[str]:
-        """Construit la commande complète sous forme de liste d'arguments pour subprocess.
-        Cette méthode peut être surchargée par chaque action spécifique.
-        """
-        script_path = self.get_script_path(scripts_dir)
-        cmd_exec = [str(script_path)]
+    def execute(self, args: str = "", dry_run: bool = False) -> bool:
+        """Exécute le script bash embarqué de manière asynchrone non-bloquante."""
+        cmd_args = self.build_args(args)
+        cmd_exec = ["bash", "-c", self.script_code, "_"] + cmd_args
 
-        args = (args or "").strip()
-        if args:
-            try:
-                cmd_exec.extend(shlex.split(args))
-            except Exception:
-                cmd_exec.extend(args.split())
+        if dry_run:
+            print(f"🔍 [ACTIONS] [DRY RUN] Tag [{self.tag}] avec args: {cmd_args}")
+            return True
 
-        return cmd_exec
+        if not self.script_code.strip():
+            print(f"⚠️ [ACTIONS] Aucun script défini pour [{self.tag}]")
+            return False
+
+        try:
+            print(f"🚀 [ACTIONS] Exécution [{self.tag}] (args: {cmd_args})")
+            subprocess.Popen(
+                cmd_exec,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True
+            )
+            return True
+        except Exception as e:
+            print(f"⚠️ [ACTIONS] Erreur lors de l'exécution de [{self.tag}] : {e}")
+            return False
+
+    def execute_sync(self, args: str = "", timeout: float = 10.0) -> Tuple[int, str, str]:
+        """Exécute le script bash de manière synchrone (utile pour les tests et le diagnostic)."""
+        cmd_args = self.build_args(args)
+        cmd_exec = ["bash", "-c", self.script_code, "_"] + cmd_args
+
+        try:
+            res = subprocess.run(cmd_exec, capture_output=True, text=True, timeout=timeout)
+            return res.returncode, res.stdout, res.stderr
+        except Exception as e:
+            return -1, "", str(e)
 
 
 # Alias de compatibilité
@@ -68,14 +96,13 @@ CommandDefinition = BaseAction
 
 
 if __name__ == "__main__":
-    print("🧪 [DEBUG] Test de BaseAction")
+    print("🧪 [DEBUG] Test de BaseAction avec script embarqué")
     sample_action = BaseAction(
-        tag="TEST",
-        description="Action de test",
-        script_name="test.sh",
-        has_args=True,
-        args_hint="<arg>"
+        tag="ECHO_TEST",
+        description="Action de test echo",
+        script_code='echo "Hello from action: $1, $2"',
+        has_args=True
     )
-    print(f"Action : {sample_action.tag}")
-    print(f"Pattern : {sample_action.pattern.pattern}")
-    print(f"Exemple match : {sample_action.pattern.search('[TEST hello] text')}")
+    print(f"Action : [{sample_action.tag}]")
+    code, out, err = sample_action.execute_sync("world 42")
+    print(f"Code : {code} | Sortie : {out.strip()}")

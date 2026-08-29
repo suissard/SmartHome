@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
 🧪 SmartHome — Testeur Manuel d'Actions & Commandes Système
-Ce script permet de tester individuellement ou interactivement chaque commande et script d'action.
+Ce script permet de tester individuellement ou interactivement chaque commande et action système.
+Les scripts bash sont directement embarqués dans chaque définition d'action.
 """
 
 import os
 import sys
 import shutil
 import argparse
-import subprocess
 from pathlib import Path
 
 # Ajout de la racine du projet dans le sys.path
@@ -17,7 +17,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from actions.manager import ActionManager, get_action_manager
-from actions.commands import COMMAND_REGISTRY, get_all_commands
+from actions.registry import COMMAND_REGISTRY, get_all_commands, get_command_by_tag
 
 # Couleurs ANSI
 GREEN = "\033[92m"
@@ -61,62 +61,63 @@ def check_system_environment():
     print()
 
 
-def run_script_direct(script_name: str, *args):
-    """Exécute un script bash directement et affiche sa sortie."""
-    script_path = ROOT_DIR / "actions" / "scripts" / script_name
-    if not script_path.exists():
-        print(f"{RED}❌ Script introuvable : {script_path}{RESET}")
-        return False, "Fichier non trouvé"
+def run_action_direct(tag: str, args: str = ""):
+    """Exécute une action de manière synchrone et affiche sa sortie."""
+    action = get_command_by_tag(tag)
+    if not action:
+        print(f"{RED}❌ Action introuvable pour le tag [{tag}]{RESET}")
+        return False, "Action non enregistrée"
 
-    # Vérification des droits d'exécution
-    if not os.access(script_path, os.X_OK):
-        script_path.chmod(script_path.stat().st_mode | 0o755)
+    print(f"{CYAN}🚀 Exécution de l'action [{action.tag}] (args: '{args}')...{RESET}")
+    code, stdout, stderr = action.execute_sync(args)
 
-    cmd = [str(script_path)] + list(args)
-    print(f"{CYAN}🚀 Exécution de : {' '.join(cmd)}{RESET}")
-
-    try:
-        res = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-        if res.returncode == 0:
-            print(f"{GREEN}✓ Succès (Code 0){RESET}")
-            if res.stdout.strip():
-                print(f"  Sortie stdout : {res.stdout.strip()}")
-            return True, res.stdout
-        else:
-            print(f"{RED}✗ Échec (Code {res.returncode}){RESET}")
-            if res.stderr.strip():
-                print(f"  Sortie stderr : {res.stderr.strip()}")
-            return False, res.stderr
-    except Exception as e:
-        print(f"{RED}⚠️ Erreur d'exécution : {e}{RESET}")
-        return False, str(e)
+    if code == 0:
+        print(f"{GREEN}✓ Succès (Code 0){RESET}")
+        if stdout.strip():
+            print(f"  Sortie stdout : {stdout.strip()}")
+        return True, stdout
+    else:
+        print(f"{RED}✗ Échec (Code {code}){RESET}")
+        if stderr.strip():
+            print(f"  Sortie stderr : {stderr.strip()}")
+        return False, stderr
 
 
 def test_notify(msg: str = "Test de notification SmartHome"):
     print_header("📢 Test Notification de Bureau ([NOTIFY])")
-    run_script_direct("notify.sh", "SmartHome Test", msg)
+    run_action_direct("NOTIFY", msg)
 
 
 def test_volume(action: str = "up"):
     print_header(f"🔊 Test Volume Audio ([VOLUME / MUTE / UNMUTE]) -> {action}")
-    run_script_direct("volume.sh", action)
+    if action.lower() == "mute":
+        run_action_direct("MUTE")
+    elif action.lower() == "unmute":
+        run_action_direct("UNMUTE")
+    else:
+        run_action_direct("VOLUME", action)
 
 
 def test_media(action: str = "play-pause"):
-    print_header(f"🎵 Test Multimédia ([MEDIA_PLAY_PAUSE / NEXT / PREV]) -> {action}")
-    run_script_direct("media.sh", action)
+    print_header(f"🎵 Test Multimédia -> {action}")
+    if action in ("next", "MEDIA_NEXT"):
+        run_action_direct("MEDIA_NEXT")
+    elif action in ("previous", "prev", "MEDIA_PREV"):
+        run_action_direct("MEDIA_PREV")
+    else:
+        run_action_direct("MEDIA_PLAY_PAUSE")
 
 
 def test_open_app(app_name: str = "calculatrice"):
     print_header(f"🚀 Test Lancement Application ([OPEN {app_name}])")
-    run_script_direct("open_app.sh", app_name)
+    run_action_direct("OPEN", app_name)
 
 
 def test_screen_off():
     print_header("🖥️ Test Extinction / Veille Écran ([SCREEN_OFF])")
     confirm = input("⚠️ L'écran va s'éteindre (bougez la souris pour le rallumer). Continuer ? [O/n] : ").strip().lower()
     if confirm in ("", "o", "oui", "y", "yes"):
-        run_script_direct("screen_off.sh")
+        run_action_direct("SCREEN_OFF")
     else:
         print("Annulé.")
 
@@ -125,7 +126,7 @@ def test_lock():
     print_header("🔒 Test Verrouillage de Session ([LOCK])")
     confirm = input("⚠️ Votre session va être verrouillée. Continuer ? [O/n] : ").strip().lower()
     if confirm in ("", "o", "oui", "y", "yes"):
-        run_script_direct("lock.sh")
+        run_action_direct("LOCK")
     else:
         print("Annulé.")
 
@@ -161,12 +162,10 @@ def test_pipeline_simulation():
 
 
 def interactive_menu():
-    manager = ActionManager(enabled=True)
-
     while True:
         print_header("🏠 SmartHome — Menu de Test Manuel des Actions")
         print(f" {BOLD}1.{RESET} 📢 Tester Notification ([NOTIFY])")
-        print(f" {BOLD}2.{RESET} 🔊 Tester Volume : Augmenter (+5%)")
+        print(f" {BOLD}2.{RESET} 🔊 Tester Volume : Augmenter (+5%) (auto-unmute)")
         print(f" {BOLD}3.{RESET} 🔉 Tester Volume : Diminuer (-5%)")
         print(f" {BOLD}4.{RESET} 🔇 Tester Volume : Couper le son (Mute)")
         print(f" {BOLD}5.{RESET} 🔊 Tester Volume : Réactiver le son (Unmute)")
@@ -270,7 +269,6 @@ def main():
             test_pipeline_simulation()
         return
 
-    # Lancement du menu interactif
     check_system_environment()
     interactive_menu()
 

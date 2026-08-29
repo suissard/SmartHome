@@ -1,7 +1,5 @@
-import os
 import re
 import sys
-import subprocess
 from pathlib import Path
 from typing import List, Tuple, Dict, Any, Optional
 
@@ -17,21 +15,8 @@ from actions.registry import COMMAND_REGISTRY, get_all_commands, get_command_by_
 class ActionManager:
     """Gestionnaire modulaire d'exécution des actions et constructeur de prompt dynamique."""
 
-    def __init__(self, scripts_dir: Optional[Path] = None, enabled: bool = True):
+    def __init__(self, enabled: bool = True):
         self.enabled = enabled
-        self.base_dir = Path(__file__).resolve().parent
-        self.scripts_dir = scripts_dir or (self.base_dir / "scripts")
-        self._ensure_scripts_permissions()
-
-    def _ensure_scripts_permissions(self):
-        """S'assure que les scripts bash du répertoire sont exécutables."""
-        if self.scripts_dir.exists():
-            for script in self.scripts_dir.glob("*.sh"):
-                try:
-                    mode = script.stat().st_mode
-                    script.chmod(mode | 0o755)
-                except Exception as e:
-                    print(f"⚠️ [ActionManager] Impossible de définir les droits sur {script.name} : {e}")
 
     def build_dynamic_system_prompt(self, base_prompt: str) -> str:
         """Génère le prompt système complet enrichi avec la liste des commandes disponibles."""
@@ -103,35 +88,10 @@ Exemples de comportement attendu :
         return cleaned_text, detected_actions
 
     def execute_action(self, action: Dict[str, Any], dry_run: bool = False) -> bool:
-        """Exécute le script associé à une action de façon modulaire et asynchrone."""
+        """Exécute l'action en déléguant son exécution à son propre script embarqué."""
         cmd_def: BaseAction = action["definition"]
         args = action.get("args", "")
-        script_path = cmd_def.get_script_path(self.scripts_dir)
-
-        if not script_path.exists():
-            print(f"❌ [ACTIONS] Script introuvable : {script_path}")
-            return False
-
-        # La construction de la ligne de commande est entièrement déléguée à l'action
-        cmd_exec = cmd_def.build_command(self.scripts_dir, args)
-
-        if dry_run:
-            print(f"🔍 [ACTIONS] [DRY RUN] Commande préparée : {' '.join(cmd_exec)}")
-            return True
-
-        try:
-            print(f"🚀 [ACTIONS] Exécution : {' '.join(cmd_exec)}")
-            # Exécution asynchrone / détachée pour ne pas bloquer le flux audio
-            subprocess.Popen(
-                cmd_exec,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                start_new_session=True
-            )
-            return True
-        except Exception as e:
-            print(f"⚠️ [ACTIONS] Erreur lors de l'exécution de {cmd_def.tag} : {e}")
-            return False
+        return cmd_def.execute(args, dry_run=dry_run)
 
     def process_response(self, response_text: str, dry_run: bool = False) -> str:
         """Point d'entrée principal pour traiter une réponse LLM :
@@ -163,7 +123,7 @@ def get_action_manager() -> ActionManager:
 
 
 if __name__ == "__main__":
-    print("🧪 [DEBUG] Test du module ActionManager modulaire")
+    print("🧪 [DEBUG] Test du module ActionManager autonome")
     manager = ActionManager(enabled=True)
 
     test_prompt = manager.build_dynamic_system_prompt("Tu es un assistant vocal domotique.")

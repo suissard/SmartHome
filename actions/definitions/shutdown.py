@@ -1,10 +1,20 @@
 """
 Module d'action pour l'extinction complète de l'ordinateur.
+Contient les métadonnées et le script bash d'extinction sécurisé.
 """
 
-from pathlib import Path
-from typing import List
 from actions.base import BaseAction
+
+_SHUTDOWN_SCRIPT = r"""
+if command -v systemctl >/dev/null 2>&1; then
+    systemctl poweroff
+elif command -v shutdown >/dev/null 2>&1; then
+    shutdown -h now
+else
+    echo "Erreur : Commande d'extinction introuvable." >&2
+    exit 1
+fi
+"""
 
 
 class ShutdownAction(BaseAction):
@@ -12,14 +22,11 @@ class ShutdownAction(BaseAction):
         super().__init__(
             tag="SHUTDOWN",
             description="Éteindre complètement l'ordinateur.",
-            script_name="shutdown.sh",
+            script_code=_SHUTDOWN_SCRIPT,
             has_args=False,
             example_prompt="Éteins l'ordinateur s'il te plaît.",
             example_response="[SHUTDOWN] J'éteins l'ordinateur. Bonne nuit !"
         )
-
-    def build_command(self, scripts_dir: Path, args: str = "") -> List[str]:
-        return [str(self.get_script_path(scripts_dir))]
 
 
 ACTIONS = [ShutdownAction()]
@@ -27,5 +34,4 @@ ACTIONS = [ShutdownAction()]
 
 if __name__ == "__main__":
     print("🧪 [DEBUG] Test du module actions/definitions/shutdown.py")
-    scripts = Path(__file__).resolve().parent.parent / "scripts"
-    print(ACTIONS[0].build_command(scripts))
+    print(f"Action : [{ACTIONS[0].tag}] chargée avec succès.")
