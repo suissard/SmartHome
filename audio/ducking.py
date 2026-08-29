@@ -5,13 +5,20 @@ import shutil
 import subprocess
 import sys
 import time
+from pathlib import Path
 from typing import Dict, Any, List, Optional
 
-from config import (
+# Inclusion de la racine du projet pour import autonome
+_ROOT_DIR = Path(__file__).resolve().parent.parent
+if str(_ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(_ROOT_DIR))
+
+from core.config import (
     DUCKING_ENABLED,
     DUCKING_VOLUME_PERCENT,
     DUCKING_RESTORE_ON_EXIT,
 )
+
 
 
 class AudioDucker:

@@ -1,31 +1,32 @@
 import sys
 import numpy as np
 import pyaudio
-from config import (
-     CHUNK,
-     RATE,
-     CHANNELS,
-     AUDIO_INPUT_DEVICE_INDEX,
-     FOLLOW_UP_TIMEOUT,
-     LLM_PROVIDER,
-     OLLAMA_MODEL,
-     OPENROUTER_MODEL,
-     STT_PROVIDER,
-     WHISPER_MODEL,
-     OPENROUTER_STT_MODEL,
-     TTS_PROVIDER,
-     TTS_MODEL_PATH,
-     OPENROUTER_TTS_MODEL,
-     LLM_HISTORY_MESSAGES,
-     ACTIONS_ENABLED,
+from core.config import (
+    CHUNK,
+    RATE,
+    CHANNELS,
+    AUDIO_INPUT_DEVICE_INDEX,
+    FOLLOW_UP_TIMEOUT,
+    LLM_PROVIDER,
+    OLLAMA_MODEL,
+    OPENROUTER_MODEL,
+    STT_PROVIDER,
+    WHISPER_MODEL,
+    OPENROUTER_STT_MODEL,
+    TTS_PROVIDER,
+    TTS_MODEL_PATH,
+    OPENROUTER_TTS_MODEL,
+    LLM_HISTORY_MESSAGES,
+    ACTIONS_ENABLED,
 )
-from wakeword import WakeWordDetector, FORMAT
-from transcribe import VoiceTranscriber
-from llm import ask_llm
-from tts import TextToSpeech
-from feedback import FeedbackManager
-from ducking import AudioDucker
+from audio.wakeword import WakeWordDetector, FORMAT
+from audio.transcribe import VoiceTranscriber
+from audio.tts import TextToSpeech
+from audio.feedback import FeedbackManager
+from audio.ducking import AudioDucker
+from llm.llm import ask_llm
 from actions import get_action_manager
+
 
 
 

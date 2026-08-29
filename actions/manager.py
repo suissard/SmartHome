@@ -117,9 +117,10 @@ def get_action_manager() -> ActionManager:
     """Retourne l'instance globale d'ActionManager."""
     global _default_manager
     if _default_manager is None:
-        from config import ACTIONS_ENABLED
+        from core.config import ACTIONS_ENABLED
         _default_manager = ActionManager(enabled=ACTIONS_ENABLED)
     return _default_manager
+
 
 
 if __name__ == "__main__":

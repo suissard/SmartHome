@@ -12,14 +12,18 @@ if sys.platform == "win32" and hasattr(sys.stdout, "reconfigure"):
     except Exception:
         pass
 
-# Chargement du fichier .env
-BASE_DIR = Path(__file__).resolve().parent
+# Racine du projet SmartHome
+BASE_DIR = Path(__file__).resolve().parent.parent
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
+
 ENV_FILE = BASE_DIR / ".env"
 
 if ENV_FILE.exists():
     load_dotenv(dotenv_path=ENV_FILE, override=True)
 else:
     load_dotenv(override=True)
+
 
 
 def _get_str(key: str, default: str) -> str:

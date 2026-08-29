@@ -14,9 +14,10 @@ from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 # Inclusion de la racine du projet
-ROOT_DIR = Path(__file__).resolve().parent
+ROOT_DIR = Path(__file__).resolve().parent.parent
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
+
 
 from actions.base import BaseAction, CommandDefinition
 from actions.registry import (

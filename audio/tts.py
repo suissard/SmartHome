@@ -1,9 +1,17 @@
 import io
+import sys
 import time
+from pathlib import Path
 import numpy as np
 import sounddevice as sd
 from scipy.io import wavfile
-from config import (
+
+# Inclusion de la racine du projet pour import autonome
+_ROOT_DIR = Path(__file__).resolve().parent.parent
+if str(_ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(_ROOT_DIR))
+
+from core.config import (
     TTS_PROVIDER,
     OPENROUTER_API_KEY,
     OPENROUTER_BASE_URL,
@@ -17,6 +25,7 @@ from config import (
     TTS_SILENCE_END_DURATION,
     AUDIO_OUTPUT_DEVICE_INDEX,
 )
+
 
 try:
     from piper.voice import PiperVoice, SynthesisConfig

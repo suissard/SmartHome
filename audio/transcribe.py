@@ -2,10 +2,17 @@ import io
 import sys
 import time
 import wave
+from pathlib import Path
 from collections import deque
 import numpy as np
 import pyaudio
-from config import (
+
+# Inclusion de la racine du projet pour import autonome
+_ROOT_DIR = Path(__file__).resolve().parent.parent
+if str(_ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(_ROOT_DIR))
+
+from core.config import (
     STT_PROVIDER,
     OPENROUTER_API_KEY,
     OPENROUTER_BASE_URL,
@@ -27,6 +34,7 @@ from config import (
 CHUNK = AUDIO_CHUNK
 RATE = AUDIO_RATE
 FORMAT = pyaudio.paInt16
+
 
 
 class VoiceTranscriber:
@@ -200,7 +208,12 @@ class VoiceTranscriber:
                 pre_buffer.clear()
 
 
+# Alias de compatibilité
+Transcriber = VoiceTranscriber
+
+
 if __name__ == "__main__":
+
     if STT_PROVIDER in ("none", "direct", "bypass"):
         active_stt = "Bypass (Direct Audio)"
     elif STT_PROVIDER == "openrouter":

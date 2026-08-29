@@ -24,14 +24,14 @@ Ce document est destiné aux agents IA (et aux développeurs) qui lisent, mainti
          │                   │                   │                   │                   │                   │
          ▼                   ▼                   ▼                   ▼                   ▼                   ▼                   ▼
 ┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐
-│   wakeword.py   │ │  transcribe.py  │ │     llm.py      │ │     tts.py      │ │   feedback.py   │ │   ducking.py    │ │    actions/     │
-│  (openWakeWord) │ │ (faster-whisper)│ │ (Ollama/Router) │ │   (Piper TTS)   │ │ (Sons & Signaux)│ │(PipeWire/Pulse) │ │ (Scripts & OS)  │
+│ audio/wakeword  │ │audio/transcribe │ │     llm/llm     │ │    audio/tts    │ │ audio/feedback  │ │  audio/ducking  │ │    actions/     │
+│  (openWakeWord) │ │ (faster-whisper)│ │ (Ollama/Router) │ │   (Piper TTS)   │ │ (Sons & Signaux)│ │(PipeWire/Pulse) │ │ (Modules & OS)  │
 └────────┬────────┘ └────────┬────────┘ └────────┬────────┘ └────────┬────────┘ └────────┬────────┘ └────────┬────────┘ └────────┬────────┘
          │                   │                   │                   │                   │                   │                   │
          └───────────────────┴───────────────────┴─────────┬─────────┴───────────────────┴───────────────────┴───────────────────┘
                                                            ▼
                                            ┌───────────────────────────────┐
-                                           │           config.py           │
+                                           │          core/config          │
                                            │   (Chargeur .env & Typage)    │
                                            └───────────────────────────────┘
 ```
@@ -52,20 +52,18 @@ Ce document est destiné aux agents IA (et aux développeurs) qui lisent, mainti
 - **Responsabilité** : Détection des tags d'actions insérés par le LLM (`[SHUTDOWN]`, `[REBOOT]`, `[LOCK]`, `[VOLUME]`, `[MUTE]`, `[OPEN]`, etc.), exécution asynchrone non-bloquante et purification du texte transmis à la synthèse vocale.
 - **Architecture Modulaire & Auto-Découverte** :
   - `actions/base.py` : Classe de base abstraite `BaseAction` encapsulant métadonnées, script bash embarqué (`script_code`) et méthode `execute()`.
-  - `actions/definitions/*.py` : Modules d'actions 100% autonomes (`volume.py`, `media.py`, `notify.py`, `open_app.py`, `lock.py`, `screen_off.py`, `shutdown.py`, `reboot.py`).
+  - `actions/modules/*.py` : Modules d'actions 100% autonomes (`volume.py`, `media.py`, `notify.py`, `open_app.py`, `lock.py`, `screen_off.py`, `shutdown.py`, `reboot.py`).
   - `actions/registry.py` : Chargeur dynamique avec auto-découverte des définitions sans couplage.
   - `actions/manager.py` : Moteur d'extraction regex générique et d'exécution asynchrone déléguée sans logique en dur.
 
-
-
-### 2.3 [wakeword.py](file:///home/suissard/PROGRAMMATIONS/SmartHome/wakeword.py) — Détection de Mot-Clé
+### 2.3 [audio/wakeword.py](file:///home/suissard/PROGRAMMATIONS/SmartHome/audio/wakeword.py) — Détection de Mot-Clé
 - **Technologie** : `openwakeword` avec moteur d'inférence ONNX Runtime.
 - **Format Audio requis** : `RATE = 16000` Hz, 1 canal (mono), `FORMAT = paInt16`, `CHUNK = 1280` échantillons (80 ms par trame).
 - **Fonctionnement** :
   - `process_chunk(audio_chunk)` injecte la trame dans le buffer prédictif d'OpenWakeWord.
   - Si le score dépasse `threshold` (par défaut `0.5`), le buffer interne est purgé via `self.oww.reset()` pour éviter les détections fantômes consécutives.
 
-### 2.4 [transcribe.py](file:///home/suissard/PROGRAMMATIONS/SmartHome/transcribe.py) — Enregistrement & STT
+### 2.4 [audio/transcribe.py](file:///home/suissard/PROGRAMMATIONS/SmartHome/audio/transcribe.py) — Enregistrement & STT
 - **Technologie** : Modulaire selon `STT_PROVIDER` (`whisper` via `faster-whisper`, `openrouter` via `/api/v1/audio/transcriptions`, ou `none`/`direct` pour le bypass STT vers LLM multimodal).
 - **Gestion VAD & Audio** :
   - `pre_buffer` (`deque(maxlen=4)`) : Conserve les 4 dernières trames (320 ms) pour ne jamais couper l'attaque de la voix.
@@ -74,14 +72,14 @@ Ce document est destiné aux agents IA (et aux développeurs) qui lisent, mainti
   - `_flush_stream()` : Purge le buffer résiduel de la carte son avant chaque écoute pour éliminer les bruits résiduels ou l'écho de la synthèse précédente.
 - **Conversion & Transcription** : Assemblage des trames dans un buffer WAV en mémoire (`io.BytesIO`). Si `STT_PROVIDER=none` ou `direct`, retourne directement les octets WAV sans charger ni appeler de moteur STT. Sinon, effectue la transcription via Whisper local ou OpenRouter.
 
-### 2.5 [llm.py](file:///home/suissard/PROGRAMMATIONS/SmartHome/llm.py) — Raisonnement & Génération
+### 2.5 [llm/llm.py](file:///home/suissard/PROGRAMMATIONS/SmartHome/llm/llm.py) — Raisonnement & Génération
 - **Technologie** : Modulaire selon `LLM_PROVIDER` (`ollama` en local ou `openrouter` via l'API OpenAI compatible).
 - **Historique Conversationnel** : Maintient un buffer glissant des $N$ derniers messages (`LLM_HISTORY_MESSAGES`, par défaut 5) pour préserver le contexte des échanges récents. Fournit `get_history()`, `clear_history()`, et `add_history_message()`.
 - **Support Multimodal Audio Direct** : Fonction `ask_llm(prompt=..., audio_bytes=...)` capable d'envoyer l'audio encodé en base64 via `input_audio` aux modèles multimodaux (ex: Gemini Flash, Voxtral).
 - **Prompt Système Dynamique** : Reçoit automatiquement les définitions de commandes d'`ActionManager` pour permettre au LLM d'agir sur le système.
 - **Streaming** : Supporte le streaming console immédiat pour un retour visuel en temps réel pendant la génération quel que soit le fournisseur actif.
 
-### 2.6 [tts.py](file:///home/suissard/PROGRAMMATIONS/SmartHome/tts.py) — Synthèse Vocale
+### 2.6 [audio/tts.py](file:///home/suissard/PROGRAMMATIONS/SmartHome/audio/tts.py) — Synthèse Vocale
 - **Technologie** : Modulaire selon `TTS_PROVIDER` (`piper` via ONNX neural local ou `openrouter` via `/api/v1/audio/speech`).
 - **Post-Traitement Audio Anti-Pops & Fluidité** :
   1. *Ponctuation forcée* : Ajout automatique d'un point final si manquant pour garantir une intonation descendante naturelle.
@@ -89,17 +87,18 @@ Ce document est destiné aux agents IA (et aux développeurs) qui lisent, mainti
   3. *Padding de silence* : Insertion de 100 ms de silence en début de buffer et 400 ms en fin de buffer.
   4. *Lecture synchrone* : Exécution via `sounddevice` (`sd.play` + `sd.wait`).
 
-### 2.7 [feedback.py](file:///home/suissard/PROGRAMMATIONS/SmartHome/feedback.py) — Sons & Signaux Vocaux de Cycle de Vie
+### 2.7 [audio/feedback.py](file:///home/suissard/PROGRAMMATIONS/SmartHome/audio/feedback.py) — Sons & Signaux Vocaux de Cycle de Vie
 - **Technologie** : Synthèse harmonique procédurale (`numpy` + `sounddevice`) & lecteur WAV.
 - **Rôle** : Gère les retours sonores (bips, carillons, accords ascendants/descendants, ding) et vocaux (phrases TTS) pour la détection du wake word, la fin de parole de l'IA et le timeout d'écoute active.
 
-### 2.8 [ducking.py](file:///home/suissard/PROGRAMMATIONS/SmartHome/ducking.py) — Atténuation Audio Système (Ducking)
+### 2.8 [audio/ducking.py](file:///home/suissard/PROGRAMMATIONS/SmartHome/audio/ducking.py) — Atténuation Audio Système (Ducking)
 - **Technologie** : `pactl` JSON (compatible PipeWire & PulseAudio).
 - **Rôle** : Réduit le volume de toutes les applications tierces (musique, vidéos, jeux, etc.) à un niveau paramétrable (ex: 20%) dès que l'assistant écoute ou parle, et rétablit les volumes initiaux à la mise en veille. Filtre le PID de l'assistant pour ne pas altérer la voix de sortie.
 
-### 2.9 [config.py](file:///home/suissard/PROGRAMMATIONS/SmartHome/config.py) — Chargeur de Configuration & Variables d'Environnement
+### 2.9 [core/config.py](file:///home/suissard/PROGRAMMATIONS/SmartHome/core/config.py) — Chargeur de Configuration & Variables d'Environnement
 - **Technologie** : `python-dotenv`.
 - **Rôle** : Charge `.env` avec conversion de types stricte (`int`, `float`, `bool`, `str`, `Optional`) et fallbacks par défaut pour toutes les constantes du projet (providers LLM/STT/TTS, OpenRouter, audio, wake word, whisper, ollama, piper, feedbacks, ducking, actions).
+
 
 ---
 

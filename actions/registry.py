@@ -1,6 +1,6 @@
 """
 Registre dynamique et auto-découverte des actions système SmartHome.
-Scanne automatiquement le dossier actions/definitions/ et charge toutes les actions disponibles.
+Scanne automatiquement le dossier actions/modules/ et charge tous les modules d'actions disponibles.
 """
 
 import sys
@@ -21,8 +21,8 @@ from actions.base import BaseAction, CommandDefinition
 class ActionRegistry:
     """Gestionnaire de chargement et registre de commandes."""
 
-    def __init__(self, definitions_dir: Optional[Path] = None):
-        self.definitions_dir = definitions_dir or (Path(__file__).resolve().parent / "definitions")
+    def __init__(self, modules_dir: Optional[Path] = None):
+        self.modules_dir = modules_dir or (Path(__file__).resolve().parent / "modules")
         self._actions: Dict[str, BaseAction] = {}
         self.reload()
 
@@ -44,15 +44,15 @@ class ActionRegistry:
         return self._actions
 
     def reload(self):
-        """Scanne le répertoire definitions/ et charge tous les modules d'actions."""
+        """Scanne le répertoire modules/ et charge tous les modules d'actions."""
         self._actions.clear()
 
-        if not self.definitions_dir.exists():
+        if not self.modules_dir.exists():
             return
 
-        # Parcours des modules python dans definitions/
-        package_prefix = "actions.definitions."
-        for finder, module_name, is_pkg in pkgutil.iter_modules([str(self.definitions_dir)]):
+        # Parcours des modules python dans actions/modules/
+        package_prefix = "actions.modules."
+        for finder, module_name, is_pkg in pkgutil.iter_modules([str(self.modules_dir)]):
             if module_name.startswith("__"):
                 continue
 
@@ -108,4 +108,4 @@ if __name__ == "__main__":
     print("🧪 [DEBUG] Test du module actions/registry.py")
     print(f"Nombre d'actions découvertes : {len(COMMAND_REGISTRY)}")
     for tag, act in COMMAND_REGISTRY.items():
-        print(f"  • [{tag}] ({act.script_name}) -> {act.description}")
+        print(f"  • [{tag}] -> {act.description}")

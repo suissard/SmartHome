@@ -1,6 +1,14 @@
 import base64
 import re
-from config import (
+import sys
+from pathlib import Path
+
+# Inclusion de la racine du projet pour import autonome
+_ROOT_DIR = Path(__file__).resolve().parent.parent
+if str(_ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(_ROOT_DIR))
+
+from core.config import (
     LLM_PROVIDER,
     OLLAMA_MODEL,
     OLLAMA_HOST,
@@ -13,6 +21,7 @@ from config import (
     LLM_HISTORY_MESSAGES,
     ACTIONS_DYNAMIC_PROMPT,
 )
+
 
 # Initialisation conditionnelle selon le fournisseur configuré
 _ollama_client = None

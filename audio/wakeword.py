@@ -1,14 +1,22 @@
 import sys
+from pathlib import Path
 import numpy as np
 import pyaudio
+
+# Inclusion de la racine du projet pour import autonome
+_ROOT_DIR = Path(__file__).resolve().parent.parent
+if str(_ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(_ROOT_DIR))
+
 from openwakeword.model import Model
-from config import (
+from core.config import (
     WAKEWORD_MODEL_PATH,
     WAKEWORD_THRESHOLD,
     AUDIO_CHUNK,
     AUDIO_RATE,
     AUDIO_INPUT_DEVICE_INDEX,
 )
+
 
 MODEL_PATH = WAKEWORD_MODEL_PATH
 CHUNK = AUDIO_CHUNK

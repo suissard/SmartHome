@@ -12,9 +12,10 @@ import argparse
 from pathlib import Path
 
 # Ajout de la racine du projet dans le sys.path
-ROOT_DIR = Path(__file__).resolve().parent
+ROOT_DIR = Path(__file__).resolve().parent.parent
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
+
 
 from actions.manager import ActionManager, get_action_manager
 from actions.registry import COMMAND_REGISTRY, get_all_commands, get_command_by_tag

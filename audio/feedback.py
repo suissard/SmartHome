@@ -1,8 +1,16 @@
 import os
+import sys
 import time
+from pathlib import Path
 import numpy as np
 import sounddevice as sd
-from config import (
+
+# Inclusion de la racine du projet pour import autonome
+_ROOT_DIR = Path(__file__).resolve().parent.parent
+if str(_ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(_ROOT_DIR))
+
+from core.config import (
     AUDIO_OUTPUT_DEVICE_INDEX,
     FEEDBACK_WAKEWORD_TYPE,
     FEEDBACK_WAKEWORD_TEXT,
@@ -15,6 +23,7 @@ from config import (
     FEEDBACK_TIMEOUT_SOUND,
     FEEDBACK_SOUND_VOLUME,
 )
+
 
 SAMPLE_RATE = 44100
 
