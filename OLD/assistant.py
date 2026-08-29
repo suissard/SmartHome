@@ -10,7 +10,7 @@ from faster_whisper import WhisperModel
 # --- CONFIGURATION ---
 WAKEWORD_MODEL = "hey_smarthome_20260716_200659.onnx"
 WHISPER_MODEL_NAME = "base"
-OLLAMA_MODEL = "llama3.2"  # ou "mistral", "qwen2.5", etc.
+OLLAMA_MODEL = "gemma4:12b"  # ou "mistral", "qwen2.5", etc.
 
 SCORE_THRESHOLD = 0.5
 VOICE_THRESHOLD = 700

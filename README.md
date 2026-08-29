@@ -141,7 +141,7 @@ python main.py
 3. Posez votre question (ex : *« Quel temps fait-il aujourd'hui ? »*).
 4. L'assistant analyse, génère sa réponse via le LLM et vous répond à haute voix 🔊.
 5. Un discret signal sonore (*ding*) retentit à la fin de sa phrase pour vous indiquer que vous pouvez réenchaîner.
-6. Une barre de décompte de 30 secondes s'affiche : vous pouvez enchaîner sans répéter le mot-clé. Si aucune parole n'est détectée, l'assistant énonce sa phrase de fin (ex: *« Bisous a plus tard »*) et repasse en veille.
+6. Une barre d'écoulement dynamique s'affiche (durée paramétrable via `FOLLOW_UP_TIMEOUT` dans `.env`, ex: 10s ou 30s) : vous pouvez enchaîner directement sans répéter le mot-clé. Si aucune parole n'est détectée à l'issue de l'écoulement, l'assistant énonce sa phrase de fin (ex: *« Bisous a plus tard »*) et repasse en veille.
 
 ---
 

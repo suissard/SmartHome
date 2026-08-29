@@ -37,15 +37,23 @@ class VoiceTranscriber:
         device=WHISPER_DEVICE,
         compute_type=WHISPER_COMPUTE_TYPE,
         voice_threshold=VOICE_THRESHOLD,
-        silence_duration=SILENCE_DURATION
+        silence_duration=SILENCE_DURATION,
+        follow_up_timeout=FOLLOW_UP_TIMEOUT,
+        max_speech_duration=MAX_SPEECH_DURATION
     ):
         self.provider = provider.lower()
         self.voice_threshold = voice_threshold
         self.silence_duration = silence_duration
+        self.follow_up_timeout = follow_up_timeout
+        self.max_speech_duration = max_speech_duration
         self.language = WHISPER_LANGUAGE
         self.beam_size = WHISPER_BEAM_SIZE
 
-        if self.provider == "openrouter":
+        if self.provider in ("none", "direct", "bypass"):
+            print("Mode Direct Audio actif (Bypass STT ⏩ Multimodal LLM) ✅")
+            self.client = None
+            self.model = None
+        elif self.provider == "openrouter":
             print(f"Chargement STT OpenRouter (Modèle: {OPENROUTER_STT_MODEL})... ⏳")
             from openai import OpenAI
             self.client = OpenAI(
@@ -73,28 +81,36 @@ class VoiceTranscriber:
     def record_and_transcribe(
         self,
         stream,
-        timeout_silence=FOLLOW_UP_TIMEOUT,
-        max_speech_duration=MAX_SPEECH_DURATION
+        timeout_silence=None,
+        max_speech_duration=None,
+        bar_length=20
     ):
+        if timeout_silence is None:
+            timeout_silence = self.follow_up_timeout
+        if max_speech_duration is None:
+            max_speech_duration = self.max_speech_duration
+
+        timeout_silence = max(0.1, float(timeout_silence))
         self._flush_stream(stream)
         start_wait = time.time()
         pre_buffer = deque(maxlen=4)
-        bar_length = 20
 
         while True:
             elapsed = time.time() - start_wait
-            remaining = timeout_silence - elapsed
+            remaining = max(0.0, timeout_silence - elapsed)
 
             # Fin du délai d'attente
-            if remaining <= 0:
-                sys.stdout.write("\r" + " " * 60 + "\r")
+            if remaining <= 0 or elapsed >= timeout_silence:
+                sys.stdout.write("\r" + " " * 80 + "\r")
                 sys.stdout.flush()
                 return "", 0.0, 0.0
 
-            # Barre de chargement du timer en direct
-            filled = int((elapsed / timeout_silence) * bar_length)
+            # Barre d'écoulement dynamique (décompte proportionnel au timeout configuré)
+            ratio = max(0.0, min(1.0, remaining / timeout_silence))
+            filled = int(round(ratio * bar_length))
+            filled = max(0, min(bar_length, filled))
             bar = "█" * filled + "░" * (bar_length - filled)
-            sys.stdout.write(f"\r⏳ Veille active : [{bar}] {remaining:4.1f}s ")
+            sys.stdout.write(f"\r⏳ Veille active : [{bar}] {remaining:4.1f}s / {timeout_silence:.1f}s ")
             sys.stdout.flush()
 
             data = stream.read(CHUNK, exception_on_overflow=False)
@@ -104,7 +120,7 @@ class VoiceTranscriber:
 
             # Voix détectée -> Enregistrement
             if vol > self.voice_threshold:
-                sys.stdout.write("\r" + " " * 60 + "\r🎤 [Enregistrement...] ")
+                sys.stdout.write("\r" + " " * 80 + "\r🎤 [Enregistrement...] ")
                 sys.stdout.flush()
 
                 frames = list(pre_buffer)
@@ -127,7 +143,7 @@ class VoiceTranscriber:
 
                 # Analyse seulement si l'enregistrement a capté assez de matière
                 if len(frames) > 5:
-                    sys.stdout.write("\r" + " " * 60 + "\r⚙️ [Analyse en cours...] ")
+                    sys.stdout.write("\r" + " " * 80 + "\r⚙️ [Analyse en cours...] ")
                     sys.stdout.flush()
 
                     wav_buffer = io.BytesIO()
@@ -139,8 +155,15 @@ class VoiceTranscriber:
                     wav_buffer.seek(0)
 
                     t0 = time.perf_counter()
-                    text = ""
+                    aud_d = (len(frames) * CHUNK) / RATE
 
+                    # Si mode Direct Audio : renvoie directement les octets WAV sans transcription
+                    if self.provider in ("none", "direct", "bypass"):
+                        sys.stdout.write("\r" + " " * 80 + "\r")
+                        sys.stdout.flush()
+                        return wav_buffer.getvalue(), time.perf_counter() - t0, aud_d
+
+                    text = ""
                     try:
                         if self.provider == "openrouter":
                             if not OPENROUTER_API_KEY:
@@ -165,9 +188,8 @@ class VoiceTranscriber:
                         print(f"\n⚠️ Erreur de transcription : {e}")
 
                     inf_t = time.perf_counter() - t0
-                    aud_d = (len(frames) * CHUNK) / RATE
 
-                    sys.stdout.write("\r" + " " * 60 + "\r")
+                    sys.stdout.write("\r" + " " * 80 + "\r")
                     sys.stdout.flush()
 
                     if text:
@@ -179,7 +201,13 @@ class VoiceTranscriber:
 
 
 if __name__ == "__main__":
-    active_stt = OPENROUTER_STT_MODEL if STT_PROVIDER == "openrouter" else WHISPER_MODEL
+    if STT_PROVIDER in ("none", "direct", "bypass"):
+        active_stt = "Bypass (Direct Audio)"
+    elif STT_PROVIDER == "openrouter":
+        active_stt = OPENROUTER_STT_MODEL
+    else:
+        active_stt = WHISPER_MODEL
+
     print(f"🧪 [DEBUG] Mode test Transcription (Fournisseur: {STT_PROVIDER.upper()}, Modèle: {active_stt}, Timer: {FOLLOW_UP_TIMEOUT}s)...")
     transcriber = VoiceTranscriber()
     p = pyaudio.PyAudio()
@@ -194,9 +222,11 @@ if __name__ == "__main__":
 
     try:
         while True:
-            text, inf_t, aud_t = transcriber.record_and_transcribe(stream, timeout_silence=FOLLOW_UP_TIMEOUT)
-            if text:
-                print(f"👉 Texte : « {text} »\n")
+            result, inf_t, aud_t = transcriber.record_and_transcribe(stream, timeout_silence=FOLLOW_UP_TIMEOUT)
+            if isinstance(result, bytes) and result:
+                print(f"👉 Audio brut capté : {len(result)} octets (durée {aud_t:.2f}s)\n")
+            elif result:
+                print(f"👉 Texte : « {result} » ({inf_t:.2f}s)\n")
             else:
                 print("😴 Fin du décompte.\n")
     except KeyboardInterrupt:

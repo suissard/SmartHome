@@ -85,15 +85,21 @@ class TextToSpeech:
                 return
 
             try:
+                import soundfile as sf
+
                 response = self.client.audio.speech.create(
                     model=OPENROUTER_TTS_MODEL,
                     voice=OPENROUTER_TTS_VOICE,
                     input=clean_text,
-                    response_format="wav",
+                    response_format="mp3",
                 )
-                wav_bytes = response.content if hasattr(response, "content") else response.read()
-                sample_rate, audio_data = wavfile.read(io.BytesIO(wav_bytes))
-                raw_audio = audio_data.astype(np.float32)
+                audio_bytes = response.content if hasattr(response, "content") else response.read()
+                audio_data, sample_rate = sf.read(io.BytesIO(audio_bytes), dtype="float32")
+                # Si stéréo, convertir en mono ou conserver
+                if audio_data.ndim > 1:
+                    raw_audio = (audio_data * 32767.0).astype(np.float32)
+                else:
+                    raw_audio = (audio_data * 32767.0).astype(np.float32)
             except Exception as e:
                 print(f"⚠️ Erreur de synthèse vocale OpenRouter : {e}")
                 return

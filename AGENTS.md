@@ -40,7 +40,7 @@ Ce document est destiné aux agents IA (et aux développeurs) qui lisent, mainti
 ### 2.1 [main.py](file:///home/suissard/PROGRAMMATIONS/SmartHome/main.py) — Orchestrateur Principal
 - **Responsabilité** : Initialise le flux d'entrée micro partagé (`PyAudio`), gère la boucle d'événements, le ducking sonore et maintient l'état conversationnel. Affiche les fournisseurs actifs au démarrage (LLM, STT, TTS).
 - **Paramètres Clés** :
-  - `FOLLOW_UP_TIMEOUT = 30.0` : Durée (en secondes) pendant laquelle l'assistant reste en écoute active après une réponse.
+  - `FOLLOW_UP_TIMEOUT` (configurable via `.env`) : Durée (en secondes) pendant laquelle l'assistant reste en écoute active après une réponse. La barre d'écoulement s'adapte dynamiquement à cette durée.
 - **Cycle de Fonctionnement** :
   1. Écoute passive par paquets (`CHUNK = 1280` à `RATE = 16000`).
   2. Si le mot-clé est validé (`score > threshold`), atténuation audio globale via `ducker.duck()`, notification `feedback.on_wakeword_detected()`, puis passage en mode `in_conversation = True`.
@@ -56,16 +56,18 @@ Ce document est destiné aux agents IA (et aux développeurs) qui lisent, mainti
   - Si le score dépasse `threshold` (par défaut `0.5`), le buffer interne est purgé via `self.oww.reset()` pour éviter les détections fantômes consécutives.
 
 ### 2.3 [transcribe.py](file:///home/suissard/PROGRAMMATIONS/SmartHome/transcribe.py) — Enregistrement & STT
-- **Technologie** : Modulaire selon `STT_PROVIDER` (`whisper` via `faster-whisper` ou `openrouter` via `/api/v1/audio/transcriptions`).
+- **Technologie** : Modulaire selon `STT_PROVIDER` (`whisper` via `faster-whisper`, `openrouter` via `/api/v1/audio/transcriptions`, ou `none`/`direct` pour le bypass STT vers LLM multimodal).
 - **Gestion VAD & Audio** :
   - `pre_buffer` (`deque(maxlen=4)`) : Conserve les 4 dernières trames (320 ms) pour ne jamais couper l'attaque de la voix.
   - `voice_threshold = 700` : Détection du début de parole par calcul de la moyenne absolue des amplitudes (`np.abs(chunk).mean()`).
   - `silence_duration = 0.8s` : Seuil de silence consécutif marquant la fin naturelle d'une phrase.
   - `_flush_stream()` : Purge le buffer résiduel de la carte son avant chaque écoute pour éliminer les bruits résiduels ou l'écho de la synthèse précédente.
-- **Conversion & Transcription** : Assemblage des trames dans un buffer WAV en mémoire (`io.BytesIO`) avant passage dans Whisper local ou l'API OpenRouter STT.
+- **Conversion & Transcription** : Assemblage des trames dans un buffer WAV en mémoire (`io.BytesIO`). Si `STT_PROVIDER=none` ou `direct`, retourne directement les octets WAV sans charger ni appeler de moteur STT. Sinon, effectue la transcription via Whisper local ou OpenRouter.
 
 ### 2.4 [llm.py](file:///home/suissard/PROGRAMMATIONS/SmartHome/llm.py) — Raisonnement & Génération
 - **Technologie** : Modulaire selon `LLM_PROVIDER` (`ollama` en local ou `openrouter` via l'API OpenAI compatible).
+- **Historique Conversationnel** : Maintient un buffer glissant des $N$ derniers messages (`LLM_HISTORY_MESSAGES`, par défaut 5) pour préserver le contexte des échanges récents. Fournit `get_history()`, `clear_history()`, et `add_history_message()`.
+- **Support Multimodal Audio Direct** : Fonction `ask_llm(prompt=..., audio_bytes=...)` capable d'envoyer l'audio encodé en base64 via `input_audio` aux modèles multimodaux (ex: Gemini Flash, Voxtral).
 - **Prompt Système** :
   > *"Tu es un assistant vocal domotique. Réponds en français de manière claire, concise et directe (1 à 2 phrases max). N'utilise pas de markdown complexe."*
 - **Streaming** : Supporte le streaming console immédiat pour un retour visuel en temps réel pendant la génération quel que soit le fournisseur actif.

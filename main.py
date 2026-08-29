@@ -16,6 +16,7 @@ from config import (
      TTS_PROVIDER,
      TTS_MODEL_PATH,
      OPENROUTER_TTS_MODEL,
+     LLM_HISTORY_MESSAGES,
 )
 from wakeword import WakeWordDetector, FORMAT
 from transcribe import VoiceTranscriber
@@ -58,13 +59,19 @@ def main():
     )
 
     llm_info = f"OpenRouter ({OPENROUTER_MODEL})" if LLM_PROVIDER == "openrouter" else f"Ollama ({OLLAMA_MODEL})"
-    stt_info = f"OpenRouter ({OPENROUTER_STT_MODEL})" if STT_PROVIDER == "openrouter" else f"Whisper ({WHISPER_MODEL})"
+    if STT_PROVIDER in ("none", "direct", "bypass"):
+        stt_info = "Direct Audio (Bypass STT ⏩ Multimodal LLM)"
+    elif STT_PROVIDER == "openrouter":
+        stt_info = f"OpenRouter ({OPENROUTER_STT_MODEL})"
+    else:
+        stt_info = f"Whisper ({WHISPER_MODEL})"
     tts_info = f"OpenRouter ({OPENROUTER_TTS_MODEL})" if TTS_PROVIDER == "openrouter" else f"Piper ({TTS_MODEL_PATH})"
 
     print(f"\n🟢 Démarrage de SmartHome")
-    print(f"  • Cerveau LLM : {llm_info}")
-    print(f"  • Écoute STT  : {stt_info}")
-    print(f"  • Voix TTS    : {tts_info}\n")
+    print(f"  • Cerveau LLM   : {llm_info} (Mémoire: {LLM_HISTORY_MESSAGES} msgs)")
+    print(f"  • Écoute STT    : {stt_info}")
+    print(f"  • Voix TTS      : {tts_info}")
+    print(f"  • Veille active : {FOLLOW_UP_TIMEOUT}s\n")
 
     try:
         while True:
@@ -82,17 +89,20 @@ def main():
                     in_conversation = True
 
                     while in_conversation:
-                        text, inf_t, _ = transcriber.record_and_transcribe(
+                        user_input, elapsed_t, _ = transcriber.record_and_transcribe(
                             stream,
                             timeout_silence=FOLLOW_UP_TIMEOUT
                         )
 
-                        if text:
-                            print(f"👤 : « {text} » ({inf_t:.2f} s)")
-                            print("🤖 : ", end="", flush=True)
-
-                            # 1. Génération de la réponse Ollama
-                            response_text = ask_llm(text)
+                        if user_input:
+                            if isinstance(user_input, bytes):
+                                print(f"👤 : 🎙️ [Audio envoyé au LLM] ({elapsed_t:.2f} s)")
+                                print("🤖 : ", end="", flush=True)
+                                response_text = ask_llm(audio_bytes=user_input)
+                            else:
+                                print(f"👤 : « {user_input} » ({elapsed_t:.2f} s)")
+                                print("🤖 : ", end="", flush=True)
+                                response_text = ask_llm(prompt=user_input)
 
                             # 2. Vocalisation de la réponse
                             if response_text:

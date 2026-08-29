@@ -17,9 +17,9 @@ BASE_DIR = Path(__file__).resolve().parent
 ENV_FILE = BASE_DIR / ".env"
 
 if ENV_FILE.exists():
-    load_dotenv(dotenv_path=ENV_FILE)
+    load_dotenv(dotenv_path=ENV_FILE, override=True)
 else:
-    load_dotenv()
+    load_dotenv(override=True)
 
 
 def _get_str(key: str, default: str) -> str:
@@ -114,7 +114,8 @@ WHISPER_BEAM_SIZE: int = _get_int("WHISPER_BEAM_SIZE", 3)
 VOICE_THRESHOLD: float = _get_float("VOICE_THRESHOLD", 700.0)
 SILENCE_DURATION: float = _get_float("SILENCE_DURATION", 0.8)
 MAX_SPEECH_DURATION: float = _get_float("MAX_SPEECH_DURATION", 12.0)
-FOLLOW_UP_TIMEOUT: float = _get_float("FOLLOW_UP_TIMEOUT", 30.0)
+FOLLOW_UP_TIMEOUT: float = _get_float("FOLLOW_UP_TIMEOUT", _get_float("ACTIVE_STANDBY_TIMEOUT", 30.0))
+ACTIVE_STANDBY_TIMEOUT: float = FOLLOW_UP_TIMEOUT
 
 # ==========================================
 # 🧠 LLM / RAISONNEMENT (Ollama & OpenRouter)
@@ -123,10 +124,11 @@ OLLAMA_MODEL: str = _get_str("OLLAMA_MODEL", "qwen2.5:7b")
 OLLAMA_HOST: str = _get_str("OLLAMA_HOST", "http://localhost:11434")
 LLM_SYSTEM_PROMPT: str = _get_str(
     "LLM_SYSTEM_PROMPT",
-    "Tu es un assistant vocal domotique. Réponds en français de manière claire, concise et directe (1 à 2 phrases max). N'utilise pas de markdown complexe."
+    "Tu es un assistant vocal domotique. Réponds en français de manière claire, concise et directe (1 à 2 phrases max). N'utilise pas de markdown ou d'emoji."
 )
 LLM_STREAM: bool = _get_bool("LLM_STREAM", True)
 LLM_THINK: bool = _get_bool("LLM_THINK", False)
+LLM_HISTORY_MESSAGES: int = _get_int("LLM_HISTORY_MESSAGES", 5)
 
 
 # ==========================================
@@ -197,6 +199,7 @@ if __name__ == "__main__":
     print(f"  • OLLAMA_HOST             : {OLLAMA_HOST}")
     print(f"  • LLM_STREAM              : {LLM_STREAM}")
     print(f"  • LLM_THINK               : {LLM_THINK}")
+    print(f"  • LLM_HISTORY_MESSAGES    : {LLM_HISTORY_MESSAGES}")
     print(f"  • TTS_MODEL_PATH          : {TTS_MODEL_PATH}")
     print(f"  • TTS_CONFIG_PATH         : {TTS_CONFIG_PATH}")
     print(f"  • TTS_SPEECH_SPEED        : {TTS_SPEECH_SPEED}")
