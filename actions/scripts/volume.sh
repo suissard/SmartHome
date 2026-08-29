@@ -23,6 +23,8 @@ if command -v pactl >/dev/null 2>&1; then
             pactl set-sink-mute @DEFAULT_SINK@ toggle
             ;;
         up|+*)
+            # Démute automatiquement lors de l'augmentation du volume
+            pactl set-sink-mute @DEFAULT_SINK@ 0
             pactl set-sink-volume @DEFAULT_SINK@ +5%
             ;;
         down|-*)
@@ -32,6 +34,9 @@ if command -v pactl >/dev/null 2>&1; then
             # Si un nombre est passé (ex: 50 ou 50%)
             val="${TARGET%%%}"
             if [[ "$val" =~ ^[0-9]+$ ]]; then
+                if [ "$val" -gt 0 ]; then
+                    pactl set-sink-mute @DEFAULT_SINK@ 0
+                fi
                 pactl set-sink-volume @DEFAULT_SINK@ "${val}%"
             fi
             ;;
@@ -48,6 +53,8 @@ elif command -v wpctl >/dev/null 2>&1; then
             wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle
             ;;
         up|+*)
+            # Démute automatiquement lors de l'augmentation du volume
+            wpctl set-mute @DEFAULT_AUDIO_SINK@ 0
             wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%+
             ;;
         down|-*)
@@ -56,6 +63,9 @@ elif command -v wpctl >/dev/null 2>&1; then
         *)
             val="${TARGET%%%}"
             if [[ "$val" =~ ^[0-9]+$ ]]; then
+                if [ "$val" -gt 0 ]; then
+                    wpctl set-mute @DEFAULT_AUDIO_SINK@ 0
+                fi
                 frac=$(awk "BEGIN {print $val/100}")
                 wpctl set-volume @DEFAULT_AUDIO_SINK@ "$frac"
             fi
@@ -73,6 +83,8 @@ elif command -v amixer >/dev/null 2>&1; then
             amixer set Master toggle
             ;;
         up|+*)
+            # Démute automatiquement lors de l'augmentation du volume
+            amixer set Master unmute
             amixer set Master 5%+
             ;;
         down|-*)
@@ -81,6 +93,9 @@ elif command -v amixer >/dev/null 2>&1; then
         *)
             val="${TARGET%%%}"
             if [[ "$val" =~ ^[0-9]+$ ]]; then
+                if [ "$val" -gt 0 ]; then
+                    amixer set Master unmute
+                fi
                 amixer set Master "${val}%"
             fi
             ;;
@@ -89,4 +104,5 @@ else
     echo "Erreur : Aucun contrôleur audio trouvé (pactl, wpctl, amixer)." >&2
     exit 1
 fi
+
 

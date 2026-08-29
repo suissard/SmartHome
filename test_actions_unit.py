@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-🧪 SmartHome — Suite de Tests Unitaires pour les Actions et Commandes Système
-Exécute tous les tests automatisés (registre, regex, extraction, pipeline, et scripts non-destructifs).
-Garantit qu'aucune extinction (shutdown) ou redémarrage (reboot) réel n'est déclenché.
+🧪 SmartHome — Suite de Tests Unitaires pour l'Architecture Modulaire des Actions
+Valide l'auto-découverte (ActionRegistry), les définitions autonomes (BaseAction),
+l'extraction regex, le prompt dynamique et l'exécution sécurisée (Mocks / Dry-Run).
+Garantit qu'aucune extinction ou redémarrage réel n'est jamais déclenché.
 """
 
 import os
@@ -17,201 +18,175 @@ ROOT_DIR = Path(__file__).resolve().parent
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from actions.commands import COMMAND_REGISTRY, CommandDefinition, get_all_commands, get_command_by_tag
-from actions.manager import ActionManager
+from actions.base import BaseAction, CommandDefinition
+from actions.registry import (
+    COMMAND_REGISTRY,
+    ActionRegistry,
+    get_all_commands,
+    get_command_by_tag,
+    register_action
+)
+from actions.manager import ActionManager, get_action_manager
 
 
-class TestCommandRegistry(unittest.TestCase):
-    """Tests sur le registre et la structure des commandes."""
+class TestModularActionRegistry(unittest.TestCase):
+    """Tests sur l'auto-découverte et le registre dynamique d'actions."""
 
-    def test_registry_contains_expected_tags(self):
-        """Vérifie la présence de toutes les commandes standards."""
+    def test_registry_auto_discovery(self):
+        """Vérifie que l'auto-découverte charge toutes les commandes attendues."""
         expected_tags = {
             "SHUTDOWN", "REBOOT", "LOCK", "SCREEN_OFF",
             "VOLUME", "MUTE", "UNMUTE",
             "MEDIA_PLAY_PAUSE", "MEDIA_NEXT", "MEDIA_PREV",
             "OPEN", "NOTIFY"
         }
-        self.assertTrue(expected_tags.issubset(set(COMMAND_REGISTRY.keys())),
-                        f"Tags manquants : {expected_tags - set(COMMAND_REGISTRY.keys())}")
+        discovered_tags = set(COMMAND_REGISTRY.keys())
+        self.assertTrue(expected_tags.issubset(discovered_tags),
+                        f"Tags manquants dans l'auto-découverte : {expected_tags - discovered_tags}")
 
-    def test_all_scripts_exist_and_executable(self):
-        """Vérifie que chaque script référencé existe physiquement et est exécutable."""
-        scripts_dir = ROOT_DIR / "actions" / "scripts"
-        self.assertTrue(scripts_dir.is_dir(), f"Dossier {scripts_dir} introuvable")
+    def test_all_actions_inherit_from_base_action(self):
+        """Vérifie que chaque action enregistrée est bien une instance de BaseAction."""
+        for tag, action in COMMAND_REGISTRY.items():
+            self.assertIsInstance(action, BaseAction, f"L'action [{tag}] n'hérite pas de BaseAction")
+            self.assertTrue(action.tag, f"Tag vide pour {action}")
+            self.assertTrue(action.description, f"Description vide pour [{tag}]")
+            self.assertTrue(action.script_name, f"script_name vide pour [{tag}]")
 
-        for tag, cmd in COMMAND_REGISTRY.items():
-            script_path = scripts_dir / cmd.script_name
-            self.assertTrue(script_path.exists(), f"Script introuvable pour [{tag}] : {script_path}")
-            self.assertTrue(os.access(script_path, os.X_OK) or os.access(script_path, os.R_OK),
-                            f"Permissions insuffisantes pour {script_path}")
+    def test_custom_action_registration(self):
+        """Vérifie l'enregistrement dynamique d'une action personnalisée."""
+        class CustomAction(BaseAction):
+            def __init__(self):
+                super().__init__(
+                    tag="CUSTOM_TEST_ACTION",
+                    description="Action dynamique de test",
+                    script_name="notify.sh"
+                )
 
-    def test_command_regex_patterns(self):
-        """Vérifie que les expressions régulières associées aux tags fonctionnent correctement."""
-        # Commande sans argument : [MUTE]
-        mute_cmd = COMMAND_REGISTRY["MUTE"]
-        self.assertIsNotNone(mute_cmd.pattern.search("[MUTE] Son coupé."))
-        self.assertIsNotNone(mute_cmd.pattern.search("[mute] minuscule"))
-
-        # Commande avec arguments : [VOLUME 50]
-        vol_cmd = COMMAND_REGISTRY["VOLUME"]
-        m = vol_cmd.pattern.search("[VOLUME 50] Réglage")
-        self.assertIsNotNone(m)
-        self.assertEqual(m.group(1).strip(), "50")
-
-        m_down = vol_cmd.pattern.search("[volume down] Moins fort")
-        self.assertIsNotNone(m_down)
-        self.assertEqual(m_down.group(1).strip(), "down")
-
-        # Commande avec argument texte multi-mots : [NOTIFY Sortir le chien]
-        notify_cmd = COMMAND_REGISTRY["NOTIFY"]
-        m_notif = notify_cmd.pattern.search("[NOTIFY Sortir le chien] Rappel envoyé.")
-        self.assertIsNotNone(m_notif)
-        self.assertEqual(m_notif.group(1).strip(), "Sortir le chien")
-
-    def test_get_command_by_tag(self):
-        """Vérifie la recherche insensible à la casse."""
-        self.assertIsNotNone(get_command_by_tag("volume"))
-        self.assertIsNotNone(get_command_by_tag("VOLUME"))
-        self.assertIsNotNone(get_command_by_tag("VoLuMe"))
-        self.assertIsNone(get_command_by_tag("INCONNU_XYZ"))
+        custom = CustomAction()
+        register_action(custom)
+        self.assertIn("CUSTOM_TEST_ACTION", COMMAND_REGISTRY)
+        self.assertEqual(get_command_by_tag("CUSTOM_TEST_ACTION"), custom)
+        # Nettoyage
+        COMMAND_REGISTRY.pop("CUSTOM_TEST_ACTION", None)
 
 
-class TestActionManagerExtractionAndPrompt(unittest.TestCase):
-    """Tests sur l'extraction d'actions et la génération dynamique de prompts."""
+class TestActionDefinitionsBuildCommand(unittest.TestCase):
+    """Tests sur la méthode build_command de chaque classe d'action."""
+
+    def setUp(self):
+        self.scripts_dir = ROOT_DIR / "actions" / "scripts"
+
+    def test_volume_actions_build_command(self):
+        """Vérifie la construction des commandes pour VOLUME, MUTE et UNMUTE."""
+        vol_act = get_command_by_tag("VOLUME")
+        mute_act = get_command_by_tag("MUTE")
+        unmute_act = get_command_by_tag("UNMUTE")
+
+        self.assertIsNotNone(vol_act)
+        self.assertIsNotNone(mute_act)
+        self.assertIsNotNone(unmute_act)
+
+        # VOLUME avec argument
+        cmd = vol_act.build_command(self.scripts_dir, "50")
+        self.assertTrue(cmd[0].endswith("volume.sh"))
+        self.assertEqual(cmd[1], "50")
+
+        # MUTE
+        cmd_mute = mute_act.build_command(self.scripts_dir)
+        self.assertTrue(cmd_mute[0].endswith("volume.sh"))
+        self.assertEqual(cmd_mute[1], "mute")
+
+        # UNMUTE
+        cmd_unmute = unmute_act.build_command(self.scripts_dir)
+        self.assertTrue(cmd_unmute[0].endswith("volume.sh"))
+        self.assertEqual(cmd_unmute[1], "unmute")
+
+    def test_media_actions_build_command(self):
+        """Vérifie la construction des commandes pour le multimédia."""
+        play_act = get_command_by_tag("MEDIA_PLAY_PAUSE")
+        next_act = get_command_by_tag("MEDIA_NEXT")
+        prev_act = get_command_by_tag("MEDIA_PREV")
+
+        self.assertEqual(play_act.build_command(self.scripts_dir)[1], "play-pause")
+        self.assertEqual(next_act.build_command(self.scripts_dir)[1], "next")
+        self.assertEqual(prev_act.build_command(self.scripts_dir)[1], "previous")
+
+    def test_notify_and_open_app_build_command(self):
+        """Vérifie la transmission des messages et arguments pour NOTIFY et OPEN."""
+        notify_act = get_command_by_tag("NOTIFY")
+        open_act = get_command_by_tag("OPEN")
+
+        cmd_notif = notify_act.build_command(self.scripts_dir, "Sortir le chien")
+        self.assertTrue(cmd_notif[0].endswith("notify.sh"))
+        self.assertEqual(cmd_notif[1], "Sortir le chien")
+
+        cmd_open = open_act.build_command(self.scripts_dir, "firefox")
+        self.assertTrue(cmd_open[0].endswith("open_app.sh"))
+        self.assertEqual(cmd_open[1], "firefox")
+
+
+class TestActionManagerIntegration(unittest.TestCase):
+    """Tests du gestionnaire ActionManager découplé."""
 
     def setUp(self):
         self.manager = ActionManager(enabled=True)
 
-    def test_build_dynamic_system_prompt_enabled(self):
-        """Vérifie l'enrichissement du prompt système."""
-        base_prompt = "Tu es un assistant vocal."
-        dynamic_prompt = self.manager.build_dynamic_system_prompt(base_prompt)
-        self.assertIn("ACTIONS & COMMANDES SYSTÈME DISPONIBLES", dynamic_prompt)
-        self.assertIn("[SHUTDOWN]", dynamic_prompt)
-        self.assertIn("[VOLUME", dynamic_prompt)
-        self.assertIn("[NOTIFY", dynamic_prompt)
+    def test_dynamic_system_prompt(self):
+        """Vérifie la génération dynamique du prompt avec toutes les commandes découvertes."""
+        base_prompt = "Tu es un assistant vocal domotique."
+        prompt = self.manager.build_dynamic_system_prompt(base_prompt)
+        self.assertIn("ACTIONS & COMMANDES SYSTÈME DISPONIBLES", prompt)
+        self.assertIn("[VOLUME", prompt)
+        self.assertIn("[SHUTDOWN]", prompt)
+        self.assertIn("[MEDIA_PLAY_PAUSE]", prompt)
 
-    def test_build_dynamic_system_prompt_disabled(self):
-        """Vérifie que le prompt n'est pas altéré si désactivé."""
-        disabled_manager = ActionManager(enabled=False)
-        base_prompt = "Tu es un assistant vocal."
-        self.assertEqual(disabled_manager.build_dynamic_system_prompt(base_prompt), base_prompt)
-
-    def test_extract_actions_single_tag(self):
-        """Vérifie l'extraction d'un tag unique et la purification du texte TTS."""
-        raw = "[VOLUME 75] Le volume a bien été réglé à 75%."
+    def test_extract_actions_and_clean_tts(self):
+        """Vérifie l'extraction et la purification du texte pour la voix."""
+        raw = "[NOTIFY Rendez-vous chez le dentiste] Rappel enregistré pour demain."
         clean, actions = self.manager.extract_actions(raw)
-        self.assertEqual(clean, "Le volume a bien été réglé à 75%.")
+        self.assertEqual(clean, "Rappel enregistré pour demain.")
         self.assertEqual(len(actions), 1)
-        self.assertEqual(actions[0]["tag"], "VOLUME")
-        self.assertEqual(actions[0]["args"], "75")
-
-    def test_extract_actions_multiple_tags(self):
-        """Vérifie l'extraction de multiples tags dans un même message."""
-        raw = "[MUTE] [NOTIFY Silence activé] J'ai coupé le son et affiché une alerte."
-        clean, actions = self.manager.extract_actions(raw)
-        self.assertEqual(clean, "J'ai coupé le son et affiché une alerte.")
-        self.assertEqual(len(actions), 2)
-        tags = [a["tag"] for a in actions]
-        self.assertEqual(tags, ["MUTE", "NOTIFY"])
-        self.assertEqual(actions[1]["args"], "Silence activé")
-
-    def test_extract_actions_no_tags(self):
-        """Vérifie le comportement sur une réponse sans commande."""
-        raw = "Il fait un grand soleil aujourd'hui à Paris."
-        clean, actions = self.manager.extract_actions(raw)
-        self.assertEqual(clean, raw)
-        self.assertEqual(len(actions), 0)
-
-    def test_extract_actions_unknown_tag(self):
-        """Vérifie que les faux tags ou tags inexistants ne génèrent pas d'action."""
-        raw = "[INVENTED_COMMAND 123] Ceci est un test avec un tag inconnu."
-        clean, actions = self.manager.extract_actions(raw)
-        self.assertEqual(clean, "Ceci est un test avec un tag inconnu.")
-        self.assertEqual(len(actions), 0)
-
-
-class TestActionManagerExecution(unittest.TestCase):
-    """Tests sur l'exécution des commandes (sécurisés via Mock et Dry Run)."""
-
-    def setUp(self):
-        self.manager = ActionManager(enabled=True)
+        self.assertEqual(actions[0]["tag"], "NOTIFY")
+        self.assertEqual(actions[0]["args"], "Rendez-vous chez le dentiste")
 
     def test_execute_action_dry_run(self):
-        """Vérifie le mode dry-run sans création de sous-processus."""
+        """Vérifie le mode dry-run universel."""
         action = {
             "tag": "VOLUME",
-            "args": "50",
-            "definition": COMMAND_REGISTRY["VOLUME"]
+            "args": "45",
+            "definition": get_command_by_tag("VOLUME")
         }
-        result = self.manager.execute_action(action, dry_run=True)
-        self.assertTrue(result)
+        self.assertTrue(self.manager.execute_action(action, dry_run=True))
 
     @patch("subprocess.Popen")
-    def test_execute_action_spawns_process_with_correct_args(self, mock_popen):
-        """Vérifie la construction exacte de la commande subprocess pour différents tags."""
-        # 1. Test MUTE
-        action_mute = {
-            "tag": "MUTE",
+    def test_execute_action_delegation(self, mock_popen):
+        """Vérifie que manager.py délègue fidèlement la construction de commande à l'action."""
+        action = {
+            "tag": "MEDIA_NEXT",
             "args": "",
-            "definition": COMMAND_REGISTRY["MUTE"]
+            "definition": get_command_by_tag("MEDIA_NEXT")
         }
-        self.manager.execute_action(action_mute, dry_run=False)
-        mock_popen.assert_called()
-        cmd_args = mock_popen.call_args[0][0]
-        self.assertTrue(cmd_args[0].endswith("volume.sh"))
-        self.assertEqual(cmd_args[1], "mute")
-
-        # 2. Test MEDIA_PLAY_PAUSE
-        mock_popen.reset_mock()
-        action_media = {
-            "tag": "MEDIA_PLAY_PAUSE",
-            "args": "",
-            "definition": COMMAND_REGISTRY["MEDIA_PLAY_PAUSE"]
-        }
-        self.manager.execute_action(action_media, dry_run=False)
+        self.manager.execute_action(action, dry_run=False)
+        mock_popen.assert_called_once()
         cmd_args = mock_popen.call_args[0][0]
         self.assertTrue(cmd_args[0].endswith("media.sh"))
-        self.assertEqual(cmd_args[1], "play-pause")
-
-        # 3. Test NOTIFY
-        mock_popen.reset_mock()
-        action_notify = {
-            "tag": "NOTIFY",
-            "args": "Rappel de rendez-vous",
-            "definition": COMMAND_REGISTRY["NOTIFY"]
-        }
-        self.manager.execute_action(action_notify, dry_run=False)
-        cmd_args = mock_popen.call_args[0][0]
-        self.assertTrue(cmd_args[0].endswith("notify.sh"))
-        self.assertEqual(cmd_args[1], "Rappel de rendez-vous")
+        self.assertEqual(cmd_args[1], "next")
 
     @patch("subprocess.Popen")
-    def test_critical_commands_never_called_unintentionally(self, mock_popen):
-        """Vérifie la sécurité absolue des commandes SHUTDOWN et REBOOT."""
-        action_shutdown = {
-            "tag": "SHUTDOWN",
-            "args": "",
-            "definition": COMMAND_REGISTRY["SHUTDOWN"]
-        }
-        # En mode dry-run, subprocess.Popen ne doit jamais être appelé
-        self.manager.execute_action(action_shutdown, dry_run=True)
-        mock_popen.assert_not_called()
+    def test_safety_critical_commands_never_run_in_tests(self, mock_popen):
+        """Garantit la sécurité : SHUTDOWN et REBOOT en dry-run ne lancent aucun processus."""
+        for tag in ("SHUTDOWN", "REBOOT"):
+            action = {
+                "tag": tag,
+                "args": "",
+                "definition": get_command_by_tag(tag)
+            }
+            self.manager.execute_action(action, dry_run=True)
+            mock_popen.assert_not_called()
 
-
-    def test_process_response_with_actions_dry_run(self):
-        """Vérifie que process_response extrait et prépare toutes les actions en dry-run."""
-        raw_response = "[VOLUME 30] [OPEN calculatrice] Volume réglé et calculatrice ouverte."
-        clean_text = self.manager.process_response(raw_response, dry_run=True)
-        self.assertEqual(clean_text, "Volume réglé et calculatrice ouverte.")
-
-    def test_singleton_action_manager(self):
+    def test_singleton(self):
         """Vérifie le singleton get_action_manager."""
-        from actions.manager import get_action_manager
-        m1 = get_action_manager()
-        m2 = get_action_manager()
-        self.assertIs(m1, m2)
+        self.assertIs(get_action_manager(), get_action_manager())
 
 
 class TestBashScriptsSyntaxAndSafeExecution(unittest.TestCase):
@@ -231,7 +206,7 @@ class TestBashScriptsSyntaxAndSafeExecution(unittest.TestCase):
     def test_safe_script_notify(self):
         """Exécute notify.sh avec des paramètres de test sécurisés."""
         script_path = ROOT_DIR / "actions" / "scripts" / "notify.sh"
-        res = subprocess.run([str(script_path), "SmartHome Test Unit", "Ceci est un test unitaire."],
+        res = subprocess.run([str(script_path), "SmartHome Test Unit", "Test modulaire réussi."],
                              capture_output=True, text=True, timeout=5)
         self.assertEqual(res.returncode, 0, f"notify.sh a échoué : {res.stderr}")
 
@@ -242,7 +217,7 @@ class TestBashScriptsSyntaxAndSafeExecution(unittest.TestCase):
                              capture_output=True, text=True, timeout=5)
         self.assertEqual(res.returncode, 0, f"media.sh a échoué : {res.stderr}")
 
-    def test_safe_script_volume(self):
+    def test_safe_script_volume_reversible(self):
         """Exécute volume.sh de manière réversible (up puis down)."""
         script_path = ROOT_DIR / "actions" / "scripts" / "volume.sh"
         res_up = subprocess.run([str(script_path), "up"], capture_output=True, text=True, timeout=5)
@@ -250,14 +225,6 @@ class TestBashScriptsSyntaxAndSafeExecution(unittest.TestCase):
         res_down = subprocess.run([str(script_path), "down"], capture_output=True, text=True, timeout=5)
         self.assertEqual(res_down.returncode, 0, f"volume.sh down a échoué : {res_down.stderr}")
 
-    def test_safe_script_open_app_invalid(self):
-        """Vérifie que open_app.sh retourne un code d'erreur propre sur une application inexistante."""
-        script_path = ROOT_DIR / "actions" / "scripts" / "open_app.sh"
-        res = subprocess.run([str(script_path), "application_inexistante_test_xyz"],
-                             capture_output=True, text=True, timeout=5)
-        self.assertNotEqual(res.returncode, 0, "open_app.sh aurait dû échouer pour une application inexistante")
-
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
-

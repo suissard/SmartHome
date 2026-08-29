@@ -48,9 +48,15 @@ Ce document est destiné aux agents IA (et aux développeurs) qui lisent, mainti
   4. Si du texte est reçu : inférence LLM (`ask_llm`), exécution des commandes système et nettoyage du texte (`action_manager.process_response`), vocalisation du texte épuré (`tts.speak`), puis signal sonore de fin de tour `feedback.on_response_end()`.
   5. Si timeout de silence : notification de mise en veille `feedback.on_timeout()`, purge du flux, restauration du son système via `ducker.unduck()`, et retour en veille passive.
 
-### 2.2 [actions/](file:///home/suissard/PROGRAMMATIONS/SmartHome/actions) — Système de Commandes & Actions OS
-- **Responsabilité** : Détection des tags d'actions insérés par le LLM (`[SHUTDOWN]`, `[REBOOT]`, `[LOCK]`, `[VOLUME]`, `[MUTE]`, `[OPEN]`, etc.), exécution asynchrone non-bloquante de scripts bash dédiés (`actions/scripts/*.sh`), et purification du texte transmis à la synthèse vocale.
-- **Génération Dynamique de Prompt** : Construit automatiquement le prompt système décrivant les commandes disponibles, leurs paramètres et les consignes d'utilisation pour le LLM.
+### 2.2 [actions/](file:///home/suissard/PROGRAMMATIONS/SmartHome/actions) — Système Modulaire de Commandes & Actions OS
+- **Responsabilité** : Détection des tags d'actions insérés par le LLM (`[SHUTDOWN]`, `[REBOOT]`, `[LOCK]`, `[VOLUME]`, `[MUTE]`, `[OPEN]`, etc.), exécution asynchrone non-bloquante et purification du texte transmis à la synthèse vocale.
+- **Architecture Modulaire & Auto-Découverte** :
+  - `actions/base.py` : Classe de base abstraite `BaseAction` encapsulant métadonnées et méthode `build_command()`.
+  - `actions/definitions/*.py` : Modules d'actions autonomes (`volume.py`, `media.py`, `notify.py`, `open_app.py`, `lock.py`, `screen_off.py`, `shutdown.py`, `reboot.py`).
+  - `actions/registry.py` : Chargeur dynamique avec auto-découverte des définitions sans couplage.
+  - `actions/manager.py` : Moteur d'extraction regex générique et d'exécution asynchrone déléguée.
+  - `actions/scripts/*.sh` : Scripts bash multi-environnements (KDE Wayland/X11, GNOME, PulseAudio, PipeWire, ALSA, MPRIS2).
+
 
 ### 2.3 [wakeword.py](file:///home/suissard/PROGRAMMATIONS/SmartHome/wakeword.py) — Détection de Mot-Clé
 - **Technologie** : `openwakeword` avec moteur d'inférence ONNX Runtime.

@@ -10,15 +10,12 @@ _ROOT_DIR = Path(__file__).resolve().parent.parent
 if str(_ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(_ROOT_DIR))
 
-try:
-    from actions.commands import COMMAND_REGISTRY, CommandDefinition, get_all_commands
-except ImportError:
-    from commands import COMMAND_REGISTRY, CommandDefinition, get_all_commands
-
+from actions.base import BaseAction, CommandDefinition
+from actions.registry import COMMAND_REGISTRY, get_all_commands, get_command_by_tag
 
 
 class ActionManager:
-    """Gestionnaire d'exécution des actions et constructeur de prompt dynamique."""
+    """Gestionnaire modulaire d'exécution des actions et constructeur de prompt dynamique."""
 
     def __init__(self, scripts_dir: Optional[Path] = None, enabled: bool = True):
         self.enabled = enabled
@@ -80,7 +77,6 @@ Exemples de comportement attendu :
             return "", []
 
         detected_actions: List[Dict[str, Any]] = []
-        cleaned_text = text
 
         # Regex générique pour capturer tous les tags de type [COMMAND ...]
         general_pattern = re.compile(r"\[([A-Z_]+)(?:\s+([^\]]+))?\]")
@@ -90,8 +86,8 @@ Exemples de comportement attendu :
             tag_name = match.group(1).upper()
             raw_args = match.group(2).strip() if match.group(2) else ""
 
-            if tag_name in COMMAND_REGISTRY:
-                cmd_def = COMMAND_REGISTRY[tag_name]
+            cmd_def = get_command_by_tag(tag_name)
+            if cmd_def:
                 detected_actions.append({
                     "tag": tag_name,
                     "args": raw_args,
@@ -107,38 +103,17 @@ Exemples de comportement attendu :
         return cleaned_text, detected_actions
 
     def execute_action(self, action: Dict[str, Any], dry_run: bool = False) -> bool:
-        """Exécute le script bash associé à une action en tâche de fond (non bloquant)."""
-        import shlex
-        cmd_def: CommandDefinition = action["definition"]
-        args = action.get("args", "").strip()
-        script_path = self.scripts_dir / cmd_def.script_name
+        """Exécute le script associé à une action de façon modulaire et asynchrone."""
+        cmd_def: BaseAction = action["definition"]
+        args = action.get("args", "")
+        script_path = cmd_def.get_script_path(self.scripts_dir)
 
         if not script_path.exists():
             print(f"❌ [ACTIONS] Script introuvable : {script_path}")
             return False
 
-        # Préparation de la commande
-        cmd_exec = [str(script_path)]
-
-        # Ajustement des arguments selon le tag
-        if cmd_def.tag == "MUTE":
-            cmd_exec.append("mute")
-        elif cmd_def.tag == "UNMUTE":
-            cmd_exec.append("unmute")
-        elif cmd_def.tag == "MEDIA_PLAY_PAUSE":
-            cmd_exec.append("play-pause")
-        elif cmd_def.tag == "MEDIA_NEXT":
-            cmd_exec.append("next")
-        elif cmd_def.tag == "MEDIA_PREV":
-            cmd_exec.append("previous")
-        elif cmd_def.tag in ("NOTIFY", "OPEN", "VOLUME"):
-            if args:
-                cmd_exec.append(args)
-        elif args:
-            try:
-                cmd_exec.extend(shlex.split(args))
-            except Exception:
-                cmd_exec.extend(args.split())
+        # La construction de la ligne de commande est entièrement déléguée à l'action
+        cmd_exec = cmd_def.build_command(self.scripts_dir, args)
 
         if dry_run:
             print(f"🔍 [ACTIONS] [DRY RUN] Commande préparée : {' '.join(cmd_exec)}")
@@ -174,7 +149,6 @@ Exemples de comportement attendu :
         return cleaned_text
 
 
-
 # Instance singleton
 _default_manager: Optional[ActionManager] = None
 
@@ -189,7 +163,7 @@ def get_action_manager() -> ActionManager:
 
 
 if __name__ == "__main__":
-    print("🧪 [DEBUG] Test du module ActionManager")
+    print("🧪 [DEBUG] Test du module ActionManager modulaire")
     manager = ActionManager(enabled=True)
 
     test_prompt = manager.build_dynamic_system_prompt("Tu es un assistant vocal domotique.")
@@ -210,3 +184,5 @@ if __name__ == "__main__":
         clean, actions = manager.extract_actions(resp)
         print(f"Texte pour TTS : « {clean} »")
         print(f"Actions trouvées ({len(actions)}) : {[a['tag'] for a in actions]}")
+        for act in actions:
+            manager.execute_action(act, dry_run=True)

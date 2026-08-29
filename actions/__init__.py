@@ -1,11 +1,25 @@
+"""
+Module d'actions système pour SmartHome.
+"""
+
+from actions.base import BaseAction, CommandDefinition
+from actions.registry import (
+    COMMAND_REGISTRY,
+    ActionRegistry,
+    get_all_commands,
+    get_command_by_tag,
+    register_action
+)
 from actions.manager import ActionManager, get_action_manager
-from actions.commands import CommandDefinition, COMMAND_REGISTRY, get_all_commands, get_command_by_tag
 
 __all__ = [
-    "ActionManager",
-    "get_action_manager",
+    "BaseAction",
     "CommandDefinition",
     "COMMAND_REGISTRY",
+    "ActionRegistry",
+    "ActionManager",
+    "get_action_manager",
     "get_all_commands",
     "get_command_by_tag",
+    "register_action"
 ]
