@@ -54,7 +54,21 @@ Règles impératives :
 Exemples de comportement attendu :
 {chr(10).join(examples_lines[:5])}"""
 
-        return base_prompt.strip() + "\n" + dynamic_section
+        prompt_result = base_prompt.strip() + "\n" + dynamic_section
+
+        # Enrichissement optionnel avec les outils des serveurs MCP connectés
+        try:
+            from core.config import MCP_CLIENT_ENABLED
+            if MCP_CLIENT_ENABLED:
+                from core.mcp_hub import get_mcp_hub
+                hub = get_mcp_hub()
+                mcp_section = hub.build_dynamic_prompt_section()
+                if mcp_section:
+                    prompt_result += "\n" + mcp_section
+        except Exception:
+            pass
+
+        return prompt_result
 
     def extract_actions(self, text: str) -> Tuple[str, List[Dict[str, Any]]]:
         """Analyse le texte, extrait les actions reconnues et retourne le texte nettoyé pour le TTS."""

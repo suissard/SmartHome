@@ -19,6 +19,7 @@ from core.config import (
     OPENROUTER_TTS_MODEL,
     LLM_HISTORY_MESSAGES,
     ACTIONS_ENABLED,
+    MCP_CLIENT_ENABLED,
 )
 from audio.wakeword import WakeWordDetector, FORMAT
 from audio.transcribe import VoiceTranscriber
@@ -27,6 +28,7 @@ from audio.feedback import FeedbackManager
 from audio.ducking import AudioDucker
 from llm.llm import ask_llm
 from actions import get_action_manager
+from core.mcp_hub import get_mcp_hub
 
 
 
@@ -53,6 +55,21 @@ def main():
     feedback = FeedbackManager(tts=tts)
     ducker = AudioDucker()
     action_manager = get_action_manager()
+    mcp_hub = get_mcp_hub() if MCP_CLIENT_ENABLED else None
+
+    # Connexion aux serveurs MCP configurés
+    mcp_info = "Désactivé"
+    if mcp_hub and MCP_CLIENT_ENABLED:
+        try:
+            mcp_results = mcp_hub.connect_all()
+            connected_names = [name for name, ok in mcp_results.items() if ok]
+            total_tools = len(mcp_hub.tool_to_server)
+            if connected_names:
+                mcp_info = f"Actif ({len(connected_names)} serveur(s) : {', '.join(connected_names)} | {total_tools} outils)"
+            else:
+                mcp_info = "Actif (Aucun serveur connecté)"
+        except Exception as e:
+            mcp_info = f"Erreur de connexion ({e})"
 
     p = pyaudio.PyAudio()
     stream = p.open(
@@ -81,6 +98,7 @@ def main():
     print(f"  • Écoute STT    : {stt_info}")
     print(f"  • Voix TTS      : {tts_info}")
     print(f"  • Actions OS    : {actions_info}")
+    print(f"  • Hub MCP       : {mcp_info}")
     print(f"  • Veille active : {FOLLOW_UP_TIMEOUT}s\n")
 
     try:
@@ -144,6 +162,8 @@ def main():
     except KeyboardInterrupt:
         print("\nArrêt de l'assistant.")
     finally:
+        if mcp_hub and MCP_CLIENT_ENABLED:
+            mcp_hub.disconnect_all()
         ducker.unduck()
         stream.stop_stream()
         stream.close()

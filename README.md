@@ -229,6 +229,70 @@ FEEDBACK_SOUND_VOLUME=0.5
 
 ---
 
+## 🔌 Serveur MCP Universel (Model Context Protocol)
+
+SmartHome expose l'ensemble de ses fonctionnalités sous forme d'un **serveur MCP standardisé** (`mcp_server.py`), compatible avec tous les clients IA modernes (Claude Desktop, Antigravity IDE, Cursor, VS Code, Home Assistant, agents distants et scripts automatisés).
+
+### 🚀 Lancement du serveur MCP
+
+```bash
+# 1. Mode Standard I/O (Local pour Claude Desktop, Cursor, Antigravity)
+python mcp_server.py --transport stdio
+
+# 2. Mode Serveur Réseau SSE (Accessible sur le LAN / Home Assistant)
+python mcp_server.py --transport sse --host 0.0.0.0 --port 8000
+
+# 3. Mode HTTP Streamable
+python mcp_server.py --transport streamable-http --host 0.0.0.0 --port 8000
+```
+
+### ⚙️ Configuration Client (Claude Desktop / Cursor / Antigravity)
+
+Ajoutez cette configuration dans votre fichier `claude_desktop_config.json` ou dans vos paramètres MCP :
+
+```json
+{
+  "mcpServers": {
+    "smarthome": {
+      "command": "/home/suissard/PROGRAMMATIONS/SmartHome/.venv/bin/python",
+      "args": [
+        "/home/suissard/PROGRAMMATIONS/SmartHome/mcp_server.py",
+        "--transport",
+        "stdio"
+      ]
+    }
+  }
+}
+```
+
+### 🛠️ Outils Disponibles (MCP Tools)
+
+| Outil MCP | Description |
+| :--- | :--- |
+| `list_actions` | Liste l'ensemble des commandes système avec description et exemples. |
+| `execute_action(tag, args, dry_run)` | Exécute dynamiquement n'importe quelle commande par son tag. |
+| `set_volume(volume)` | Règle le volume sonore (0-100, up, down, mute, unmute). |
+| `media_control(command)` | Contrôle le lecteur multimédia MPRIS (play-pause, next, previous, stop). |
+| `send_notification(message, title)` | Affiche une notification visuelle sur le bureau. |
+| `open_application(app_name)` | Ouvre une application par son nom (ex: firefox, code, spotify, terminal). |
+| `lock_session` | Verrouille immédiatement la session utilisateur. |
+| `screen_off` | Met les écrans en veille (DPMS off). |
+| `system_power(action)` | Éteint (`shutdown`) ou redémarre (`reboot`) l'ordinateur. |
+| `tts_speak(text)` | Prononce une phrase à haute voix via Piper TTS ou OpenRouter. |
+| `play_feedback_sound(sound_name)` | Joue un carillon ou son procédural (`wake`, `ding`, `sleep`, `beep`, `pop`). |
+| `set_system_ducking(duck, volume_percent)` | Atténue ou rétablit le son des applications tierces. |
+| `stt_transcribe_file(audio_path)` | Transcrit un fichier audio local en texte via Whisper. |
+| `ask_assistant(prompt, execute_actions, speak_response)` | Dialogue avec le LLM, exécute les actions détectées et peut vocaliser. |
+| `get_conversation_history` | Récupère l'historique des échanges en mémoire. |
+| `clear_conversation_history` | Réinitialise la mémoire conversationnelle. |
+
+### 📦 Ressources & Prompts MCP
+
+- **Ressources** : `smarthome://status`, `smarthome://actions`, `smarthome://history`, `smarthome://config`.
+- **Prompts** : `smarthome_assistant` (prompt système complet avec commandes), `smart_home_planner` (générateur de scénarios domotiques).
+
+---
+
 ## 🛡️ Licence & Contribution
 
 Projet développé pour un contrôle domotique intelligent et respectueux des données personnelles.

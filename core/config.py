@@ -237,6 +237,16 @@ DUCKING_ENABLED: bool = _get_bool("DUCKING_ENABLED", True)
 DUCKING_VOLUME_PERCENT: int = _get_int("DUCKING_VOLUME_PERCENT", 20)
 DUCKING_RESTORE_ON_EXIT: bool = _get_bool("DUCKING_RESTORE_ON_EXIT", True)
 
+# ==========================================
+# 🔌 MCP SERVER & CLIENT HUB (Model Context Protocol)
+# ==========================================
+MCP_TRANSPORT: str = _get_str("MCP_TRANSPORT", "stdio").lower()
+MCP_HOST: str = _get_str("MCP_HOST", "0.0.0.0")
+MCP_PORT: int = _get_int("MCP_PORT", 8000)
+
+MCP_CLIENT_ENABLED: bool = _get_bool("MCP_CLIENT_ENABLED", True)
+MCP_SERVERS_CONFIG_PATH: str = _get_str("MCP_SERVERS_CONFIG_PATH", "mcp_servers.json")
+
 if __name__ == "__main__":
     print("📋 [CONFIG] Configuration chargée :")
     print(f"  • ACTIONS ACTIVÉES        : {ACTIONS_ENABLED}")
@@ -244,6 +254,8 @@ if __name__ == "__main__":
     print(f"  • FOURNISSEUR LLM         : {LLM_PROVIDER}")
     print(f"  • FOURNISSEUR STT         : {STT_PROVIDER}")
     print(f"  • FOURNISSEUR TTS         : {TTS_PROVIDER}")
+    print(f"  • SERVEUR MCP             : Transport '{MCP_TRANSPORT}' ({MCP_HOST}:{MCP_PORT})")
+    print(f"  • CLIENT HUB MCP          : {'Activé' if MCP_CLIENT_ENABLED else 'Désactivé'} (Config: {MCP_SERVERS_CONFIG_PATH})")
     print(f"  • OPENROUTER_API_KEY      : {'Configurée (' + OPENROUTER_API_KEY[:8] + '...)' if OPENROUTER_API_KEY else 'Non configurée'}")
     print(f"  • OPENROUTER_BASE_URL     : {OPENROUTER_BASE_URL}")
     print(f"  • OPENROUTER_MODEL        : {OPENROUTER_MODEL}")
