@@ -75,8 +75,10 @@ SmartHome/
 ├── tts.py              # Synthèse vocale neuronale locale (Piper TTS)
 ├── feedback.py         # Signaux sonores (procéduraux/WAV) et retours vocaux
 ├── test_sound.py       # Script utilitaire de diagnostic audio (SoundDevice)
-├── voice.onnx          # Modèle de voix français pour Piper TTS
-├── voice.onnx.json     # Configuration phonétique et échantillonnage de la voix
+├── voices/             # Modèles de voix neuronales Piper (.onnx / .onnx.json)
+│   ├── fr_FR-siwis-medium.onnx
+│   ├── fr_FR-upmc-medium.onnx
+│   └── fr_FR-tom-medium.onnx
 ├── wakewords/          # Modèles de mots-clés entraînés (.onnx / .tflite)
 │   ├── Salut_Jarvisse_20260601_005854.onnx
 │   ├── Hé_jarvisse_64x3_115000_20260811_124036.onnx
@@ -206,8 +208,7 @@ LLM_SYSTEM_PROMPT="Tu es un assistant vocal domotique. Réponds en français de 
 LLM_STREAM=true
 
 # --- Synthèse Vocale Locale (Piper TTS) ---
-TTS_MODEL_PATH=voice.onnx
-TTS_CONFIG_PATH=voice.onnx.json
+TTS_VOICE=fr_FR-siwis-medium
 TTS_SPEECH_SPEED=1.15
 
 # --- Signaux Sonores & Retours Vocaux ---

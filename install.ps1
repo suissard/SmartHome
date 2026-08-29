@@ -19,10 +19,11 @@ Write-Host "🧠 Téléchargement des modèles de base openWakeWord..." -Foregro
 & .\.venv\Scripts\python.exe -c "import openwakeword.utils; openwakeword.utils.download_models()"
 
 # 4. Téléchargement de la voix française Piper (si non présente)
-if (-Not (Test-Path "voice.onnx")) {
+if (-Not (Test-Path "voices/fr_FR-siwis-medium.onnx")) {
     Write-Host "🎙️ Téléchargement du modèle de voix française (Siwis)..." -ForegroundColor Yellow
-    Invoke-WebRequest -Uri "https://huggingface.co/rhasspy/piper-voices/resolve/main/fr/fr_FR/siwis/medium/fr_FR-siwis-medium.onnx" -OutFile "voice.onnx"
-    Invoke-WebRequest -Uri "https://huggingface.co/rhasspy/piper-voices/resolve/main/fr/fr_FR/siwis/medium/fr_FR-siwis-medium.onnx.json" -OutFile "voice.onnx.json"
+    New-Item -ItemType Directory -Force -Path "voices" | Out-Null
+    Invoke-WebRequest -Uri "https://huggingface.co/rhasspy/piper-voices/resolve/main/fr/fr_FR/siwis/medium/fr_FR-siwis-medium.onnx" -OutFile "voices/fr_FR-siwis-medium.onnx"
+    Invoke-WebRequest -Uri "https://huggingface.co/rhasspy/piper-voices/resolve/main/fr/fr_FR/siwis/medium/fr_FR-siwis-medium.onnx.json" -OutFile "voices/fr_FR-siwis-medium.onnx.json"
 }
 
 Write-Host "`n✅ Tout est prêt ! Tu peux lancer start.ps1 ou start.bat." -ForegroundColor Green

@@ -138,8 +138,65 @@ LLM_HISTORY_MESSAGES: int = _get_int("LLM_HISTORY_MESSAGES", 5)
 # ==========================================
 # 🔊 SYNTHÈSE VOCALE / TTS (Piper TTS)
 # ==========================================
-TTS_MODEL_PATH: str = _get_str("TTS_MODEL_PATH", "voice.onnx")
-TTS_CONFIG_PATH: str = _get_str("TTS_CONFIG_PATH", "voice.onnx.json")
+def _resolve_piper_voice() -> tuple[str, str]:
+    """Résout le chemin du modèle et du fichier de configuration Piper."""
+    voice_name = _get_str("TTS_VOICE", "")
+    model_path = _get_str("TTS_MODEL_PATH", "")
+    config_path = _get_str("TTS_CONFIG_PATH", "")
+
+    voices_dir = BASE_DIR / "voices"
+
+    # 1. Si TTS_VOICE est spécifié (nom court ou complet)
+    if voice_name:
+        candidates = [
+            voices_dir / voice_name,
+            voices_dir / f"{voice_name}.onnx",
+            BASE_DIR / voice_name,
+            BASE_DIR / f"{voice_name}.onnx",
+        ]
+        for cand in candidates:
+            if cand.exists() and cand.is_file():
+                cfg = cand.with_suffix(cand.suffix + ".json")
+                if not cfg.exists() and Path(f"{cand}.json").exists():
+                    cfg = Path(f"{cand}.json")
+                return str(cand), str(cfg)
+
+        # Recherche partielle dans voices/ (ex: "upmc", "tom", "siwis")
+        if voices_dir.exists():
+            for f in sorted(voices_dir.glob("*.onnx")):
+                if voice_name.lower() in f.stem.lower():
+                    cfg = f.with_suffix(f.suffix + ".json")
+                    if not cfg.exists() and Path(f"{f}.json").exists():
+                        cfg = Path(f"{f}.json")
+                    return str(f), str(cfg)
+
+    # 2. Si un chemin de modèle explicite existant est fourni
+    if model_path:
+        p = Path(model_path) if Path(model_path).is_absolute() else BASE_DIR / model_path
+        if p.exists():
+            cfg = Path(config_path) if config_path else p.with_suffix(p.suffix + ".json" if not str(p).endswith(".onnx.json") else "")
+            if not cfg.exists() and Path(f"{p}.json").exists():
+                cfg = Path(f"{p}.json")
+            return str(p), str(cfg)
+
+    # 3. Voix par défaut dans voices/
+    defaults = [
+        voices_dir / "fr_FR-siwis-medium.onnx",
+        voices_dir / "fr_FR-upmc-medium.onnx",
+        voices_dir / "fr_FR-tom-medium.onnx",
+        BASE_DIR / "voice.onnx",
+    ]
+    for d in defaults:
+        if d.exists():
+            cfg = Path(f"{d}.json") if Path(f"{d}.json").exists() else d.with_suffix(d.suffix + ".json")
+            return str(d), str(cfg)
+
+    fallback_model = str(voices_dir / "fr_FR-siwis-medium.onnx")
+    return fallback_model, f"{fallback_model}.json"
+
+
+TTS_VOICE: str = _get_str("TTS_VOICE", "fr_FR-siwis-medium")
+TTS_MODEL_PATH, TTS_CONFIG_PATH = _resolve_piper_voice()
 TTS_SPEECH_SPEED: float = _get_float("TTS_SPEECH_SPEED", 1.15)
 TTS_FADE_OUT_DURATION: float = _get_float("TTS_FADE_OUT_DURATION", 0.05)
 TTS_SILENCE_START_DURATION: float = _get_float("TTS_SILENCE_START_DURATION", 0.10)
@@ -212,6 +269,7 @@ if __name__ == "__main__":
     print(f"  • LLM_STREAM              : {LLM_STREAM}")
     print(f"  • LLM_THINK               : {LLM_THINK}")
     print(f"  • LLM_HISTORY_MESSAGES    : {LLM_HISTORY_MESSAGES}")
+    print(f"  • TTS_VOICE               : {TTS_VOICE}")
     print(f"  • TTS_MODEL_PATH          : {TTS_MODEL_PATH}")
     print(f"  • TTS_CONFIG_PATH         : {TTS_CONFIG_PATH}")
     print(f"  • TTS_SPEECH_SPEED        : {TTS_SPEECH_SPEED}")

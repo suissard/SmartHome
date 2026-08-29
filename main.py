@@ -1,4 +1,5 @@
 import sys
+from pathlib import Path
 import numpy as np
 import pyaudio
 from core.config import (
@@ -70,7 +71,9 @@ def main():
         stt_info = f"OpenRouter ({OPENROUTER_STT_MODEL})"
     else:
         stt_info = f"Whisper ({WHISPER_MODEL})"
-    tts_info = f"OpenRouter ({OPENROUTER_TTS_MODEL})" if TTS_PROVIDER == "openrouter" else f"Piper ({TTS_MODEL_PATH})"
+
+    voice_name = Path(TTS_MODEL_PATH).stem.replace(".onnx", "")
+    tts_info = f"OpenRouter ({OPENROUTER_TTS_MODEL})" if TTS_PROVIDER == "openrouter" else f"Piper ({voice_name})"
     actions_info = "Activées (12 commandes prêtes)" if ACTIONS_ENABLED else "Désactivées"
 
     print(f"\n🟢 Démarrage de SmartHome")

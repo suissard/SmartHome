@@ -17,6 +17,7 @@ from core.config import (
     OPENROUTER_BASE_URL,
     OPENROUTER_TTS_MODEL,
     OPENROUTER_TTS_VOICE,
+    TTS_VOICE,
     TTS_MODEL_PATH,
     TTS_CONFIG_PATH,
     TTS_SPEECH_SPEED,
@@ -158,7 +159,8 @@ class TextToSpeech:
 
 
 if __name__ == "__main__":
-    active_tts = f"OpenRouter ({OPENROUTER_TTS_MODEL}, Voix: {OPENROUTER_TTS_VOICE})" if TTS_PROVIDER == "openrouter" else f"Piper ({TTS_MODEL_PATH}, Vitesse: {TTS_SPEECH_SPEED})"
+    voice_name = Path(TTS_MODEL_PATH).stem
+    active_tts = f"OpenRouter ({OPENROUTER_TTS_MODEL}, Voix: {OPENROUTER_TTS_VOICE})" if TTS_PROVIDER == "openrouter" else f"Piper ({voice_name}, Vitesse: {TTS_SPEECH_SPEED})"
     print(f"🧪 [DEBUG] Mode test Synthèse vocale (Fournisseur: {TTS_PROVIDER.upper()}, Modèle: {active_tts})...")
     tts = TextToSpeech()
 
