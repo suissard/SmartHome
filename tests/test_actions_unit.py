@@ -39,7 +39,8 @@ class TestModularActionRegistry(unittest.TestCase):
             "SHUTDOWN", "REBOOT", "LOCK", "SCREEN_OFF",
             "VOLUME", "MUTE", "UNMUTE",
             "MEDIA_PLAY_PAUSE", "MEDIA_NEXT", "MEDIA_PREV",
-            "OPEN", "NOTIFY"
+            "OPEN", "NOTIFY",
+            "BRIGHTNESS", "SCREENSHOT", "TIMER", "SYSTEM_INFO", "CLOSE", "AUDIO_OUTPUT"
         }
         discovered_tags = set(COMMAND_REGISTRY.keys())
         self.assertTrue(expected_tags.issubset(discovered_tags),
@@ -109,6 +110,14 @@ class TestActionDefinitionsBuildArgs(unittest.TestCase):
 
         self.assertEqual(notify_act.build_args("Sortir le chien"), ["Sortir le chien"])
         self.assertEqual(open_act.build_args("firefox"), ["firefox"])
+
+    def test_open_app_allowlist(self):
+        """Vérifie que OPEN refuse les binaires hors liste blanche et accepte les catégories."""
+        open_act = get_command_by_tag("OPEN")
+        self.assertEqual(open_act.build_args("poweroff"), [])
+        self.assertEqual(open_act.build_args("rm"), [])
+        self.assertEqual(open_act.build_args("Navigateur  Web"), ["Navigateur  Web"])
+        self.assertEqual(open_act.build_args("calculatrice"), ["calculatrice"])
 
 
 class TestActionManagerIntegration(unittest.TestCase):

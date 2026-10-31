@@ -1,0 +1,33 @@
+{
+  "mcpServers": {
+    "smarthome-local": {
+      "command": ".venv/bin/python",
+      "args": ["mcp_server.py", "--transport", "stdio"],
+      "enabled": true,
+      "description": "Serveur MCP SmartHome local (Contrôle OS, Volume, Musique, TTS, Notifications)"
+    },
+    "home-assistant": {
+      "url": "http://homeassistant.local:8123/api/mcp/sse",
+      "headers": {
+        "Authorization": "Bearer VOTRE_TOKEN_LONGUE_DUREE_ICI"
+      },
+      "enabled": false,
+      "description": "Serveur MCP Home Assistant pour le contrôle des lumières, volets, prises et capteurs"
+    },
+    "weather": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-weather"],
+      "enabled": false,
+      "description": "Serveur MCP Météo pour prévisions en temps réel"
+    },
+    "brave-search": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-brave-search"],
+      "env": {
+        "BRAVE_API_KEY": "VOTRE_CLE_BRAVE_ICI"
+      },
+      "enabled": false,
+      "description": "Serveur MCP Brave Search pour recherche d'informations sur le web"
+    }
+  }
+}

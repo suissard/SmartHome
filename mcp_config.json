@@ -1,0 +1,18 @@
+{
+  "mcpServers": {
+    "smarthome-local": {
+      "command": "/home/suissard/PROGRAMMATIONS/SmartHome/.venv/bin/python",
+      "args": [
+        "/home/suissard/PROGRAMMATIONS/SmartHome/mcp_server.py",
+        "--transport",
+        "stdio"
+      ],
+      "env": {
+        "PYTHONUNBUFFERED": "1"
+      }
+    },
+    "smarthome-network": {
+      "url": "http://localhost:8000/sse"
+    }
+  }
+}

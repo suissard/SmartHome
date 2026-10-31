@@ -12,6 +12,10 @@ SmartHome est un assistant vocal intelligent, modulaire, ultra-réactif et enti�
 - **🧠 Intelligence & Raisonnement (LLM)** : Connecté au choix à **Ollama** en local (`qwen2.5:7b`, `gemma`, etc.) ou à **OpenRouter** (`meta-llama/llama-3.3-70b-instruct`, `gpt-4o-mini`, `claude-3.5-sonnet`, `gemini-2.5-flash`, etc.).
 - **🔊 Synthèse Vocale Fluide (TTS)** : Basé sur **Piper TTS** (moteur neural ONNX local) ou **OpenRouter Speech API** avec traitement post-audio (atténuation des clics/pops et fondu progressif).
 - **🔔 Signaux Sonores & Retours Vocaux** : Accords harmoniques, carillons (*ding* de fin de phrase), et phrases personnalisables (*"Que puis je pour toi ?"*, *"Bisous a plus tard"*).
+- **⚡ Réponse Vocale en Streaming** : l'assistant commence à parler dès la première phrase générée, pendant que le LLM écrit la suite.
+- **✋ Barge-in** : redites le mot-clé pendant qu'il parle (ou touchez le micro sur le téléphone) pour lui couper la parole et enchaîner.
+- **💤 Fin de conversation** : dites « au revoir », « c'est tout » ou « stop » (liste `CONVERSATION_END_PHRASES`) pour le remettre en veille aussitôt ; les formulations libres (« je vais me coucher ») passent par l'outil `sleep` du LLM.
+- **🔇 Résistant au bruit** : la détection de voix Silero (locale) ignore ventilateur, musique ou claquements ; les phrases inventées par Whisper dans le bruit sont écartées (`VAD_ENGINE`, `STT_IGNORED_PHRASES`). Testez votre micro avec `python audio/vad.py`.
 - **💬 Mode Conversation Suivie (*Follow-up*)** : Après le réveil par mot-clé, l'assistant reste en veille active pendant 30 secondes pour enchaîner les questions sans répéter le mot d'activation.
 
 ---
@@ -93,6 +97,8 @@ SmartHome/
 
 ## 🚀 Installation & Prérequis
 
+> 📘 Pas à pas complet, du PC jusqu'à l'appli sur un téléphone Android : [docs/MISE_EN_SERVICE.md](docs/MISE_EN_SERVICE.md).
+
 ### 1. Prérequis Système
 
 - **Système d'exploitation** : Linux (testé sur Ubuntu / Debian) ou macOS / Windows avec support PortAudio.
@@ -153,7 +159,8 @@ Chaque fichier peut être exécuté de manière autonome pour tester et régler 
 
 | Composant | Commande de test | Objectif du test |
 | :--- | :--- | :--- |
-| **Configuration** | `python config.py` | Affiche l'ensemble des variables chargées depuis `.env`. |
+| **Configuration** | `python core/config.py` | Affiche et valide l'ensemble des variables chargées (environnement > `.env`). |
+| **Fournisseurs** | `python core/providers.py` | Liste les fournisseurs LLM / STT / TTS disponibles. |
 | **Audio / Sortie** | `python test_sound.py` | Liste les périphériques et joue un bip de contrôle. |
 | **Mot-Clé** | `python wakeword.py` | Affiche un VU-mètre en direct et le score de détection. |
 | **Transcription** | `python transcribe.py` | Enregistre au micro et transcrit votre voix en texte. |
@@ -226,6 +233,101 @@ FEEDBACK_TIMEOUT_SOUND=sleep
 
 FEEDBACK_SOUND_VOLUME=0.5
 ```
+
+---
+
+## 🌍 Accès Distant (LAN & Tailscale)
+
+La passerelle permet de parler à SmartHome depuis un autre appareil : **application web installable (PWA)** sur téléphone, client console, ou API HTTP. Réponse en streaming, voix synthétisée renvoyée à l'appareil, confirmation des actions dangereuses à l'écran.
+
+### Téléphone (recommandé) : `tailscale serve`
+Le micro d'un navigateur exige le HTTPS : `tailscale serve` le fournit (certificat automatique) en relayant la passerelle restée en local.
+
+1. Générer un jeton et le placer dans `.env` (`GATEWAY_AUTH_TOKEN=<jeton>`, `GATEWAY_ENABLED=true`, `GATEWAY_HOST=127.0.0.1`) :
+   ```bash
+   openssl rand -hex 32
+   ```
+2. Lancer SmartHome (`python main.py`, ou `python -m gateway` sans micro), puis publier la passerelle sur le tailnet :
+   ```bash
+   tailscale serve --bg 8765
+   ```
+   (`tailscale serve status` affiche l'adresse `https://<machine>.<tailnet>.ts.net`, `tailscale serve reset` arrête la publication ; MagicDNS et HTTPS doivent être activés dans la console Tailscale.)
+3. Sur le téléphone (connecté à Tailscale), ouvrir cette adresse, saisir le jeton, puis « Ajouter à l'écran d'accueil ».
+
+Sans jeton configuré, la passerelle refuse toute requête relayée par un proxy : `tailscale serve` ne peut donc pas ouvrir l'accès à tout le tailnet par erreur.
+
+### Choisir le modèle et régler l'assistant depuis l'interface
+Dans **Réglages** : liste des modèles Ollama installés (avec leurs capacités), case **Modèle de décision**, puis **Paramètres avancés…** pour le prompt, l'historique, la voix, l'écoute, les retours sonores et les actions. Les valeurs sont enregistrées dans `.env` ; celles marquées « au redémarrage » s'appliquent au prochain lancement. Les secrets (clés, jetons) et l'adresse réseau ne sont jamais exposés.
+
+**Modèles de décision** (ex: `ollama pull nimble`) : ils ne rédigent pas de réponse, ils choisissent la commande et ses arguments parmi des choix fermés (~0,5 s par commande). L'assistant prononce alors une réponse type : « Compris : régler le volume sonore (30 %). », ou « Je n'ai pas compris la commande. ». Seules les commandes dont les arguments ont des valeurs fermées leur sont proposées (une notification au texte libre, par exemple, ne l'est pas). Test en console : `python llm/decision.py`.
+
+### Client console / script
+Avec `GATEWAY_HOST` sur l'IP Tailscale (`tailscale ip -4`) ou derrière `tailscale serve` :
+```bash
+python -m gateway.client --url ws://100.x.y.z:8765/ws --token <jeton>
+```
+
+## 🔌 Serveur MCP Universel (Model Context Protocol)
+
+SmartHome expose l'ensemble de ses fonctionnalités sous forme d'un **serveur MCP standardisé** (`mcp_server.py`), compatible avec tous les clients IA modernes (Claude Desktop, Antigravity IDE, Cursor, VS Code, Home Assistant, agents distants et scripts automatisés).
+
+### 🚀 Lancement du serveur MCP
+
+```bash
+# 1. Mode Standard I/O (Local pour Claude Desktop, Cursor, Antigravity)
+python mcp_server.py --transport stdio
+
+# 2. Mode Serveur Réseau SSE (Accessible sur le LAN / Home Assistant)
+python mcp_server.py --transport sse --host 0.0.0.0 --port 8000
+
+# 3. Mode HTTP Streamable
+python mcp_server.py --transport streamable-http --host 0.0.0.0 --port 8000
+```
+
+### ⚙️ Configuration Client (Claude Desktop / Cursor / Antigravity)
+
+Ajoutez cette configuration dans votre fichier `claude_desktop_config.json` ou dans vos paramètres MCP :
+
+```json
+{
+  "mcpServers": {
+    "smarthome": {
+      "command": "/home/suissard/PROGRAMMATIONS/SmartHome/.venv/bin/python",
+      "args": [
+        "/home/suissard/PROGRAMMATIONS/SmartHome/mcp_server.py",
+        "--transport",
+        "stdio"
+      ]
+    }
+  }
+}
+```
+
+### 🛠️ Outils Disponibles (MCP Tools)
+
+| Outil MCP | Description |
+| :--- | :--- |
+| `list_actions` | Liste l'ensemble des commandes système avec description et exemples. |
+| `execute_action(tag, args, dry_run)` | Exécute dynamiquement n'importe quelle commande par son tag. |
+| `set_volume(volume)` | Règle le volume sonore (0-100, up, down, mute, unmute). |
+| `media_control(command)` | Contrôle le lecteur multimédia MPRIS (play-pause, next, previous, stop). |
+| `send_notification(message, title)` | Affiche une notification visuelle sur le bureau. |
+| `open_application(app_name)` | Ouvre une application par son nom (ex: firefox, code, spotify, terminal). |
+| `lock_session` | Verrouille immédiatement la session utilisateur. |
+| `screen_off` | Met les écrans en veille (DPMS off). |
+| `system_power(action)` | Éteint (`shutdown`) ou redémarre (`reboot`) l'ordinateur. |
+| `tts_speak(text)` | Prononce une phrase à haute voix via Piper TTS ou OpenRouter. |
+| `play_feedback_sound(sound_name)` | Joue un carillon ou son procédural (`wake`, `ding`, `sleep`, `beep`, `pop`). |
+| `set_system_ducking(duck, volume_percent)` | Atténue ou rétablit le son des applications tierces. |
+| `stt_transcribe_file(audio_path)` | Transcrit un fichier audio local en texte via Whisper. |
+| `ask_assistant(prompt, execute_actions, speak_response)` | Dialogue avec le LLM, exécute les actions détectées et peut vocaliser. |
+| `get_conversation_history` | Récupère l'historique des échanges en mémoire. |
+| `clear_conversation_history` | Réinitialise la mémoire conversationnelle. |
+
+### 📦 Ressources & Prompts MCP
+
+- **Ressources** : `smarthome://status`, `smarthome://actions`, `smarthome://history`, `smarthome://config`.
+- **Prompts** : `smarthome_assistant` (prompt système complet avec commandes), `smart_home_planner` (générateur de scénarios domotiques).
 
 ---
 

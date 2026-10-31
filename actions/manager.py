@@ -54,7 +54,10 @@ Règles impératives :
 Exemples de comportement attendu :
 {chr(10).join(examples_lines[:5])}"""
 
-        return base_prompt.strip() + "\n" + dynamic_section
+        # Les outils MCP ne sont utilisables qu'en function calling natif (voir core/tools.py)
+        prompt_result = base_prompt.strip() + "\n" + dynamic_section
+
+        return prompt_result
 
     def extract_actions(self, text: str) -> Tuple[str, List[Dict[str, Any]]]:
         """Analyse le texte, extrait les actions reconnues et retourne le texte nettoyé pour le TTS."""
@@ -87,13 +90,18 @@ Exemples de comportement attendu :
 
         return cleaned_text, detected_actions
 
-    def execute_action(self, action: Dict[str, Any], dry_run: bool = False) -> bool:
+    def execute_action(self, action: Dict[str, Any], dry_run: bool = False, confirm=None) -> bool:
         """Exécute l'action en déléguant son exécution à son propre script embarqué."""
         cmd_def: BaseAction = action["definition"]
         args = action.get("args", "")
+        if cmd_def.danger == "confirm" and not dry_run:
+            from core.tools import request_confirmation
+            if not request_confirmation(cmd_def.description, handler=confirm):
+                print(f"⛔ [ACTIONS] [{cmd_def.tag}] annulé (non confirmé).")
+                return False
         return cmd_def.execute(args, dry_run=dry_run)
 
-    def process_response(self, response_text: str, dry_run: bool = False) -> str:
+    def process_response(self, response_text: str, dry_run: bool = False, confirm=None) -> str:
         """Point d'entrée principal pour traiter une réponse LLM :
         1. Extrait et exécute les actions détectées.
         2. Retourne le texte purifié prêt pour la synthèse vocale (TTS).
@@ -104,7 +112,7 @@ Exemples de comportement attendu :
         cleaned_text, actions = self.extract_actions(response_text)
 
         for act in actions:
-            self.execute_action(act, dry_run=dry_run)
+            self.execute_action(act, dry_run=dry_run, confirm=confirm)
 
         return cleaned_text
 
