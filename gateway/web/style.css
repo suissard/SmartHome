@@ -120,6 +120,7 @@ svg { width: 24px; height: 24px; fill: currentColor; }
 .msg.user { align-self: flex-end; background: var(--user); color: var(--user-text); border-color: transparent; border-bottom-right-radius: 6px; }
 .msg.bot { align-self: flex-start; border-bottom-left-radius: 6px; }
 .msg.bot.pending::after { content: "▍"; animation: blink 1s steps(2) infinite; color: var(--muted); }
+.msg.bot.cut::after { content: " …"; color: var(--muted); }
 .msg.error { align-self: center; background: none; border-style: dashed; color: var(--danger); font-size: 14px; }
 .msg .voice { opacity: 0.8; font-style: italic; }
 

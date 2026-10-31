@@ -35,6 +35,10 @@ const state = {
   reconnectDelay: 1000,
   recorder: null,
   audioCtx: null,
+  playing: new Set(),      // sources audio programmées (voix de l'assistant)
+  playHead: 0,             // instant de fin de la dernière phrase programmée
+  decodeChain: Promise.resolve(),
+  audioGeneration: 0,      // incrémenté à chaque arrêt : les phrases encore en décodage sont ignorées
 };
 
 // ---- Fil de conversation ----
@@ -158,7 +162,16 @@ function handleEvent(event) {
       finishBotBubble(event.text);
       break;
     case "audio":
-      if (ui.speak.checked) playWav(event.data);
+    case "audio_chunk":
+      if (ui.speak.checked) enqueueAudio(event.data);
+      break;
+    case "interrupted":
+      if (state.botBubble) {
+        state.botBubble.classList.remove("pending");
+        state.botBubble.classList.add("cut");
+        if (!state.botBubble.textContent.trim()) state.botBubble.remove();
+      }
+      state.botBubble = null;
       break;
     case "error":
       // Avant "ready", l'erreur concerne l'authentification : elle est traitée à la fermeture (code 4401)
@@ -195,7 +208,14 @@ function finishBotBubble(text) {
 }
 
 // ---- Demandes ----
+function interruptAssistant() {
+  // Barge-in : on coupe la voix ici et la génération côté serveur
+  const speaking = stopPlayback();
+  if (state.busy || speaking) send({ type: "stop" });
+}
+
 function sendText(text) {
+  interruptAssistant();
   addBubble("user", text);
   state.busy += 1;
   refreshControls();
@@ -225,6 +245,7 @@ ui.mic.addEventListener("click", async () => {
     stopRecording();
     return;
   }
+  interruptAssistant();
   const cfg = state.audioConfig || {};
   const recorder = new Recorder({
     targetRate: cfg.sample_rate || 16000,
@@ -277,18 +298,40 @@ function unlockAudio() {
   state.audioCtx?.resume?.();
 }
 
-async function playWav(base64) {
-  if (!state.audioCtx) return;
-  try {
-    const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
-    const buffer = await state.audioCtx.decodeAudioData(bytes.buffer);
-    const source = state.audioCtx.createBufferSource();
-    source.buffer = buffer;
-    source.connect(state.audioCtx.destination);
-    source.start();
-  } catch (err) {
-    console.warn("Lecture audio impossible", err);
+function enqueueAudio(base64) {
+  // Les phrases arrivent dans l'ordre mais se décodent de façon asynchrone : la chaîne préserve l'ordre
+  // et chaque phrase est programmée juste après la précédente (pas de blanc, pas de chevauchement)
+  const ctx = state.audioCtx;
+  if (!ctx) return;
+  const generation = state.audioGeneration;
+  state.decodeChain = state.decodeChain.then(async () => {
+    try {
+      const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+      const buffer = await ctx.decodeAudioData(bytes.buffer);
+      if (generation !== state.audioGeneration) return;
+      const source = ctx.createBufferSource();
+      source.buffer = buffer;
+      source.connect(ctx.destination);
+      const startAt = Math.max(ctx.currentTime, state.playHead);
+      source.start(startAt);
+      state.playHead = startAt + buffer.duration;
+      state.playing.add(source);
+      source.onended = () => state.playing.delete(source);
+    } catch (err) {
+      console.warn("Lecture audio impossible", err);
+    }
+  });
+}
+
+function stopPlayback() {
+  state.audioGeneration += 1;
+  const wasPlaying = state.playing.size > 0;
+  for (const source of state.playing) {
+    try { source.stop(); } catch { /* déjà terminée */ }
   }
+  state.playing.clear();
+  state.playHead = 0;
+  return wasPlaying;
 }
 
 // ---- Confirmation ----

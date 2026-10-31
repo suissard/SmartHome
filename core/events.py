@@ -8,6 +8,7 @@ Types d'événements émis par AssistantCore :
 - "tool"             : {"name", "arguments", "executed", "output"} outil exécuté ou refusé
 - "confirm_request"  : {"id", "question"}                         confirmation demandée (session distante)
 - "response"         : {"text", "tools"}                          réponse finale épurée pour la voix
+- "interrupted"      : {}                                         réponse abandonnée (barge-in, stop)
 - "error"            : {"message"}
 """
 

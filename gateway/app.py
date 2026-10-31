@@ -8,10 +8,12 @@ Routes :
 - WS   /ws       : session interactive (streaming, outils, confirmations). Protocole JSON :
     client -> serveur : {"type": "auth", "token", "session"?}  (premier message si pas d'en-tête Authorization)
                         {"type": "text", "text", "speak"?} | {"type": "audio", "data": <WAV base64>, "speak"?}
-                        {"type": "confirm_response", "id", "accepted": bool} | {"type": "reset"} | {"type": "ping"}
-    serveur -> client : {"type": "ready", "session", "tools"} puis les événements du cœur (transcript, token, tool,
-                        confirm_request, response, error), {"type": "audio", "format": "wav", "data"} si speak,
-                        et {"type": "done"} à la fin de chaque demande.
+                        {"type": "confirm_response", "id", "accepted": bool} | {"type": "stop"} | {"type": "reset"}
+                        | {"type": "ping"}
+    serveur -> client : {"type": "ready", "session", "tools", "audio", "confirm_timeout"} puis les événements du cœur
+                        (transcript, token, tool, confirm_request, response, interrupted, error), la voix si speak :
+                        {"type": "audio_chunk", "seq", "format": "wav", "data"} phrase par phrase (TTS_STREAMING)
+                        ou {"type": "audio", ...} en un bloc, et {"type": "done"} à la fin de chaque demande.
 """
 
 import asyncio
@@ -35,7 +37,8 @@ from starlette.routing import Mount, Route, WebSocketRoute
 from starlette.staticfiles import StaticFiles
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
-from core.assistant import AssistantCore, Reply
+from audio.speech import SpeechPipeline
+from core.assistant import AssistantCore, Reply, to_wav_bytes
 from core.config import Settings
 from core.security import (
     BearerTokenMiddleware, LocalOnlyMiddleware, SecurityHeadersMiddleware, bearer_from_headers, token_matches,
@@ -124,13 +127,36 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
             while True:
                 await ws.send_json(await outbox.get())
 
+        speeches: set[SpeechPipeline] = set()
+
+        def streamed_speech() -> SpeechPipeline:
+            """Voix envoyée phrase par phrase au client, synthétisée pendant que le LLM génère la suite."""
+            seq = iter(range(1_000_000))
+
+            def send_chunk(samples, sample_rate):
+                push({"type": "audio_chunk", "seq": next(seq), "format": "wav",
+                      "data": base64.b64encode(to_wav_bytes(samples, sample_rate)).decode()})
+            return SpeechPipeline(core.tts, sink=send_chunk)
+
+        def run_request(text, audio, speak) -> Reply:
+            speech = streamed_speech() if speak and s.TTS_STREAMING else None
+            if speech:
+                speeches.add(speech)
+            try:
+                reply = core.respond(session.id, text=text, audio_wav=audio, synthesize=speak and not speech,
+                                     on_sentence=speech.say if speech else None)
+                if speech:
+                    speech.wait()
+                return reply
+            finally:
+                if speech:
+                    speeches.discard(speech)
+                    speech.close()
+
         async def handle(message: dict):
             try:
                 audio = base64.b64decode(message["data"]) if message["type"] == "audio" else None
-                reply = await asyncio.to_thread(
-                    core.respond, session.id, text=message.get("text"), audio_wav=audio,
-                    synthesize=bool(message.get("speak")),
-                )
+                reply = await asyncio.to_thread(run_request, message.get("text"), audio, bool(message.get("speak")))
                 if reply.audio_wav:
                     push({"type": "audio", "format": "wav", "data": base64.b64encode(reply.audio_wav).decode()})
             except Exception as e:
@@ -169,6 +195,11 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
                     future = pending.get(message.get("id", ""))
                     if future and not future.done():
                         future.set_result(bool(message.get("accepted")))
+                elif kind == "stop":
+                    # L'utilisateur coupe la parole : fin de la génération et des phrases encore à envoyer
+                    core.cancel(session.id)
+                    for speech in list(speeches):
+                        speech.interrupt()
                 elif kind == "reset":
                     session.conversation.clear()
                     push({"type": "reset_done"})

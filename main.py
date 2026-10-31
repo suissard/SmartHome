@@ -1,4 +1,5 @@
 import sys
+import threading
 import numpy as np
 import pyaudio
 from core.config import (
@@ -18,9 +19,11 @@ from audio.tts import TextToSpeech
 from audio.feedback import FeedbackManager
 from audio.ducking import AudioDucker
 from audio.confirm import VoiceConfirmer
+from audio.speech import SpeechPipeline
+from audio.barge_in import BargeInDetector
 from llm.providers import LLM_PROVIDERS
 from actions import get_all_commands
-from core.assistant import AssistantCore
+from core.assistant import AssistantCore, Reply
 from core.mcp_hub import get_mcp_hub
 from core.security import require_token_for_host
 
@@ -52,6 +55,49 @@ def _print_event(event):
         print(f"\n{tag} 🤖 « {event.data['text']} »")
     elif event.type == "confirm_request":
         print(f"\n{tag} ❓ {event.data['question']} (en attente du client)")
+
+
+def run_local_turn(core, speech, stream, mic_lock, barge_in, user_input) -> Reply:
+    """Traite une demande vocale locale. Le traitement tourne dans un thread pendant que ce thread-ci continue
+    de lire le micro : l'utilisateur peut ainsi interrompre l'assistant pendant qu'il réfléchit ou parle."""
+    streaming = core.settings.TTS_STREAMING
+    result: dict = {}
+
+    def work():
+        kwargs = {"audio_wav": user_input} if isinstance(user_input, bytes) else {"text": user_input}
+        try:
+            result["reply"] = core.respond(LOCAL_SESSION, on_sentence=speech.say if streaming else None, **kwargs)
+        except Exception as e:
+            result["error"] = e
+
+    worker = threading.Thread(target=work, name="local-turn", daemon=True)
+    worker.start()
+    barge_in.reset()
+    spoken_at_end = streaming
+
+    while worker.is_alive() or speech.busy or not spoken_at_end:
+        if not worker.is_alive() and not spoken_at_end:
+            # Mode sans streaming : la réponse complète est dite une fois générée (et reste interruptible)
+            spoken_at_end = True
+            if "reply" in result:
+                speech.say(result["reply"].text)
+            continue
+        with mic_lock:
+            data = stream.read(CHUNK, exception_on_overflow=False)
+        if barge_in.process(np.frombuffer(data, dtype=np.int16)):
+            print("\n✋ Interruption : je vous écoute.")
+            core.cancel(LOCAL_SESSION)
+            speech.interrupt()
+            worker.join(timeout=30)
+            speech.wait(timeout=2)
+            reply = result.get("reply") or Reply(LOCAL_SESSION)
+            reply.interrupted = True
+            return reply
+
+    worker.join()
+    if "error" in result:
+        raise result["error"]
+    return result["reply"]
 
 
 def main():
@@ -95,8 +141,14 @@ def main():
     # Cœur partagé entre le micro local et les clients distants (mêmes modèles chargés une seule fois)
     core = AssistantCore(settings, stt=transcriber.stt, tts=tts)
     local = core.open_session(LOCAL_SESSION, persistent=True)
+    # Voix en streaming (phrase par phrase, interruptible) et micro partagé entre écoute et confirmation
+    speech = SpeechPipeline(tts, output_device=settings.AUDIO_OUTPUT_DEVICE_INDEX)
+    mic_lock = threading.Lock()
+    barge_in = BargeInDetector(settings, detector)
     # Les actions dangereuses demandées au micro (extinction, outils MCP destructeurs...) sont confirmées à la voix
-    local.conversation.confirm = VoiceConfirmer(tts, transcriber, stream, settings, local.conversation)
+    local.conversation.confirm = VoiceConfirmer(
+        tts, transcriber, stream, settings, local.conversation, speak=speech.say_and_wait, mic_lock=mic_lock
+    )
     core.events.subscribe(_print_event)
     conversation = local.conversation
 
@@ -114,7 +166,8 @@ def main():
     print(f"\n🟢 Démarrage de SmartHome")
     print(f"  • Cerveau LLM   : {llm_info} (Mémoire: {LLM_HISTORY_MESSAGES} msgs)")
     print(f"  • Écoute STT    : {stt_info}")
-    print(f"  • Voix TTS      : {tts_info}")
+    print(f"  • Voix TTS      : {tts_info}{' (streaming par phrase)' if settings.TTS_STREAMING else ''}")
+    print(f"  • Interruption  : {barge_in.mode}")
     print(f"  • Actions OS    : {actions_info}")
     print(f"  • Appel d'outils: {tools_info}")
     print(f"  • Hub MCP       : {mcp_info}")
@@ -155,20 +208,20 @@ def main():
                         if user_input:
                             if isinstance(user_input, bytes):
                                 print(f"👤 : 🎙️ [Audio envoyé au LLM] ({elapsed_t:.2f} s)")
-                                print("🤖 : ", end="", flush=True)
-                                reply = core.respond(LOCAL_SESSION, audio_wav=user_input)
                             else:
                                 print(f"👤 : « {user_input} » ({elapsed_t:.2f} s)")
-                                print("🤖 : ", end="", flush=True)
-                                reply = core.respond(LOCAL_SESSION, text=user_input)
+                            print("🤖 : ", end="", flush=True)
+
+                            # 2. Réponse : actions exécutées et voix jouée au fil de la génération, interruptible
+                            reply = run_local_turn(core, speech, stream, mic_lock, barge_in, user_input)
                             print()
 
-                            # 2. Vocalisation de la réponse (actions déjà exécutées et texte épuré par le cœur)
-                            if reply.text:
-                                tts.speak(reply.text)
-
-                            # 4. Signal de fin de réponse (passage de la parole)
-                            feedback.on_response_end()
+                            # 3. Signal de passage de la parole (son court si l'utilisateur a interrompu)
+                            if reply.interrupted:
+                                if settings.BARGE_IN_SOUND:
+                                    feedback.play_sound(settings.BARGE_IN_SOUND)
+                            else:
+                                feedback.on_response_end()
 
                             print("\n" + "-" * 40)
                         else:

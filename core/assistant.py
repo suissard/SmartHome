@@ -14,7 +14,7 @@ import uuid
 import wave
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 _ROOT_DIR = Path(__file__).resolve().parent.parent
 if str(_ROOT_DIR) not in sys.path:
@@ -22,8 +22,9 @@ if str(_ROOT_DIR) not in sys.path:
 
 from core.config import Settings, get_settings
 from core.events import EventBus
+from core.sentences import SentenceSplitter
 from core.tools import ConfirmationHandler, ToolRegistry, ToolResult, build_tool_registry
-from llm.llm import Conversation
+from llm.llm import Conversation, ResponseInterrupted
 
 
 def to_wav_bytes(samples, sample_rate: int) -> bytes:
@@ -53,6 +54,7 @@ class Reply:
     text: str = ""                # réponse épurée, prête pour la voix
     tools: list[dict] = field(default_factory=list)
     audio_wav: Optional[bytes] = None
+    interrupted: bool = False     # génération abandonnée (barge-in, bouton stop)
 
 
 @dataclass
@@ -62,6 +64,7 @@ class Session:
     persistent: bool = False      # jamais expirée (session locale)
     last_seen: float = field(default_factory=time.monotonic)
     lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+    cancel: threading.Event = field(default_factory=threading.Event, repr=False)
 
 
 class AssistantCore:
@@ -139,6 +142,12 @@ class AssistantCore:
         with self._sessions_lock:
             self._sessions.pop(session_id, None)
 
+    def cancel(self, session_id: str):
+        """Interrompt la réponse en cours de la session (prise en compte au prochain fragment généré)."""
+        session = self.get_session(session_id)
+        if session:
+            session.cancel.set()
+
     def detach_confirmation(self, session_id: str):
         """Le client s'est déconnecté : la session survit (reprise possible) mais ne peut plus confirmer."""
         session = self.get_session(session_id)
@@ -158,15 +167,18 @@ class AssistantCore:
         text: Optional[str] = None,
         audio_wav: Optional[bytes] = None,
         synthesize: bool = False,
+        on_sentence: Optional[Callable[[str], None]] = None,
     ) -> Reply:
         """Traite une demande (texte ou enregistrement WAV) et retourne la réponse. Bloquant : à appeler
-        depuis un thread pour un serveur asyncio. Les demandes d'une même session sont traitées une à une."""
+        depuis un thread pour un serveur asyncio. Les demandes d'une même session sont traitées une à une.
+        `on_sentence` reçoit chaque phrase à prononcer dès qu'elle est complète (parole en streaming)."""
         session = self.open_session(session_id)
         emit = self.events.emit
         sid = session.id
 
         with session.lock:
             session.last_seen = time.monotonic()
+            session.cancel.clear()
             reply = Reply(sid, transcript=(text or "").strip())
             llm_audio = None
 
@@ -185,13 +197,36 @@ class AssistantCore:
                 emit("response", sid, text="", tools=[])
                 return reply
 
+            splitter = SentenceSplitter(self.settings.TTS_STREAM_MIN_CHARS) if on_sentence else None
+            spoken: list[str] = []
+
+            def say(sentence: str):
+                spoken.append(sentence)
+                on_sentence(sentence)
+
+            def on_token(token: str):
+                if session.cancel.is_set():
+                    raise ResponseInterrupted()
+                emit("token", sid, text=token)
+                if splitter:
+                    for sentence in splitter.feed(token):
+                        say(sentence)
+
             raw = session.conversation.ask(
                 prompt=reply.transcript or None,
                 audio_bytes=llm_audio,
-                on_token=lambda t: emit("token", sid, text=t),
+                on_token=on_token,
                 on_tool=lambda r: emit("tool", sid, **_tool_summary(r)),
             )
             reply.tools = [_tool_summary(r) for r in session.conversation.last_tool_results]
+
+            if session.cancel.is_set():
+                reply.interrupted = True
+                emit("interrupted", sid)
+                return reply
+            if splitter:
+                for sentence in splitter.flush():
+                    say(sentence)
 
             # Mode tags (ou tag égaré) : exécution des [ACTION] du texte et nettoyage pour la voix
             reply.text = raw
@@ -200,6 +235,10 @@ class AssistantCore:
                 reply.text = get_action_manager().process_response(raw, confirm=session.conversation.confirm)
 
             emit("response", sid, text=reply.text, tools=reply.tools)
+
+            # Rien n'a été prononcé en direct (réponse non streamée, message d'erreur...) : on dit le texte final
+            if on_sentence and not spoken and reply.text:
+                say(reply.text)
 
             if synthesize and reply.text:
                 try:

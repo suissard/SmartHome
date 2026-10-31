@@ -117,6 +117,19 @@ class Settings(BaseModel):
     TTS_FADE_OUT_DURATION: float = Field(0.05, ge=0.0)
     TTS_SILENCE_START_DURATION: float = Field(0.10, ge=0.0)
     TTS_SILENCE_END_DURATION: float = Field(0.40, ge=0.0)
+    # Parler phrase par phrase pendant que le LLM génère la suite (au lieu d'attendre la réponse complète)
+    TTS_STREAMING: EnvBool = True
+    # Longueur minimale d'un morceau prononcé : les phrases plus courtes sont regroupées avec la suivante
+    TTS_STREAM_MIN_CHARS: int = Field(25, ge=1)
+
+    # ✋ Barge-in : couper la parole à l'assistant pendant qu'il répond
+    # "wakeword" (redire le mot-clé, robuste à l'écho), "voice" (toute voix forte : casque ou annulation d'écho conseillés), "off"
+    BARGE_IN_MODE: Literal["wakeword", "voice", "off"] = "wakeword"
+    # Mode "voice" : niveau moyen (même échelle que VOICE_THRESHOLD) et durée continue pour déclencher l'interruption
+    BARGE_IN_VOICE_THRESHOLD: float = Field(2500.0, ge=0.0)
+    BARGE_IN_MIN_DURATION: float = Field(0.3, gt=0.0)
+    # Son joué quand l'assistant est interrompu (nom de son procédural ou chemin .wav, vide = aucun)
+    BARGE_IN_SOUND: str = "wake"
 
     # 🔔 Retours sonores & vocaux
     FEEDBACK_WAKEWORD_TYPE: FeedbackType = "phrase"
@@ -181,7 +194,7 @@ class Settings(BaseModel):
     GATEWAY_MAX_MESSAGE_BYTES: int = Field(10 * 1024 * 1024, gt=0)
 
     @field_validator(
-        "LLM_PROVIDER", "TTS_PROVIDER", "MCP_TRANSPORT", "LLM_TOOL_CALLING",
+        "LLM_PROVIDER", "TTS_PROVIDER", "MCP_TRANSPORT", "LLM_TOOL_CALLING", "BARGE_IN_MODE",
         "FEEDBACK_WAKEWORD_TYPE", "FEEDBACK_RESPONSE_END_TYPE", "FEEDBACK_TIMEOUT_TYPE",
         mode="before",
     )
@@ -314,6 +327,13 @@ TTS_FADE_OUT_DURATION = settings.TTS_FADE_OUT_DURATION
 TTS_SILENCE_START_DURATION = settings.TTS_SILENCE_START_DURATION
 TTS_SILENCE_END_DURATION = settings.TTS_SILENCE_END_DURATION
 TTS_OUTPUT_DEVICE = settings.AUDIO_OUTPUT_DEVICE_INDEX
+TTS_STREAMING = settings.TTS_STREAMING
+TTS_STREAM_MIN_CHARS = settings.TTS_STREAM_MIN_CHARS
+
+BARGE_IN_MODE = settings.BARGE_IN_MODE
+BARGE_IN_VOICE_THRESHOLD = settings.BARGE_IN_VOICE_THRESHOLD
+BARGE_IN_MIN_DURATION = settings.BARGE_IN_MIN_DURATION
+BARGE_IN_SOUND = settings.BARGE_IN_SOUND
 
 FEEDBACK_WAKEWORD_TYPE = settings.FEEDBACK_WAKEWORD_TYPE
 FEEDBACK_WAKEWORD_TEXT = settings.FEEDBACK_WAKEWORD_TEXT

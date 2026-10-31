@@ -49,8 +49,10 @@ def run_request(ws, message: dict, speak: bool):
             ws.send(json.dumps({"type": "confirm_response", "id": event["id"], "accepted": answer in ("o", "oui", "y", "yes")}))
         elif kind == "response":
             print(f"\n🗣️  « {event['text']} »")
-        elif kind == "audio" and speak:
+        elif kind in ("audio", "audio_chunk") and speak:
             play_wav(base64.b64decode(event["data"]))
+        elif kind == "interrupted":
+            print("\n⏹️ Réponse interrompue.")
         elif kind == "error":
             print(f"\n⚠️ {event['message']}")
         elif kind == "done":

@@ -161,7 +161,7 @@ class TestGateway(unittest.TestCase):
         kinds = [e["type"] for e in events]
         self.assertIn("token", kinds)
         self.assertEqual([e["name"] for e in events if e["type"] == "tool"], ["volume"])
-        self.assertIn("audio", kinds)
+        self.assertIn("audio_chunk", kinds)  # voix envoyée phrase par phrase (TTS_STREAMING)
         self.assertEqual(self.executed, ["volume"])
 
     def test_websocket_confirmation_round_trip(self):

@@ -22,6 +22,10 @@ from llm.providers import LLM_PROVIDERS, LLMProvider, ToolsNotSupportedError
 
 _THINK_TAGS = re.compile(r"<think>.*?</think>", flags=re.DOTALL)
 
+
+class ResponseInterrupted(Exception):
+    """Levée depuis `on_token` pour abandonner la génération en cours (barge-in, bouton stop)."""
+
 _NATIVE_TOOLS_GUIDANCE = """
 
 ### ⚡ OUTILS :
@@ -151,6 +155,10 @@ class Conversation:
                 full_text = self._run(build_messages(use_tags=True), False, options)
             if console:
                 print()
+        except ResponseInterrupted:
+            # Réponse abandonnée : rien n'est conservé dans l'historique
+            print("\n⏹️ [LLM] Réponse interrompue.")
+            return ""
         except Exception as e:
             err_str = f"⚠️ Erreur {self.settings.LLM_PROVIDER} : {e}"
             print(f"\n{err_str}")

@@ -12,6 +12,8 @@ SmartHome est un assistant vocal intelligent, modulaire, ultra-réactif et enti�
 - **🧠 Intelligence & Raisonnement (LLM)** : Connecté au choix à **Ollama** en local (`qwen2.5:7b`, `gemma`, etc.) ou à **OpenRouter** (`meta-llama/llama-3.3-70b-instruct`, `gpt-4o-mini`, `claude-3.5-sonnet`, `gemini-2.5-flash`, etc.).
 - **🔊 Synthèse Vocale Fluide (TTS)** : Basé sur **Piper TTS** (moteur neural ONNX local) ou **OpenRouter Speech API** avec traitement post-audio (atténuation des clics/pops et fondu progressif).
 - **🔔 Signaux Sonores & Retours Vocaux** : Accords harmoniques, carillons (*ding* de fin de phrase), et phrases personnalisables (*"Que puis je pour toi ?"*, *"Bisous a plus tard"*).
+- **⚡ Réponse Vocale en Streaming** : l'assistant commence à parler dès la première phrase générée, pendant que le LLM écrit la suite.
+- **✋ Barge-in** : redites le mot-clé pendant qu'il parle (ou touchez le micro sur le téléphone) pour lui couper la parole et enchaîner.
 - **💬 Mode Conversation Suivie (*Follow-up*)** : Après le réveil par mot-clé, l'assistant reste en veille active pendant 30 secondes pour enchaîner les questions sans répéter le mot d'activation.
 
 ---

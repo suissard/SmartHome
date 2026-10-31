@@ -4,10 +4,11 @@ et l'interprète (mots de confirmation, ou classification par le LLM en mode STT
 S'installe comme gestionnaire global via `core.tools.set_confirmation_handler`.
 """
 
+import contextlib
 import re
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 _ROOT_DIR = Path(__file__).resolve().parent.parent
 if str(_ROOT_DIR) not in sys.path:
@@ -33,20 +34,34 @@ def is_affirmative(answer: str, confirm_words: list[str], cancel_words: list[str
 class VoiceConfirmer:
     """Gestionnaire de confirmation utilisant le haut-parleur et le micro partagés."""
 
-    def __init__(self, tts, transcriber, stream, settings: Optional[Settings] = None, conversation=None):
+    def __init__(
+        self,
+        tts,
+        transcriber,
+        stream,
+        settings: Optional[Settings] = None,
+        conversation=None,
+        speak: Optional[Callable[[str], None]] = None,
+        mic_lock=None,
+    ):
         self.tts = tts
         self.transcriber = transcriber
         self.stream = stream
         self.settings = settings or get_settings()
         self.conversation = conversation
+        # `speak` doit attendre la fin de la question (ex: SpeechPipeline.say_and_wait, pour ne pas couper une phrase en cours)
+        self.speak = speak or tts.speak
+        # Verrou partagé avec la boucle qui surveille le micro pendant la réponse (un seul lecteur à la fois)
+        self.mic_lock = mic_lock or contextlib.nullcontext()
 
     def __call__(self, description: str) -> bool:
         s = self.settings
         question = s.ACTIONS_CONFIRM_PROMPT.format(action=description.strip().rstrip(".").lower())
         print(f"\n❓ [CONFIRMATION] {question}")
-        self.tts.speak(question)
+        self.speak(question)
 
-        answer, _, _ = self.transcriber.record_and_transcribe(self.stream, timeout_silence=s.ACTIONS_CONFIRM_TIMEOUT)
+        with self.mic_lock:
+            answer, _, _ = self.transcriber.record_and_transcribe(self.stream, timeout_silence=s.ACTIONS_CONFIRM_TIMEOUT)
         if isinstance(answer, bytes):
             answer = self._classify_audio(answer, description)
 

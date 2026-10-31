@@ -45,7 +45,7 @@ Ce document est destiné aux agents IA (et aux développeurs) qui lisent, mainti
   1. Écoute passive par paquets (`CHUNK = 1280` à `RATE = 16000`).
   2. Si le mot-clé est validé (`score > threshold`), atténuation audio globale via `ducker.duck()`, notification `feedback.on_wakeword_detected()`, puis passage en mode `in_conversation = True`.
   3. Boucle de follow-up : appel de `transcriber.record_and_transcribe(...)`.
-  4. Si du texte (ou de l'audio en mode direct) est reçu : `core.respond("local", ...)` (LLM, outils, tags, texte épuré), vocalisation (`tts.speak`), puis signal sonore de fin de tour `feedback.on_response_end()`.
+  4. Si du texte (ou de l'audio en mode direct) est reçu : `run_local_turn()` lance `core.respond("local", on_sentence=speech.say)` dans un thread ; chaque phrase est prononcée dès qu'elle est générée (`SpeechPipeline`) pendant que le thread principal continue de lire le micro (`mic_lock` partagé avec la confirmation vocale) pour détecter une interruption (`BargeInDetector`). Interruption → `core.cancel()` + `speech.interrupt()` + son `BARGE_IN_SOUND`, et écoute immédiate ; sinon signal de fin de tour `feedback.on_response_end()`.
   5. Si timeout de silence : notification de mise en veille `feedback.on_timeout()`, purge du flux, restauration du son système via `ducker.unduck()`, et retour en veille passive.
 
 ### 2.2 [actions/](file:///home/suissard/PROGRAMMATIONS/SmartHome/actions) — Système Modulaire de Commandes & Actions OS
@@ -93,6 +93,12 @@ Ce document est destiné aux agents IA (et aux développeurs) qui lisent, mainti
   2. *Fade-Out (50 ms)* : Atténuation linéaire en fin de signal pour supprimer les clics numériques de fin de flux.
   3. *Padding de silence* : Insertion de 100 ms de silence en début de buffer et 400 ms en fin de buffer.
   4. *Lecture synchrone* : Exécution via `sounddevice` (`sd.play` + `sd.wait`).
+
+### 2.6 bis [audio/speech.py](file:///home/suissard/PROGRAMMATIONS/SmartHome/audio/speech.py), [core/sentences.py](file:///home/suissard/PROGRAMMATIONS/SmartHome/core/sentences.py) & [audio/barge_in.py](file:///home/suissard/PROGRAMMATIONS/SmartHome/audio/barge_in.py) — Parole en Streaming & Barge-in
+- **Découpage** : `SentenceSplitter` valide une fin de phrase seulement quand le caractère suivant est connu (« 40.5 » jamais coupé), regroupe les morceaux trop courts (`TTS_STREAM_MIN_CHARS`) et retire les tags d'actions.
+- **SpeechPipeline** : deux threads (synthèse de la phrase suivante pendant la lecture de la précédente), `interrupt()` vide la file et coupe le son, `close()` arrête les threads. Le « sink » joue localement ou envoie l'audio à un client (passerelle : événements `audio_chunk`).
+- **Annulation** : chaque session a un `cancel` (`core.cancel(session)`) vérifié à chaque fragment généré ; `ResponseInterrupted` interrompt la génération sans rien garder dans l'historique (événement `interrupted`).
+- **Barge-in** (`BARGE_IN_MODE`) : `wakeword` (redire le mot-clé, robuste à l'écho), `voice` (voix forte continue, avec casque ou annulation d'écho), `off`. Côté PWA, toucher le micro ou envoyer un message pendant une réponse coupe la voix et envoie `{"type": "stop"}`.
 
 ### 2.7 [audio/feedback.py](file:///home/suissard/PROGRAMMATIONS/SmartHome/audio/feedback.py) — Sons & Signaux Vocaux de Cycle de Vie
 - **Technologie** : Synthèse harmonique procédurale (`numpy` + `sounddevice`) & lecteur WAV.
@@ -163,7 +169,7 @@ stateDiagram-v2
 Lors de toute intervention sur ce codebase, veillez à respecter les règles suivantes :
 
 ### 1. Préservation des Points d'Entrée de Test Autonomes
-Chaque module Python (`config.py`, `wakeword.py`, `transcribe.py`, `stt.py`, `llm.py`, `providers.py`, `tts.py`, `feedback.py`, `ducking.py`, `confirm.py`, `tools.py`, `events.py`, `assistant.py`, `test_sound.py`) **doit impérativement conserver son bloc `if __name__ == "__main__":`**. Ces blocs permettent un diagnostic isolé sans charger toute la pile applicative.
+Chaque module Python (`config.py`, `wakeword.py`, `transcribe.py`, `stt.py`, `llm.py`, `providers.py`, `tts.py`, `speech.py`, `barge_in.py`, `sentences.py`, `feedback.py`, `ducking.py`, `confirm.py`, `tools.py`, `events.py`, `assistant.py`, `test_sound.py`) **doit impérativement conserver son bloc `if __name__ == "__main__":`**. Ces blocs permettent un diagnostic isolé sans charger toute la pile applicative.
 
 
 
@@ -192,9 +198,9 @@ Pour les futures évolutions du projet, les axes prioritaires sont :
 
 1. **Intégration Domotique (Home Assistant)** :
    - Le *Function Calling* est en place (`core/tools.py`) : activer le serveur MCP Home Assistant dans `mcp_servers.json` suffit pour que ses outils soient proposés au LLM.
-2. **Streaming Pipeline (Audio en flux tendu)** :
-   - Découper la sortie LLM par phrases/propositions et démarrer la synthèse TTS Piper dès les premiers mots sans attendre la fin complète de la génération.
+2. **Streaming Pipeline** : ✅ en place (parole phrase par phrase, ~2 s gagnées avant la première parole).
 3. **Barge-in / Annulation d'Écho Acoustique (AEC)** :
-   - Permettre à l'utilisateur d'interrompre l'assistant pendant qu'il parle sans créer de larsen audio.
+   - ✅ Interruption par mot-clé (local) et par le bouton micro (PWA).
+   - Reste : barge-in « à la voix » sans casque, via le module PipeWire `echo-cancel` comme source micro.
 4. **Multi-room / MQTT Audio Satellite** :
    - Déporter la capture audio vers des satellites ESP32 / Raspberry Pi via protocole léger (ex: Wyoming / MQTT).
