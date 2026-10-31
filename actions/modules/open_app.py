@@ -5,6 +5,18 @@ Contient les métadonnées et le script bash multi-environnements embarqué.
 
 from typing import List
 from actions.base import BaseAction
+from core.config import ACTIONS_OPEN_ALLOWED_APPS
+
+# Catégories reconnues par le `case` du script bash ci-dessous (à garder synchronisé)
+_CATEGORY_KEYWORDS = {
+    "navigateur", "browser", "web", "navigateur web", "google chrome", "chrome",
+    "musique", "music", "audio",
+    "code", "vscode", "visual studio code", "editeur", "editor",
+    "terminal", "console",
+    "fichiers", "explorateur", "files", "explorer", "gestionnaire de fichiers",
+    "calculatrice", "calc", "calculator",
+    "parametres", "settings", "paramètres",
+}
 
 _OPEN_APP_SCRIPT = r"""
 APP_NAME="$*"
@@ -99,7 +111,14 @@ class OpenAppAction(BaseAction):
 
     def build_args(self, args: str = "") -> List[str]:
         app = (args or "").strip()
-        return [app] if app else []
+        normalized = " ".join(app.lower().split())
+        if not normalized:
+            return []
+        # Liste blanche : empêche le LLM de lancer un binaire arbitraire du PATH (ex: [OPEN poweroff])
+        if normalized not in _CATEGORY_KEYWORDS and normalized not in ACTIONS_OPEN_ALLOWED_APPS:
+            print(f"⛔ [ACTIONS] Application non autorisée pour [OPEN] : '{app}' (voir ACTIONS_OPEN_ALLOWED_APPS)")
+            return []
+        return [app]
 
 
 ACTIONS = [OpenAppAction()]

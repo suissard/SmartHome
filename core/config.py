@@ -229,6 +229,16 @@ FEEDBACK_SOUND_VOLUME: float = _get_float("FEEDBACK_SOUND_VOLUME", 0.5)
 # ==========================================
 ACTIONS_ENABLED: bool = _get_bool("ACTIONS_ENABLED", True)
 ACTIONS_DYNAMIC_PROMPT: bool = _get_bool("ACTIONS_DYNAMIC_PROMPT", True)
+# Applications que [OPEN] est autorisé à lancer directement (en plus des catégories : navigateur, musique, terminal...)
+ACTIONS_OPEN_ALLOWED_APPS: list[str] = [
+    a.strip().lower()
+    for a in _get_str(
+        "ACTIONS_OPEN_ALLOWED_APPS",
+        "firefox,google-chrome,chromium,brave-browser,microsoft-edge,spotify,vlc,elisa,rhythmbox,"
+        "code,vscodium,kate,gedit,dolphin,nautilus,thunar,kcalc,gnome-calculator,discord,steam,obs,gimp,libreoffice",
+    ).split(",")
+    if a.strip()
+]
 
 # ==========================================
 # 🔉 DUCKING / ATTÉNUATION SONORE SYSTÈME
@@ -241,8 +251,12 @@ DUCKING_RESTORE_ON_EXIT: bool = _get_bool("DUCKING_RESTORE_ON_EXIT", True)
 # 🔌 MCP SERVER & CLIENT HUB (Model Context Protocol)
 # ==========================================
 MCP_TRANSPORT: str = _get_str("MCP_TRANSPORT", "stdio").lower()
-MCP_HOST: str = _get_str("MCP_HOST", "0.0.0.0")
+MCP_HOST: str = _get_str("MCP_HOST", "127.0.0.1")
 MCP_PORT: int = _get_int("MCP_PORT", 8000)
+# Jeton Bearer exigé par les transports réseau (sse / streamable-http). Obligatoire hors loopback.
+MCP_AUTH_TOKEN: str = _get_str("MCP_AUTH_TOKEN", "")
+# Seul dossier dans lequel l'outil stt_transcribe_file peut lire des fichiers audio
+MCP_AUDIO_DIR: str = _get_str("MCP_AUDIO_DIR", str(BASE_DIR / "recordings"))
 
 MCP_CLIENT_ENABLED: bool = _get_bool("MCP_CLIENT_ENABLED", True)
 MCP_SERVERS_CONFIG_PATH: str = _get_str("MCP_SERVERS_CONFIG_PATH", "mcp_servers.json")
@@ -255,6 +269,9 @@ if __name__ == "__main__":
     print(f"  • FOURNISSEUR STT         : {STT_PROVIDER}")
     print(f"  • FOURNISSEUR TTS         : {TTS_PROVIDER}")
     print(f"  • SERVEUR MCP             : Transport '{MCP_TRANSPORT}' ({MCP_HOST}:{MCP_PORT})")
+    print(f"  • MCP_AUTH_TOKEN          : {'Configuré' if MCP_AUTH_TOKEN else 'Non configuré'}")
+    print(f"  • MCP_AUDIO_DIR           : {MCP_AUDIO_DIR}")
+    print(f"  • OPEN (apps autorisées)  : {', '.join(ACTIONS_OPEN_ALLOWED_APPS)}")
     print(f"  • CLIENT HUB MCP          : {'Activé' if MCP_CLIENT_ENABLED else 'Désactivé'} (Config: {MCP_SERVERS_CONFIG_PATH})")
     print(f"  • OPENROUTER_API_KEY      : {'Configurée (' + OPENROUTER_API_KEY[:8] + '...)' if OPENROUTER_API_KEY else 'Non configurée'}")
     print(f"  • OPENROUTER_BASE_URL     : {OPENROUTER_BASE_URL}")

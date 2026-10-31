@@ -12,6 +12,7 @@ Transports supportés :
 """
 
 import argparse
+import hmac
 import io
 import json
 import os
@@ -30,6 +31,8 @@ from core.config import (
     MCP_TRANSPORT,
     MCP_HOST,
     MCP_PORT,
+    MCP_AUTH_TOKEN,
+    MCP_AUDIO_DIR,
     LLM_PROVIDER,
     OLLAMA_MODEL,
     OLLAMA_HOST,
@@ -346,10 +349,15 @@ def stt_transcribe_file(audio_path: str) -> str:
     Transcrit un fichier audio (.wav) en texte à l'aide du moteur de transcription configuré (faster-whisper ou OpenRouter).
 
     Args:
-        audio_path: Chemin absolu ou relatif vers le fichier audio à transcrire.
+        audio_path: Chemin du fichier audio, relatif au dossier MCP_AUDIO_DIR (ou absolu à l'intérieur de celui-ci).
     """
-    path = Path(audio_path).resolve()
-    if not path.exists():
+    audio_dir = Path(MCP_AUDIO_DIR).resolve()
+    path = (audio_dir / audio_path).resolve()
+    if not path.is_relative_to(audio_dir):
+        return f"❌ Accès refusé : seuls les fichiers du dossier {audio_dir} peuvent être transcrits."
+    if path.suffix.lower() != ".wav":
+        return "❌ Seuls les fichiers .wav sont acceptés."
+    if not path.is_file():
         return f"❌ Fichier audio introuvable : {audio_path}"
 
     transcriber = _get_transcriber()
@@ -596,8 +604,8 @@ def parse_args():
     )
     parser.add_argument(
         "--host",
-        default=MCP_HOST or "0.0.0.0",
-        help="Adresse d'écoute pour les modes SSE / HTTP (défaut: 0.0.0.0)."
+        default=MCP_HOST or "127.0.0.1",
+        help="Adresse d'écoute pour les modes SSE / HTTP (défaut: 127.0.0.1 ; IP Tailscale 100.x pour l'accès distant)."
     )
     parser.add_argument(
         "--port",
@@ -606,6 +614,31 @@ def parse_args():
         help="Port d'écoute pour les modes SSE / HTTP (défaut: 8000)."
     )
     return parser.parse_args()
+
+
+class BearerTokenMiddleware:
+    """Middleware ASGI pur (compatible SSE/streaming) exigeant l'en-tête `Authorization: Bearer <MCP_AUTH_TOKEN>`."""
+
+    def __init__(self, asgi_app, token: str):
+        self.asgi_app = asgi_app
+        self.expected = f"Bearer {token}".encode()
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            provided = dict(scope.get("headers", [])).get(b"authorization", b"")
+            if not hmac.compare_digest(provided, self.expected):
+                await send({
+                    "type": "http.response.start",
+                    "status": 401,
+                    "headers": [(b"content-type", b"text/plain; charset=utf-8"), (b"www-authenticate", b"Bearer")],
+                })
+                await send({"type": "http.response.body", "body": "Jeton MCP manquant ou invalide.".encode()})
+                return
+        await self.asgi_app(scope, receive, send)
+
+
+def _is_loopback(host: str) -> bool:
+    return host in ("127.0.0.1", "localhost", "::1")
 
 
 def main():
@@ -618,12 +651,30 @@ def main():
     if transport == "stdio":
         # En mode stdio, aucun message stdout superflu ne doit polluer le flux JSON-RPC
         app.run(transport="stdio")
-    elif transport == "sse":
-        print(f"🚀 [MCP] Démarrage du serveur SmartHome en mode SSE sur http://{host}:{port}/sse ...", file=sys.stderr)
-        app.run(transport="sse", host=host, port=port)
-    elif transport == "streamable-http":
-        print(f"🚀 [MCP] Démarrage du serveur SmartHome en mode Streamable-HTTP sur http://{host}:{port}/mcp ...", file=sys.stderr)
-        app.run(transport="streamable-http", host=host, port=port)
+        return
+
+    # Transports réseau : refus de démarrer sans jeton hors loopback (LAN, Tailscale...)
+    if not MCP_AUTH_TOKEN and not _is_loopback(host):
+        print(
+            f"❌ [MCP] Refus d'écouter sur {host} sans MCP_AUTH_TOKEN : n'importe quel appareil du réseau "
+            "pourrait piloter l'ordinateur. Définissez MCP_AUTH_TOKEN dans .env (ex: `openssl rand -hex 32`).",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    if transport == "sse":
+        starlette_app = app.sse_app(host=host)
+        endpoint = "/sse"
+    else:
+        starlette_app = app.streamable_http_app(host=host)
+        endpoint = "/mcp"
+
+    asgi_app = BearerTokenMiddleware(starlette_app, MCP_AUTH_TOKEN) if MCP_AUTH_TOKEN else starlette_app
+    auth_info = "jeton Bearer requis" if MCP_AUTH_TOKEN else "sans authentification (loopback uniquement)"
+    print(f"🚀 [MCP] Démarrage du serveur SmartHome ({transport}) sur http://{host}:{port}{endpoint} — {auth_info}", file=sys.stderr)
+
+    import uvicorn
+    uvicorn.run(asgi_app, host=host, port=port, log_level=app.settings.log_level.lower())
 
 
 if __name__ == "__main__":

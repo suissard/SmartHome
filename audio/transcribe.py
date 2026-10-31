@@ -14,6 +14,7 @@ if str(_ROOT_DIR) not in sys.path:
 
 from core.config import (
     STT_PROVIDER,
+    LLM_PROVIDER,
     OPENROUTER_API_KEY,
     OPENROUTER_BASE_URL,
     OPENROUTER_STT_MODEL,
@@ -50,6 +51,10 @@ class VoiceTranscriber:
         max_speech_duration=MAX_SPEECH_DURATION
     ):
         self.provider = provider.lower()
+        # Ollama ne sait pas recevoir d'audio : le bypass STT perdrait la parole de l'utilisateur
+        if self.provider in ("none", "direct", "bypass") and LLM_PROVIDER == "ollama":
+            print("⚠️ STT_PROVIDER=direct incompatible avec LLM_PROVIDER=ollama (pas d'entrée audio) : repli sur Whisper local.")
+            self.provider = "whisper"
         self.voice_threshold = voice_threshold
         self.silence_duration = silence_duration
         self.follow_up_timeout = follow_up_timeout

@@ -73,6 +73,9 @@ def add_history_message(role: str, content: str):
         _conversation_history.append({"role": role, "content": content})
         if len(_conversation_history) > LLM_HISTORY_MESSAGES:
             _conversation_history = _conversation_history[-LLM_HISTORY_MESSAGES:]
+            # La fenêtre doit commencer par un tour utilisateur (sinon l'échange est coupé en deux)
+            while _conversation_history and _conversation_history[0]["role"] != "user":
+                _conversation_history.pop(0)
 
 
 def _ask_openrouter(
@@ -170,8 +173,11 @@ def _ask_ollama(
     target_model = model or OLLAMA_MODEL
     effective_system_prompt = system_prompt or get_default_system_prompt()
 
-    if audio_bytes and not prompt:
-        prompt = "Veuillez traiter cet enregistrement audio."
+    if audio_bytes:
+        # L'API chat d'Ollama n'accepte pas d'audio : sans transcription, la demande serait perdue
+        err_str = "⚠️ Ollama ne prend pas en charge l'audio direct. Utilisez STT_PROVIDER=whisper ou LLM_PROVIDER=openrouter."
+        print(f"\n{err_str}")
+        return err_str
 
     # Construction de la liste des messages avec prompt système
     messages = [{"role": "system", "content": effective_system_prompt}]

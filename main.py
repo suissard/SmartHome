@@ -27,7 +27,7 @@ from audio.tts import TextToSpeech
 from audio.feedback import FeedbackManager
 from audio.ducking import AudioDucker
 from llm.llm import ask_llm
-from actions import get_action_manager
+from actions import get_action_manager, get_all_commands
 from core.mcp_hub import get_mcp_hub
 
 
@@ -91,7 +91,7 @@ def main():
 
     voice_name = Path(TTS_MODEL_PATH).stem.replace(".onnx", "")
     tts_info = f"OpenRouter ({OPENROUTER_TTS_MODEL})" if TTS_PROVIDER == "openrouter" else f"Piper ({voice_name})"
-    actions_info = "Activées (12 commandes prêtes)" if ACTIONS_ENABLED else "Désactivées"
+    actions_info = f"Activées ({len(get_all_commands())} commandes prêtes)" if ACTIONS_ENABLED else "Désactivées"
 
     print(f"\n🟢 Démarrage de SmartHome")
     print(f"  • Cerveau LLM   : {llm_info} (Mémoire: {LLM_HISTORY_MESSAGES} msgs)")

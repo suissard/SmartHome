@@ -110,6 +110,14 @@ class TestActionDefinitionsBuildArgs(unittest.TestCase):
         self.assertEqual(notify_act.build_args("Sortir le chien"), ["Sortir le chien"])
         self.assertEqual(open_act.build_args("firefox"), ["firefox"])
 
+    def test_open_app_allowlist(self):
+        """Vérifie que OPEN refuse les binaires hors liste blanche et accepte les catégories."""
+        open_act = get_command_by_tag("OPEN")
+        self.assertEqual(open_act.build_args("poweroff"), [])
+        self.assertEqual(open_act.build_args("rm"), [])
+        self.assertEqual(open_act.build_args("Navigateur  Web"), ["Navigateur  Web"])
+        self.assertEqual(open_act.build_args("calculatrice"), ["calculatrice"])
+
 
 class TestActionManagerIntegration(unittest.TestCase):
     """Tests du gestionnaire ActionManager découplé."""
