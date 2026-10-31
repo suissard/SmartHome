@@ -97,6 +97,8 @@ SmartHome/
 
 ## 🚀 Installation & Prérequis
 
+> 📘 Pas à pas complet, du PC jusqu'à l'appli sur un téléphone Android : [docs/MISE_EN_SERVICE.md](docs/MISE_EN_SERVICE.md).
+
 ### 1. Prérequis Système
 
 - **Système d'exploitation** : Linux (testé sur Ubuntu / Debian) ou macOS / Windows avec support PortAudio.
