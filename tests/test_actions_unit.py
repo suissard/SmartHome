@@ -39,7 +39,8 @@ class TestModularActionRegistry(unittest.TestCase):
             "SHUTDOWN", "REBOOT", "LOCK", "SCREEN_OFF",
             "VOLUME", "MUTE", "UNMUTE",
             "MEDIA_PLAY_PAUSE", "MEDIA_NEXT", "MEDIA_PREV",
-            "OPEN", "NOTIFY"
+            "OPEN", "NOTIFY",
+            "BRIGHTNESS", "SCREENSHOT", "TIMER", "SYSTEM_INFO", "CLOSE", "AUDIO_OUTPUT"
         }
         discovered_tags = set(COMMAND_REGISTRY.keys())
         self.assertTrue(expected_tags.issubset(discovered_tags),

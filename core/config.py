@@ -202,6 +202,9 @@ class Settings(BaseModel):
     MCP_CLIENT_ENABLED: EnvBool = True
     MCP_SERVERS_CONFIG_PATH: str = "mcp_servers.json"
 
+    # Dossier des captures d'écran ([SCREENSHOT]) et durée maximale d'un minuteur ([TIMER], secondes)
+    ACTIONS_SCREENSHOT_DIR: str = "~/Pictures"
+    ACTIONS_TIMER_MAX_SECONDS: int = Field(86400, gt=0)
     # 🌍 Passerelle (clients distants : WebSocket /ws et HTTP /api/ask)
     # Démarre la passerelle dans main.py, à côté de l'écoute micro (sinon : python -m gateway pour un serveur sans micro)
     GATEWAY_ENABLED: EnvBool = False
@@ -401,6 +404,8 @@ GATEWAY_MAX_MESSAGE_BYTES = settings.GATEWAY_MAX_MESSAGE_BYTES
 
 
 if __name__ == "__main__":
+ACTIONS_SCREENSHOT_DIR = settings.ACTIONS_SCREENSHOT_DIR
+ACTIONS_TIMER_MAX_SECONDS = settings.ACTIONS_TIMER_MAX_SECONDS
     print(f"📋 [CONFIG] Configuration chargée depuis {ENV_FILE} (variables d'environnement prioritaires) :")
     for name, value in settings.model_dump().items():
         if value and any(secret in name for secret in ("KEY", "TOKEN")):
