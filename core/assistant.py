@@ -20,7 +20,7 @@ _ROOT_DIR = Path(__file__).resolve().parent.parent
 if str(_ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(_ROOT_DIR))
 
-from core.config import Settings, get_settings
+from core.config import ENV_FILE, Settings, get_settings, set_settings
 from core.events import EventBus
 from core.sentences import SentenceSplitter, matches_phrase
 from core.tools import ConfirmationHandler, ToolRegistry, ToolResult, build_tool_registry
@@ -76,14 +76,22 @@ class Session:
     cancel: threading.Event = field(default_factory=threading.Event, repr=False)
 
 
+# Préfixes des paramètres lus par le fournisseur LLM : le modifier impose de recréer le fournisseur
+_LLM_PREFIXES = ("LLM_", "OLLAMA_", "OPENROUTER_")
+
+
 class AssistantCore:
-    def __init__(self, settings: Optional[Settings] = None, stt=None, tts=None, tools: Optional[ToolRegistry] = None, llm=None):
+    def __init__(self, settings: Optional[Settings] = None, stt=None, tts=None, tools: Optional[ToolRegistry] = None, llm=None,
+                 env_file: Optional[Path] = None):
         self.settings = settings or get_settings()
         self.events = EventBus()
         self._llm = llm
         self._stt = stt
         self._tts = tts
         self._tools = tools
+        # Composants fournis par l'appelant (tests, main.py) : jamais recréés, seulement mis à jour
+        self._injected = {"llm": llm is not None, "tools": tools is not None}
+        self.env_file = env_file or ENV_FILE
         self._sessions: dict[str, Session] = {}
         self._sessions_lock = threading.Lock()
 
@@ -121,6 +129,51 @@ class AssistantCore:
         with self._sessions_lock:
             for session in self._sessions.values():
                 session.conversation._tools = None
+
+    # ---- Paramètres modifiables à chaud (interface web) ----
+    def update_settings(self, changes: dict) -> dict:
+        """Valide les changements, les enregistre dans .env et applique ceux qui peuvent l'être sans redémarrer.
+        Lève ValueError si un paramètre est inconnu, non modifiable ou invalide."""
+        from core import settings_store
+        new, changed = settings_store.validate_changes(self.settings, changes)
+        if changed:
+            settings_store.save_to_env(new, changed, self.env_file)
+            self.apply_settings(new, changed)
+            print(f"⚙️ [CONFIG] Paramètres modifiés : {', '.join(changed)}")
+        return {
+            "changed": changed,
+            "restart": [n for n in changed if not settings_store.EDITABLE[n][1]],
+            "overridden": settings_store.overridden_by_environment(changed),
+        }
+
+    def apply_settings(self, settings: Settings, changed: list[str]):
+        """Bascule le cœur et toutes les sessions (historique conservé) sur la nouvelle configuration."""
+        if self.settings is get_settings():
+            set_settings(settings)
+        self.settings = settings
+        if any(name.startswith(_LLM_PREFIXES) for name in changed):
+            if self._injected["llm"]:
+                self._llm.settings = settings
+            else:
+                self._llm = None
+        if any(name.startswith("ACTIONS_") for name in changed):
+            if self._injected["tools"]:
+                self._tools.settings = settings
+            else:
+                self._tools = None
+        with self._sessions_lock:
+            for session in self._sessions.values():
+                conversation = session.conversation
+                conversation.settings = settings
+                conversation.max_messages = settings.LLM_HISTORY_MESSAGES
+                conversation.tool_mode = settings.LLM_TOOL_CALLING
+                conversation._provider = self.llm
+                conversation._tools = self.tools
+
+    def model_info(self) -> dict:
+        """Modèle actif, pour l'affichage côté client."""
+        llm = self.llm
+        return {"provider": self.settings.LLM_PROVIDER, "model": llm.model, "decision": llm.is_decision_model()}
 
     # ---- Sessions ----
     def open_session(

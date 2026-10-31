@@ -132,6 +132,8 @@ class Conversation:
         stream = self.settings.LLM_STREAM if stream is None else stream
         think = self.settings.LLM_THINK if think is None else think
         self.last_tool_results = []
+        if use_tools and self.provider.is_decision_model(model):
+            return self._decide(prompt, audio_bytes, use_history, on_tool)
 
         def build_messages(use_tags: bool) -> list[dict]:
             messages = [{"role": "system", "content": system_prompt or get_default_system_prompt(self.settings, use_tags)}]
@@ -173,6 +175,23 @@ class Conversation:
             self.add_message("user", prompt or ("🎙️ [Message vocal]" if audio_bytes else ""))
             self.add_message("assistant", full_text)
         return full_text
+
+    def _decide(self, prompt, audio_bytes, use_history: bool, on_tool) -> str:
+        """Modèle de décision : choix et exécution de la commande, puis réponse type (voir llm/decision.py)."""
+        from llm.decision import run_decision
+        if audio_bytes and not prompt:
+            return "⚠️ Un modèle de décision a besoin du texte de la demande : utilisez un STT (STT_PROVIDER=whisper)."
+        try:
+            text = run_decision(self, prompt or "", on_tool)
+        except Exception as e:
+            err_str = f"⚠️ Erreur {self.settings.LLM_PROVIDER} (décision) : {e}"
+            print(f"\n{err_str}")
+            return err_str
+        print(f"🤖 {text}")
+        if use_history:
+            self.add_message("user", prompt)
+            self.add_message("assistant", text)
+        return text
 
     def _run(self, messages: list[dict], native: bool, options: dict) -> str:
         """Interroge le LLM ; en mode natif, exécute les outils demandés et renvoie leurs résultats jusqu'à la réponse finale."""

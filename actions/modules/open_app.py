@@ -18,6 +18,13 @@ _CATEGORY_KEYWORDS = {
     "parametres", "settings", "paramètres",
 }
 
+# Catégories proposées aux modèles de décision (une seule entrée par catégorie du script)
+_DECISION_CATEGORIES = {
+    "navigateur": "le navigateur web", "musique": "le lecteur de musique", "code": "l'éditeur de code",
+    "terminal": "le terminal", "fichiers": "le gestionnaire de fichiers", "calculatrice": "la calculatrice",
+    "paramètres": "les paramètres",
+}
+
 _OPEN_APP_SCRIPT = r"""
 APP_NAME="$*"
 
@@ -108,6 +115,9 @@ class OpenAppAction(BaseAction):
             example_prompt="Ouvre Firefox.",
             example_response="[OPEN firefox] J'ouvre Firefox."
         )
+
+    def decision_choices(self):
+        return {**_DECISION_CATEGORIES, **{app: app for app in ACTIONS_OPEN_ALLOWED_APPS}}
 
     def build_args(self, args: str = "") -> List[str]:
         app = (args or "").strip()

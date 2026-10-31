@@ -34,6 +34,8 @@ class Tool:
     handler: Callable[[dict], str]
     danger: str = "safe"          # "safe" | "confirm"
     source: str = "local"         # "local" ou nom du serveur MCP
+    # Valeurs possibles de l'argument "args" d'une action locale, pour les modèles de décision (voir llm/decision.py)
+    decision_choices: Optional[dict[str, str]] = None
 
     def schema(self) -> dict:
         """Définition au format function calling (compatible OpenAI et Ollama)."""
@@ -152,6 +154,7 @@ def _action_tool(action, settings: Settings) -> Tool:
         handler=handler,
         danger=action.danger,
         source="local",
+        decision_choices=action.decision_choices() if action.has_args else None,
     )
 
 

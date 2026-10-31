@@ -166,6 +166,7 @@ Utilisation :
 - La réponse s'affiche en direct et est lue à voix haute par le téléphone, phrase par phrase.
 - **Toucher le micro pendant qu'il parle** lui coupe la parole.
 - Les actions sensibles (extinction, redémarrage) demandent une **confirmation à l'écran**.
+- **Réglages** (roue dentée) : choix du modèle Ollama (cochez **Modèle de décision** pour `nimble` : il exécute les commandes sans rédiger de réponse et dit ce qu'il a compris) et **Paramètres avancés** de l'assistant.
 
 ---
 

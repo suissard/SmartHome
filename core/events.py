@@ -10,6 +10,7 @@ Types d'événements émis par AssistantCore :
 - "response"         : {"text", "tools"}                          réponse finale épurée pour la voix
 - "interrupted"      : {}                                         réponse abandonnée (barge-in, stop)
 - "error"            : {"message"}
+- "settings_changed" : {"changed"}                                paramètres modifiés à chaud (session None : tous)
 """
 
 import threading

@@ -256,6 +256,11 @@ Le micro d'un navigateur exige le HTTPS : `tailscale serve` le fournit (certific
 
 Sans jeton configuré, la passerelle refuse toute requête relayée par un proxy : `tailscale serve` ne peut donc pas ouvrir l'accès à tout le tailnet par erreur.
 
+### Choisir le modèle et régler l'assistant depuis l'interface
+Dans **Réglages** : liste des modèles Ollama installés (avec leurs capacités), case **Modèle de décision**, puis **Paramètres avancés…** pour le prompt, l'historique, la voix, l'écoute, les retours sonores et les actions. Les valeurs sont enregistrées dans `.env` ; celles marquées « au redémarrage » s'appliquent au prochain lancement. Les secrets (clés, jetons) et l'adresse réseau ne sont jamais exposés.
+
+**Modèles de décision** (ex: `ollama pull nimble`) : ils ne rédigent pas de réponse, ils choisissent la commande et ses arguments parmi des choix fermés (~0,5 s par commande). L'assistant prononce alors une réponse type : « Compris : régler le volume sonore (30 %). », ou « Je n'ai pas compris la commande. ». Seules les commandes dont les arguments ont des valeurs fermées leur sont proposées (une notification au texte libre, par exemple, ne l'est pas). Test en console : `python llm/decision.py`.
+
 ### Client console / script
 Avec `GATEWAY_HOST` sur l'IP Tailscale (`tailscale ip -4`) ou derrière `tailscale serve` :
 ```bash

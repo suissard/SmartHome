@@ -9,7 +9,14 @@ import re
 import shlex
 import subprocess
 from pathlib import Path
-from typing import Optional, List, Tuple
+from typing import Dict, Optional, List, Tuple
+
+
+def percent_choices(up: str, down: str) -> Dict[str, str]:
+    """Choix d'un réglage en pourcentage pour un modèle de décision : 0 à 100 % par pas de 10, plus ou moins."""
+    choices = {str(v): f"{v} %" for v in range(0, 101, 10)}
+    choices.update({"up": up, "down": down})
+    return choices
 
 
 @dataclass
@@ -60,6 +67,11 @@ class BaseAction:
             "properties": {"args": {"type": "string", "description": self.args_hint or "Argument de la commande"}},
             "required": ["args"],
         }
+
+    def decision_choices(self) -> Optional[Dict[str, str]]:
+        """Valeurs possibles de l'argument pour un modèle de décision, qui choisit au lieu d'écrire :
+        {valeur: description prononçable}. None = argument libre, action non proposée à ces modèles."""
+        return None
 
     def build_args(self, args: str = "") -> List[str]:
         """Découpe les arguments passés pour le script bash. Peut être surchargé."""

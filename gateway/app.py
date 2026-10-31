@@ -10,10 +10,15 @@ Routes :
                         {"type": "text", "text", "speak"?} | {"type": "audio", "data": <WAV base64>, "speak"?}
                         {"type": "confirm_response", "id", "accepted": bool} | {"type": "stop"} | {"type": "reset"}
                         | {"type": "ping"}
-    serveur -> client : {"type": "ready", "session", "tools", "audio", "confirm_timeout"} puis les événements du cœur
+                        Paramètres (voir core/settings_store.py) : {"type": "get_settings"} | {"type": "list_models"}
+                        | {"type": "update_settings", "values": {VARIABLE: valeur}}
+    serveur -> client : {"type": "ready", "session", "tools", "audio", "confirm_timeout", "llm"} puis les événements du cœur
                         (transcript, token, tool, confirm_request, response, interrupted, error), la voix si speak :
                         {"type": "audio_chunk", "seq", "format": "wav", "data"} phrase par phrase (TTS_STREAMING)
                         ou {"type": "audio", ...} en un bloc, et {"type": "done"} à la fin de chaque demande.
+                        Paramètres : {"type": "settings", "groups", "llm"} | {"type": "models", "models", "error"?}
+                        | {"type": "settings_saved", "changed", "restart", "overridden", "llm"} | {"type": "settings_error", "message"}
+                        ; "settings_changed" est diffusé à tous les clients après une modification.
 """
 
 import asyncio
@@ -39,6 +44,7 @@ from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from audio.speech import SpeechPipeline
 from core.assistant import AssistantCore, Reply, to_wav_bytes
+from core import settings_store
 from core.config import Settings
 from core.security import (
     BearerTokenMiddleware, LocalOnlyMiddleware, SecurityHeadersMiddleware, bearer_from_headers, token_matches,
@@ -60,8 +66,8 @@ def _reply_to_dict(reply: Reply) -> dict:
 
 
 def create_app(core: AssistantCore, settings: Optional[Settings] = None):
-    s = settings or core.settings
-    token = s.GATEWAY_AUTH_TOKEN
+    # Le jeton et l'adresse sont fixés au démarrage ; le reste est relu dans core.settings (modifiable à chaud)
+    token = (settings or core.settings).GATEWAY_AUTH_TOKEN
 
     async def health(request: Request):
         return JSONResponse({"status": "ok", "service": "smarthome-gateway"})
@@ -110,6 +116,7 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
             request_id = uuid.uuid4().hex[:8]
             future: concurrent.futures.Future = concurrent.futures.Future()
             pending[request_id] = future
+            s = core.settings
             question = s.ACTIONS_CONFIRM_PROMPT.format(action=description.strip().rstrip(".").lower())
             core.events.emit("confirm_request", session.id, id=request_id, question=question)
             try:
@@ -122,6 +129,10 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
         session_id = hello.get("session") or ws.query_params.get("session")
         session = core.open_session(session_id, confirm=confirm)
         unsubscribe = core.events.subscribe(lambda e: push(e.to_dict()), session_id=session.id)
+        # Modifications de paramètres faites depuis un autre appareil : chaque client recharge son formulaire
+        unsubscribe_settings = core.events.subscribe(
+            lambda e: push(e.to_dict()) if e.type == "settings_changed" else None
+        )
 
         async def sender():
             while True:
@@ -139,7 +150,7 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
             return SpeechPipeline(core.tts, sink=send_chunk)
 
         def run_request(text, audio, speak) -> Reply:
-            speech = streamed_speech() if speak and s.TTS_STREAMING else None
+            speech = streamed_speech() if speak and core.settings.TTS_STREAMING else None
             if speech:
                 speeches.add(speech)
             try:
@@ -164,6 +175,33 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
             finally:
                 push({"type": "done"})
 
+        async def handle_settings(message: dict):
+            """Lecture / modification des paramètres et liste des modèles (appels bloquants hors de la boucle)."""
+            kind = message["type"]
+            try:
+                if kind == "list_models":
+                    try:
+                        models = await asyncio.to_thread(core.llm.list_models)
+                        push({"type": "models", "provider": core.settings.LLM_PROVIDER, "models": models})
+                    except Exception as e:
+                        push({"type": "models", "provider": core.settings.LLM_PROVIDER, "models": [],
+                              "error": f"Liste des modèles indisponible : {e}"})
+                    return
+                if kind == "update_settings":
+                    values = message.get("values")
+                    if not isinstance(values, dict):
+                        raise ValueError("Champ 'values' attendu : {VARIABLE: valeur}.")
+                    result = await asyncio.to_thread(core.update_settings, values)
+                    push({"type": "settings_saved", **result, "llm": core.model_info()})
+                    if result["changed"]:
+                        core.events.emit("settings_changed", None, changed=result["changed"])
+                push({"type": "settings", "groups": settings_store.describe(core.settings), "llm": core.model_info()})
+            except ValueError as e:
+                push({"type": "settings_error", "message": str(e)})
+            except Exception as e:
+                push({"type": "settings_error", "message": f"Erreur : {e}"})
+
+        s = core.settings
         push({
             "type": "ready",
             "session": session.id,
@@ -176,6 +214,7 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
                 "max_speech_duration": s.MAX_SPEECH_DURATION,
             },
             "confirm_timeout": s.GATEWAY_CONFIRM_TIMEOUT,
+            "llm": core.model_info(),
         })
         sender_task = asyncio.create_task(sender())
         tasks: set[asyncio.Task] = set()
@@ -203,6 +242,10 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
                 elif kind == "reset":
                     session.conversation.clear()
                     push({"type": "reset_done"})
+                elif kind in ("get_settings", "update_settings", "list_models"):
+                    task = asyncio.create_task(handle_settings(message))
+                    tasks.add(task)
+                    task.add_done_callback(tasks.discard)
                 elif kind == "ping":
                     push({"type": "pong"})
                 elif kind == "auth":
@@ -213,6 +256,7 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
             pass
         finally:
             unsubscribe()
+            unsubscribe_settings()
             core.detach_confirmation(session.id)
             for future in list(pending.values()):
                 if not future.done():

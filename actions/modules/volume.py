@@ -4,7 +4,7 @@ Contient les métadonnées et le script bash embarqué.
 """
 
 from typing import List
-from actions.base import BaseAction
+from actions.base import BaseAction, percent_choices
 
 _VOLUME_SCRIPT = r"""
 TARGET="${1:-toggle}"
@@ -107,13 +107,16 @@ class VolumeAction(BaseAction):
     def __init__(self):
         super().__init__(
             tag="VOLUME",
-            description="Régler le volume sonore (ex: 0 à 100, up, down).",
+            description="Régler le volume sonore : monter ou baisser le son, ou fixer un niveau de 0 à 100.",
             script_code=_VOLUME_SCRIPT,
             has_args=True,
             args_hint="<0-100|up|down>",
             example_prompt="Mets le volume à 40%.",
             example_response="[VOLUME 40] Volume réglé à 40%."
         )
+
+    def decision_choices(self):
+        return percent_choices(up="plus fort", down="moins fort")
 
     def build_args(self, args: str = "") -> List[str]:
         target = (args or "").strip() or "toggle"

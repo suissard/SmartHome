@@ -132,6 +132,23 @@ class Settings(BaseModel):
     # Nombre maximal d'allers-retours outil -> LLM pour une même demande
     LLM_MAX_TOOL_ROUNDS: int = Field(4, ge=1)
 
+    # 🎯 Modèles de décision (Ollama /v1/systemone : nimble, tev1...) : ils choisissent une commande sans rédiger de réponse
+    # Modèles traités comme modèles de décision (nom sans le tag ":latest" accepté)
+    LLM_DECISION_MODELS: CsvList = _parse_list("nimble,tev1")
+    # Question posée au modèle pour choisir la commande parmi les outils
+    LLM_DECISION_PROMPT: str = (
+        "Quelle commande l'utilisateur demande-t-il d'exécuter ? Choisis « aucune » s'il ne demande aucune "
+        "de ces commandes (question, discussion, demande impossible)."
+    )
+    # Probabilité minimale de la commande choisie ; en dessous, la demande est considérée comme non comprise
+    LLM_DECISION_MIN_CONFIDENCE: float = Field(0.5, ge=0.0, le=1.0)
+    # Réponses types ({command} = ce qui a été compris, {output} = résultat de l'outil)
+    LLM_DECISION_DONE_TEMPLATE: str = "Compris : {command}."
+    LLM_DECISION_REFUSED_TEMPLATE: str = "Commande non exécutée : {command}."
+    LLM_DECISION_UNKNOWN_TEXT: str = "Je n'ai pas compris la commande."
+    # Délai maximal d'une décision (le premier appel charge le modèle en mémoire), en secondes
+    LLM_DECISION_TIMEOUT: float = Field(60.0, gt=0.0)
+
     # 🔊 TTS (Piper)
     TTS_VOICE: str = "fr_FR-siwis-medium"
     TTS_MODEL_PATH: str = ""
@@ -185,6 +202,9 @@ class Settings(BaseModel):
     ACTIONS_CONFIRM_PROMPT: str = "Tu confirmes : {action} ?"
     # Durée maximale d'exécution d'une action locale appelée comme outil (secondes)
     ACTIONS_TIMEOUT: float = Field(10.0, gt=0.0)
+    # Dossier des captures d'écran ([SCREENSHOT]) et durée maximale d'un minuteur ([TIMER], secondes)
+    ACTIONS_SCREENSHOT_DIR: str = "~/Pictures"
+    ACTIONS_TIMER_MAX_SECONDS: int = Field(86400, gt=0)
 
     # 🔉 Ducking
     DUCKING_ENABLED: EnvBool = True
@@ -202,9 +222,6 @@ class Settings(BaseModel):
     MCP_CLIENT_ENABLED: EnvBool = True
     MCP_SERVERS_CONFIG_PATH: str = "mcp_servers.json"
 
-    # Dossier des captures d'écran ([SCREENSHOT]) et durée maximale d'un minuteur ([TIMER], secondes)
-    ACTIONS_SCREENSHOT_DIR: str = "~/Pictures"
-    ACTIONS_TIMER_MAX_SECONDS: int = Field(86400, gt=0)
     # 🌍 Passerelle (clients distants : WebSocket /ws et HTTP /api/ask)
     # Démarre la passerelle dans main.py, à côté de l'écoute micro (sinon : python -m gateway pour un serveur sans micro)
     GATEWAY_ENABLED: EnvBool = False
@@ -300,8 +317,14 @@ settings: Settings = load_settings()
 
 
 def get_settings() -> Settings:
-    """Retourne la configuration chargée au démarrage (à injecter dans les composants)."""
+    """Retourne la configuration courante (chargée au démarrage, puis modifiée depuis l'interface web)."""
     return settings
+
+
+def set_settings(new_settings: Settings):
+    """Remplace la configuration courante. Les constantes de module ci-dessous gardent leur valeur de démarrage."""
+    global settings
+    settings = new_settings
 
 
 # ==========================================
@@ -381,6 +404,8 @@ ACTIONS_CONFIRM_WORDS = settings.ACTIONS_CONFIRM_WORDS
 ACTIONS_CANCEL_WORDS = settings.ACTIONS_CANCEL_WORDS
 ACTIONS_CONFIRM_PROMPT = settings.ACTIONS_CONFIRM_PROMPT
 ACTIONS_TIMEOUT = settings.ACTIONS_TIMEOUT
+ACTIONS_SCREENSHOT_DIR = settings.ACTIONS_SCREENSHOT_DIR
+ACTIONS_TIMER_MAX_SECONDS = settings.ACTIONS_TIMER_MAX_SECONDS
 
 DUCKING_ENABLED = settings.DUCKING_ENABLED
 DUCKING_VOLUME_PERCENT = settings.DUCKING_VOLUME_PERCENT
@@ -404,8 +429,6 @@ GATEWAY_MAX_MESSAGE_BYTES = settings.GATEWAY_MAX_MESSAGE_BYTES
 
 
 if __name__ == "__main__":
-ACTIONS_SCREENSHOT_DIR = settings.ACTIONS_SCREENSHOT_DIR
-ACTIONS_TIMER_MAX_SECONDS = settings.ACTIONS_TIMER_MAX_SECONDS
     print(f"📋 [CONFIG] Configuration chargée depuis {ENV_FILE} (variables d'environnement prioritaires) :")
     for name, value in settings.model_dump().items():
         if value and any(secret in name for secret in ("KEY", "TOKEN")):

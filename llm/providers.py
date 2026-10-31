@@ -53,6 +53,18 @@ class LLMProvider:
         """Résumé lisible de la configuration, sans instancier le fournisseur."""
         raise NotImplementedError
 
+    def is_decision_model(self, model: Optional[str] = None) -> bool:
+        """True si le modèle (actif par défaut) est un modèle de décision : il choisit, il ne rédige pas (voir llm/decision.py)."""
+        return False
+
+    def decide(self, state: str, questions: dict) -> dict:
+        """Pose des questions fermées (choice / noul / score) sur `state` ; retourne les réponses par nom de question."""
+        raise NotImplementedError(f"{self.provider_name} ne gère pas les modèles de décision.")
+
+    def list_models(self) -> list[dict]:
+        """Modèles disponibles : [{"name", "capabilities", "size"}] (vide si le fournisseur ne sait pas les lister)."""
+        return []
+
     def chat(
         self,
         messages: list[dict],
@@ -89,6 +101,12 @@ class LLMProvider:
 LLM_PROVIDERS: ProviderRegistry[LLMProvider] = ProviderRegistry("LLM")
 
 
+def _in_decision_list(model: str, settings: Settings) -> bool:
+    """Le nom de base suffit : « nimble » couvre « nimble:latest » et « nimble:9b »."""
+    name = (model or "").strip().lower()
+    return name in settings.LLM_DECISION_MODELS or name.split(":")[0] in settings.LLM_DECISION_MODELS
+
+
 @LLM_PROVIDERS.register("ollama")
 class OllamaLLM(LLMProvider):
     """LLM local via Ollama. L'API chat d'Ollama n'accepte pas d'audio."""
@@ -101,7 +119,44 @@ class OllamaLLM(LLMProvider):
 
     @classmethod
     def describe(cls, settings: Settings) -> str:
-        return f"Ollama ({settings.OLLAMA_MODEL} @ {settings.OLLAMA_HOST})"
+        kind = ", modèle de décision" if _in_decision_list(settings.OLLAMA_MODEL, settings) else ""
+        return f"Ollama ({settings.OLLAMA_MODEL} @ {settings.OLLAMA_HOST}{kind})"
+
+    @property
+    def host(self) -> str:
+        return (self.settings.OLLAMA_HOST or "http://localhost:11434").rstrip("/")
+
+    def is_decision_model(self, model=None) -> bool:
+        return _in_decision_list(model or self.model, self.settings)
+
+    def decide(self, state, questions) -> dict:
+        import httpx
+        response = httpx.post(
+            f"{self.host}/v1/systemone",
+            json={"model": self.model, "state": state, "questions": questions},
+            timeout=self.settings.LLM_DECISION_TIMEOUT,
+        )
+        if response.status_code != 200:
+            try:
+                detail = response.json().get("error", response.text)
+            except ValueError:
+                detail = response.text
+            raise RuntimeError(f"décision refusée par Ollama ({response.status_code}) : {detail}")
+        return response.json()["answers"]
+
+    def list_models(self) -> list[dict]:
+        import httpx
+        tags = httpx.get(f"{self.host}/api/tags", timeout=10).json().get("models", [])
+        models = []
+        for tag in tags:
+            name = tag.get("name") or tag.get("model")
+            try:
+                info = httpx.post(f"{self.host}/api/show", json={"model": name}, timeout=10).json()
+                capabilities = info.get("capabilities") or []
+            except Exception:
+                capabilities = []
+            models.append({"name": name, "capabilities": capabilities, "size": tag.get("size", 0)})
+        return sorted(models, key=lambda m: m["name"])
 
     def chat(self, messages, *, tools=None, audio_wav=None, model=None, stream=False, think=False, on_token=None) -> LLMResponse:
         if audio_wav:

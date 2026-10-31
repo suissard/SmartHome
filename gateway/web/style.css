@@ -245,3 +245,55 @@ svg { width: 24px; height: 24px; fill: currentColor; }
 .confirm p#confirm-question { color: var(--text); font-size: 17px; }
 .countdown { height: 4px; border-radius: 4px; background: var(--surface-2); overflow: hidden; }
 .countdown span { display: block; height: 100%; width: 100%; background: var(--warn); transform-origin: left; }
+
+/* ---- Modèle & paramètres ---- */
+.model-badge {
+  font-size: 12px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--muted);
+  max-width: 34vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.model-badge.decision { color: var(--accent); }
+@media (max-width: 380px) { .model-badge { display: none; } }
+
+.block { border-top: 1px solid var(--border); margin-top: 16px; padding-top: 14px; }
+.block h3, .group summary { font-size: 16px; margin: 0 0 6px; }
+.row { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }
+.row select { flex: 1; min-width: 0; }
+.toggle small { display: block; color: var(--muted); font-size: 13px; margin-top: 2px; }
+
+.sheet select, .sheet textarea, .sheet input[type="number"] {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+}
+.sheet textarea { resize: vertical; min-height: 84px; }
+.sheet.wide { width: min(620px, calc(100vw - 32px)); }
+
+.group { border: 1px solid var(--border); border-radius: 14px; padding: 10px 14px; margin-bottom: 10px; }
+.group summary { cursor: pointer; margin: 0; }
+.group[open] summary { margin-bottom: 10px; }
+.field { margin-bottom: 14px; }
+.field .help { font-size: 13px; color: var(--muted); margin: 4px 0 0; }
+.field.changed label { color: var(--accent); }
+.tag {
+  display: inline-block;
+  margin-left: 6px;
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--warn);
+  vertical-align: 1px;
+}
+.ok-text { color: var(--ok) !important; }
+.actions.sticky { position: sticky; bottom: -20px; background: var(--surface); padding: 10px 0 4px; margin-bottom: -4px; }
