@@ -31,12 +31,18 @@ if str(_ROOT_DIR) not in sys.path:
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
-from starlette.routing import Route, WebSocketRoute
+from starlette.routing import Mount, Route, WebSocketRoute
+from starlette.staticfiles import StaticFiles
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from core.assistant import AssistantCore, Reply
 from core.config import Settings
-from core.security import BearerTokenMiddleware, bearer_from_headers, token_matches
+from core.security import (
+    BearerTokenMiddleware, LocalOnlyMiddleware, SecurityHeadersMiddleware, bearer_from_headers, token_matches,
+)
+
+# Interface web (PWA) servie à la racine : publique, elle ne contient aucun secret (le jeton est saisi par l'utilisateur)
+WEB_DIR = Path(__file__).resolve().parent / "web"
 
 # Code de fermeture WebSocket pour un jeton refusé (plage 4000-4999 réservée aux applications)
 WS_UNAUTHORIZED = 4401
@@ -132,7 +138,19 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
             finally:
                 push({"type": "done"})
 
-        push({"type": "ready", "session": session.id, "tools": [t.name for t in core.tools.all()]})
+        push({
+            "type": "ready",
+            "session": session.id,
+            "tools": [t.name for t in core.tools.all()],
+            # Réglages utiles au client (détection de fin de phrase côté navigateur, délai de confirmation)
+            "audio": {
+                "sample_rate": s.AUDIO_RATE,
+                "voice_threshold": s.VOICE_THRESHOLD / 32768.0,
+                "silence_duration": s.SILENCE_DURATION,
+                "max_speech_duration": s.MAX_SPEECH_DURATION,
+            },
+            "confirm_timeout": s.GATEWAY_CONFIRM_TIMEOUT,
+        })
         sender_task = asyncio.create_task(sender())
         tasks: set[asyncio.Task] = set()
         try:
@@ -174,9 +192,11 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
         Route("/health", health),
         Route("/api/ask", ask, methods=["POST"]),
         WebSocketRoute("/ws", websocket_endpoint),
+        Mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web"),
     ])
     # Les WebSockets sont authentifiés par leur handler (les navigateurs ne peuvent pas envoyer d'en-tête)
-    return BearerTokenMiddleware(app, token, exempt_paths={"/health"}) if token else app
+    secured = BearerTokenMiddleware(app, token, protected_prefixes=("/api/",)) if token else LocalOnlyMiddleware(app)
+    return SecurityHeadersMiddleware(secured)
 
 
 def build_server(core: AssistantCore, settings: Optional[Settings] = None):

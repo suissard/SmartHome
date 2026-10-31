@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0f1115" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#f6f7f9" media="(prefers-color-scheme: light)">
+  <meta name="description" content="Piloter son ordinateur à la voix, depuis n'importe quel appareil.">
+  <title>SmartHome</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  <link rel="stylesheet" href="style.css">
+  <script src="app.js" type="module"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <img src="icon.svg" alt="" width="28" height="28">
+      <span>SmartHome</span>
+    </div>
+    <span id="status" class="status" data-state="offline">Hors ligne</span>
+    <button id="settings-btn" class="icon-btn" type="button" aria-label="Réglages">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Zm8.6-2.3-1.9-.4a7 7 0 0 0-.6-1.5l1.1-1.6-1.6-1.6-1.6 1.1c-.5-.3-1-.5-1.5-.6l-.4-1.9h-2.2l-.4 1.9c-.5.1-1 .3-1.5.6L6.4 8.1 4.8 9.7l1.1 1.6c-.3.5-.5 1-.6 1.5l-1.9.4v2.2l1.9.4c.1.5.3 1 .6 1.5l-1.1 1.6 1.6 1.6 1.6-1.1c.5.3 1 .5 1.5.6l.4 1.9h2.2l.4-1.9c.5-.1 1-.3 1.5-.6l1.6 1.1 1.6-1.6-1.1-1.6c.3-.5.5-1 .6-1.5l1.9-.4v-2.2Z"/></svg>
+    </button>
+  </header>
+
+  <main id="log" class="log" aria-live="polite">
+    <div id="empty" class="empty">
+      <p class="empty-title">Bonjour 👋</p>
+      <p>Touchez le micro et parlez, ou écrivez votre demande.</p>
+      <p class="hint">« Mets le volume à 30 % » · « Ouvre Firefox » · « Mets la musique en pause »</p>
+    </div>
+  </main>
+
+  <footer class="composer">
+    <button id="mic" class="mic" type="button" aria-label="Parler" data-state="idle" disabled>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.9V21h2v-3.1A7 7 0 0 0 19 11h-2Z"/></svg>
+      <span class="mic-level" aria-hidden="true"></span>
+    </button>
+    <form id="text-form" class="text-form" autocomplete="off">
+      <input id="text" type="text" placeholder="Écrire une demande…" aria-label="Demande écrite" enterkeyhint="send" disabled>
+      <button class="send" type="submit" aria-label="Envoyer" disabled>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.4 20.4 21 12 3.4 3.6 3.4 10l12.6 2-12.6 2z"/></svg>
+      </button>
+    </form>
+  </footer>
+
+  <!-- Connexion : saisie du jeton de la passerelle -->
+  <dialog id="setup" class="sheet">
+    <form method="dialog" id="setup-form">
+      <h2>Connexion</h2>
+      <p>Saisissez le jeton de la passerelle (<code>GATEWAY_AUTH_TOKEN</code> dans le fichier <code>.env</code>). Il reste enregistré sur cet appareil.</p>
+      <label for="token">Jeton</label>
+      <input id="token" type="password" autocomplete="current-password" spellcheck="false" placeholder="Laisser vide en local sans jeton">
+      <p id="setup-error" class="error" hidden></p>
+      <div class="actions">
+        <button type="submit" class="primary">Se connecter</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Réglages -->
+  <dialog id="settings" class="sheet">
+    <form method="dialog">
+      <h2>Réglages</h2>
+      <label class="toggle">
+        <input id="speak" type="checkbox">
+        <span>Réponse vocale sur cet appareil</span>
+      </label>
+      <label class="toggle">
+        <input id="autostop" type="checkbox">
+        <span>Arrêter l'écoute automatiquement à la fin de la phrase</span>
+      </label>
+      <p class="meta">Session : <code id="session-id">—</code></p>
+      <div class="actions stacked">
+        <button type="button" id="reset-btn">Nouvelle conversation</button>
+        <button type="button" id="logout-btn" class="danger">Oublier le jeton</button>
+        <button type="submit" class="primary">Fermer</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Confirmation d'une action dangereuse -->
+  <dialog id="confirm" class="sheet confirm">
+    <form method="dialog">
+      <h2>Confirmation</h2>
+      <p id="confirm-question"></p>
+      <div class="countdown"><span id="confirm-bar"></span></div>
+      <div class="actions">
+        <button type="submit" value="no" id="confirm-no">Non</button>
+        <button type="submit" value="yes" class="danger">Oui, confirmer</button>
+      </div>
+    </form>
+  </dialog>
+</body>
+</html>

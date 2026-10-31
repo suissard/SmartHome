@@ -181,5 +181,44 @@ class TestGateway(unittest.TestCase):
             self.assertEqual(tool["executed"], accepted)
 
 
+
+class TestWebClientServing(unittest.TestCase):
+    def test_web_ui_is_public_with_security_headers(self):
+        settings = Settings(**{**SETTINGS.model_dump(), "GATEWAY_AUTH_TOKEN": TOKEN})
+        client = TestClient(create_app(make_core([]), settings))
+        for path in ("/", "/app.js", "/recorder-worklet.js", "/manifest.webmanifest", "/sw.js", "/icon-192.png"):
+            r = client.get(path)
+            self.assertEqual(r.status_code, 200, path)
+        r = client.get("/")
+        self.assertIn("SmartHome", r.text)
+        self.assertIn("script-src 'self'", r.headers["content-security-policy"])
+        self.assertEqual(client.post("/api/ask", json={"text": "x"}).status_code, 401)
+
+    def test_ready_message_carries_audio_settings(self):
+        client = TestClient(create_app(make_core([]), SETTINGS))
+        with client.websocket_connect("/ws") as ws:
+            ready = ws.receive_json()
+        self.assertEqual(ready["audio"]["sample_rate"], SETTINGS.AUDIO_RATE)
+        self.assertAlmostEqual(ready["audio"]["voice_threshold"], SETTINGS.VOICE_THRESHOLD / 32768.0)
+        self.assertEqual(ready["confirm_timeout"], SETTINGS.GATEWAY_CONFIRM_TIMEOUT)
+
+    def test_proxied_requests_need_a_token(self):
+        proxied = {"Tailscale-User-Login": "someone@example.com", "X-Forwarded-For": "100.64.0.2"}
+        open_client = TestClient(create_app(make_core([]), SETTINGS))  # pas de jeton
+        self.assertEqual(open_client.get("/").status_code, 200)
+        self.assertEqual(open_client.get("/", headers=proxied).status_code, 403)
+        with self.assertRaises(WebSocketDisconnect) as ctx:
+            with open_client.websocket_connect("/ws", headers=proxied) as ws:
+                ws.receive_json()
+        self.assertEqual(ctx.exception.code, 4403)
+
+        settings = Settings(**{**SETTINGS.model_dump(), "GATEWAY_AUTH_TOKEN": TOKEN})
+        secured = TestClient(create_app(make_core([]), settings))
+        self.assertEqual(secured.get("/", headers=proxied).status_code, 200)
+        with secured.websocket_connect("/ws", headers=proxied) as ws:
+            ws.send_json({"type": "auth", "token": TOKEN})
+            self.assertEqual(ws.receive_json()["type"], "ready")
+
+
 if __name__ == "__main__":
     unittest.main()

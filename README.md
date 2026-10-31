@@ -232,20 +232,29 @@ FEEDBACK_SOUND_VOLUME=0.5
 
 ## 🌍 Accès Distant (LAN & Tailscale)
 
-La passerelle permet de parler à SmartHome depuis un autre appareil (téléphone, portable...) : texte ou audio en entrée, réponse en streaming, voix synthétisée renvoyée, confirmations des actions dangereuses.
+La passerelle permet de parler à SmartHome depuis un autre appareil : **application web installable (PWA)** sur téléphone, client console, ou API HTTP. Réponse en streaming, voix synthétisée renvoyée à l'appareil, confirmation des actions dangereuses à l'écran.
 
-1. Générer un jeton et le placer dans `.env` :
+### Téléphone (recommandé) : `tailscale serve`
+Le micro d'un navigateur exige le HTTPS : `tailscale serve` le fournit (certificat automatique) en relayant la passerelle restée en local.
+
+1. Générer un jeton et le placer dans `.env` (`GATEWAY_AUTH_TOKEN=<jeton>`, `GATEWAY_ENABLED=true`, `GATEWAY_HOST=127.0.0.1`) :
    ```bash
    openssl rand -hex 32
    ```
-   puis `GATEWAY_AUTH_TOKEN=<jeton>` et `GATEWAY_HOST=<IP Tailscale 100.x.y.z>` (`tailscale ip -4`).
-2. Lancer avec le micro local (`GATEWAY_ENABLED=true python main.py`) ou sans micro (`python -m gateway`).
-3. Depuis l'autre appareil :
+2. Lancer SmartHome (`python main.py`, ou `python -m gateway` sans micro), puis publier la passerelle sur le tailnet :
    ```bash
-   python -m gateway.client --url ws://100.x.y.z:8765/ws --token <jeton>
+   tailscale serve --bg 8765
    ```
+   (`tailscale serve status` affiche l'adresse `https://<machine>.<tailnet>.ts.net`, `tailscale serve reset` arrête la publication ; MagicDNS et HTTPS doivent être activés dans la console Tailscale.)
+3. Sur le téléphone (connecté à Tailscale), ouvrir cette adresse, saisir le jeton, puis « Ajouter à l'écran d'accueil ».
 
-Sans jeton, la passerelle refuse d'écouter ailleurs que sur `127.0.0.1`. Pour un client navigateur (micro du téléphone), le HTTPS est requis : `tailscale serve` fournit le certificat devant la passerelle.
+Sans jeton configuré, la passerelle refuse toute requête relayée par un proxy : `tailscale serve` ne peut donc pas ouvrir l'accès à tout le tailnet par erreur.
+
+### Client console / script
+Avec `GATEWAY_HOST` sur l'IP Tailscale (`tailscale ip -4`) ou derrière `tailscale serve` :
+```bash
+python -m gateway.client --url ws://100.x.y.z:8765/ws --token <jeton>
+```
 
 ## 🔌 Serveur MCP Universel (Model Context Protocol)
 
