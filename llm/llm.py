@@ -1,5 +1,6 @@
 """
-Conversation avec le LLM : historique glissant, prompt système dynamique et affichage du streaming.
+Conversation avec le LLM : historique glissant, prompt système dynamique, affichage du streaming
+et boucle d'appel d'outils (function calling natif, ou tags [VOLUME 40] en repli).
 Le fournisseur (Ollama, OpenRouter...) est choisi via LLM_PROVIDER dans le registre `llm.providers`.
 
 API publique conservée : ask_llm(), get_history(), clear_history(), add_history_message(), get_default_system_prompt().
@@ -16,21 +17,37 @@ if str(_ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(_ROOT_DIR))
 
 from core.config import Settings, get_settings
-from llm.providers import LLM_PROVIDERS, LLMProvider
+from core.tools import ToolRegistry, ToolResult, build_tool_registry
+from llm.providers import LLM_PROVIDERS, LLMProvider, ToolsNotSupportedError
 
 _THINK_TAGS = re.compile(r"<think>.*?</think>", flags=re.DOTALL)
 
+_NATIVE_TOOLS_GUIDANCE = """
 
-def get_default_system_prompt(settings: Optional[Settings] = None) -> str:
-    """Retourne le prompt système enrichi dynamiquement avec les commandes d'actions."""
+### ⚡ OUTILS :
+Tu peux agir sur l'ordinateur et la maison grâce aux outils fournis.
+1. N'appelle un outil QUE si l'utilisateur le demande expressément.
+2. Après l'exécution, réponds par une courte phrase de confirmation orale (sans markdown).
+3. Si un outil échoue ou si l'action est annulée, dis-le simplement à l'utilisateur."""
+
+
+def get_default_system_prompt(settings: Optional[Settings] = None, use_tags: Optional[bool] = None) -> str:
+    """Retourne le prompt système enrichi : liste des tags d'actions (mode tags) ou consignes d'outils (mode natif)."""
     s = settings or get_settings()
-    if s.ACTIONS_DYNAMIC_PROMPT:
-        try:
-            from actions.manager import get_action_manager
-            return get_action_manager().build_dynamic_system_prompt(s.LLM_SYSTEM_PROMPT)
-        except Exception as e:
-            print(f"⚠️ [LLM] Erreur lors de la construction du prompt dynamique : {e}")
-    return s.LLM_SYSTEM_PROMPT
+    if use_tags is None:
+        use_tags = s.LLM_TOOL_CALLING == "tags"
+    if not s.ACTIONS_DYNAMIC_PROMPT:
+        return s.LLM_SYSTEM_PROMPT
+    if not use_tags:
+        return s.LLM_SYSTEM_PROMPT.strip() + _NATIVE_TOOLS_GUIDANCE
+    if not s.ACTIONS_ENABLED:
+        return s.LLM_SYSTEM_PROMPT
+    try:
+        from actions.manager import get_action_manager
+        return get_action_manager().build_dynamic_system_prompt(s.LLM_SYSTEM_PROMPT)
+    except Exception as e:
+        print(f"⚠️ [LLM] Erreur lors de la construction du prompt dynamique : {e}")
+        return s.LLM_SYSTEM_PROMPT
 
 
 def _print_token(token: str):
@@ -40,11 +57,31 @@ def _print_token(token: str):
 class Conversation:
     """Une conversation : historique des N derniers messages + appels au fournisseur LLM."""
 
-    def __init__(self, provider: Optional[LLMProvider] = None, settings: Optional[Settings] = None):
+    def __init__(
+        self,
+        provider: Optional[LLMProvider] = None,
+        settings: Optional[Settings] = None,
+        tools: Optional[ToolRegistry] = None,
+    ):
         self.settings = settings or get_settings()
         self._provider = provider
+        self._tools = tools
         self.max_messages = self.settings.LLM_HISTORY_MESSAGES
         self.history: list[dict] = []
+        # "auto" bascule définitivement sur "tags" si le modèle refuse les outils
+        self.tool_mode = self.settings.LLM_TOOL_CALLING
+        self.last_tool_results: list[ToolResult] = []
+
+    @property
+    def tools(self) -> ToolRegistry:
+        # Construit au premier besoin, pour inclure les outils des serveurs MCP connectés entre-temps
+        if self._tools is None:
+            self._tools = build_tool_registry(self.settings)
+        return self._tools
+
+    def refresh_tools(self):
+        """Reconstruit le registre d'outils (ex: après connexion du hub MCP)."""
+        self._tools = None
 
     @property
     def provider(self) -> LLMProvider:
@@ -76,25 +113,32 @@ class Conversation:
         stream: Optional[bool] = None,
         think: Optional[bool] = None,
         use_history: bool = True,
+        use_tools: bool = True,
     ) -> str:
         """Envoie un prompt texte ou un enregistrement audio et retourne la réponse (ou un message ⚠️ en cas d'erreur)."""
         stream = self.settings.LLM_STREAM if stream is None else stream
         think = self.settings.LLM_THINK if think is None else think
+        self.last_tool_results = []
 
-        messages = [{"role": "system", "content": system_prompt or get_default_system_prompt(self.settings)}]
-        if use_history:
-            messages.extend(self.history)
-        messages.append({"role": "user", "content": prompt or ""})
+        def build_messages(use_tags: bool) -> list[dict]:
+            messages = [{"role": "system", "content": system_prompt or get_default_system_prompt(self.settings, use_tags)}]
+            if use_history:
+                messages.extend(self.history)
+            messages.append({"role": "user", "content": prompt or ""})
+            return messages
 
+        # Le registre contient les actions activées et les outils MCP : vide => pas d'outils à proposer
+        native = use_tools and self.tool_mode != "tags" and bool(self.tools.all())
+        options = dict(audio_wav=audio_bytes, model=model, stream=stream, think=think, on_token=_print_token if stream else None)
         try:
-            full_text = self.provider.chat(
-                messages,
-                audio_wav=audio_bytes,
-                model=model,
-                stream=stream,
-                think=think,
-                on_token=_print_token if stream else None,
-            )
+            try:
+                full_text = self._run(build_messages(use_tags=not native), native, options)
+            except ToolsNotSupportedError:
+                if self.tool_mode != "auto":
+                    raise
+                print("\nℹ️ [LLM] Le modèle ne gère pas les outils : repli sur les tags d'actions.")
+                self.tool_mode = "tags"
+                full_text = self._run(build_messages(use_tags=True), False, options)
             if stream:
                 print()
         except Exception as e:
@@ -109,6 +153,26 @@ class Conversation:
             self.add_message("user", prompt or ("🎙️ [Message vocal]" if audio_bytes else ""))
             self.add_message("assistant", full_text)
         return full_text
+
+    def _run(self, messages: list[dict], native: bool, options: dict) -> str:
+        """Interroge le LLM ; en mode natif, exécute les outils demandés et renvoie leurs résultats jusqu'à la réponse finale."""
+        schemas = self.tools.schemas() if native else None
+        response = None
+        for _ in range(self.settings.LLM_MAX_TOOL_ROUNDS):
+            response = self.provider.chat(messages, tools=schemas, **options)
+            if not response.tool_calls:
+                return response.text
+            messages.append(self.provider.assistant_message(response))
+            for call in response.tool_calls:
+                result = self.tools.call(call)
+                self.last_tool_results.append(result)
+                messages.append(self.provider.tool_message(result))
+
+        # Trop d'allers-retours : on résume ce qui a été fait plutôt que de boucler
+        done = [r.call.name for r in self.last_tool_results if r.executed]
+        return (response.text if response else "") or (
+            f"J'ai exécuté : {', '.join(done)}." if done else "Je n'ai pas réussi à terminer cette demande."
+        )
 
 
 # Conversation par défaut (processus mono-utilisateur : main.py, serveur MCP)
@@ -145,6 +209,7 @@ def ask_llm(
     stream: Optional[bool] = None,
     think: Optional[bool] = None,
     use_history: bool = True,
+    use_tools: bool = True,
 ) -> str:
     """Interroge le fournisseur LLM configuré via la conversation par défaut."""
     return get_conversation().ask(
@@ -155,6 +220,7 @@ def ask_llm(
         stream=stream,
         think=think,
         use_history=use_history,
+        use_tools=use_tools,
     )
 
 

@@ -54,19 +54,8 @@ Règles impératives :
 Exemples de comportement attendu :
 {chr(10).join(examples_lines[:5])}"""
 
+        # Les outils MCP ne sont utilisables qu'en function calling natif (voir core/tools.py)
         prompt_result = base_prompt.strip() + "\n" + dynamic_section
-
-        # Enrichissement optionnel avec les outils des serveurs MCP connectés
-        try:
-            from core.config import MCP_CLIENT_ENABLED
-            if MCP_CLIENT_ENABLED:
-                from core.mcp_hub import get_mcp_hub
-                hub = get_mcp_hub()
-                mcp_section = hub.build_dynamic_prompt_section()
-                if mcp_section:
-                    prompt_result += "\n" + mcp_section
-        except Exception:
-            pass
 
         return prompt_result
 
@@ -105,6 +94,11 @@ Exemples de comportement attendu :
         """Exécute l'action en déléguant son exécution à son propre script embarqué."""
         cmd_def: BaseAction = action["definition"]
         args = action.get("args", "")
+        if cmd_def.danger == "confirm" and not dry_run:
+            from core.tools import request_confirmation
+            if not request_confirmation(cmd_def.description):
+                print(f"⛔ [ACTIONS] [{cmd_def.tag}] annulé (non confirmé).")
+                return False
         return cmd_def.execute(args, dry_run=dry_run)
 
     def process_response(self, response_text: str, dry_run: bool = False) -> str:

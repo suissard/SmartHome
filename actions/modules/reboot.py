@@ -24,6 +24,7 @@ class RebootAction(BaseAction):
             description="Redémarrer l'ordinateur.",
             script_code=_REBOOT_SCRIPT,
             has_args=False,
+            danger="confirm",
             example_prompt="Redémarre le système.",
             example_response="[REBOOT] Redémarrage de la machine en cours."
         )

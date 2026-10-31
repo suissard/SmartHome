@@ -1,10 +1,13 @@
 """
 Fournisseurs LLM : interface commune `LLMProvider` + implémentations Ollama (local) et OpenRouter (cloud).
-Un fournisseur ne gère ni l'historique ni le prompt système : il reçoit une liste de messages et renvoie le texte.
+Un fournisseur ne gère ni l'historique ni le prompt système : il reçoit une liste de messages (et
+éventuellement des définitions d'outils) et renvoie un `LLMResponse` (texte + appels d'outils demandés).
 """
 
 import base64
+import json
 import sys
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -14,8 +17,24 @@ if str(_ROOT_DIR) not in sys.path:
 
 from core.config import Settings
 from core.providers import ProviderRegistry, require_openrouter_key
+from core.tools import ToolCall, ToolResult, parse_arguments
 
 TokenCallback = Callable[[str], None]
+
+
+@dataclass
+class LLMResponse:
+    text: str = ""
+    tool_calls: list[ToolCall] = field(default_factory=list)
+
+
+class ToolsNotSupportedError(RuntimeError):
+    """Le modèle refuse les définitions d'outils (function calling indisponible)."""
+
+
+def _is_tools_unsupported(error: Exception) -> bool:
+    msg = str(error).lower()
+    return "support tool" in msg or "tools are not supported" in msg
 
 
 class LLMProvider:
@@ -38,15 +57,33 @@ class LLMProvider:
         self,
         messages: list[dict],
         *,
+        tools: Optional[list[dict]] = None,
         audio_wav: Optional[bytes] = None,
         model: Optional[str] = None,
         stream: bool = False,
         think: bool = False,
         on_token: Optional[TokenCallback] = None,
-    ) -> str:
-        """Envoie les messages (le dernier étant le tour utilisateur) et retourne la réponse complète.
-        En streaming, chaque fragment est transmis à `on_token`. Lève une exception en cas d'échec."""
+    ) -> LLMResponse:
+        """Envoie les messages (le dernier étant le tour utilisateur ou un résultat d'outil).
+        En streaming, chaque fragment de texte est transmis à `on_token`. Lève une exception en cas d'échec,
+        `ToolsNotSupportedError` si le modèle ne gère pas les outils."""
         raise NotImplementedError
+
+    # Formats des messages d'outils (format OpenAI par défaut)
+    def assistant_message(self, response: LLMResponse) -> dict:
+        """Message assistant à réinjecter dans la conversation après une demande d'appel d'outils."""
+        return {
+            "role": "assistant",
+            "content": response.text or None,
+            "tool_calls": [
+                {"id": c.id, "type": "function", "function": {"name": c.name, "arguments": json.dumps(c.arguments, ensure_ascii=False)}}
+                for c in response.tool_calls
+            ],
+        }
+
+    def tool_message(self, result: ToolResult) -> dict:
+        """Message transmettant le résultat d'un outil au LLM."""
+        return {"role": "tool", "tool_call_id": result.call.id, "content": result.output}
 
 
 LLM_PROVIDERS: ProviderRegistry[LLMProvider] = ProviderRegistry("LLM")
@@ -66,34 +103,51 @@ class OllamaLLM(LLMProvider):
     def describe(cls, settings: Settings) -> str:
         return f"Ollama ({settings.OLLAMA_MODEL} @ {settings.OLLAMA_HOST})"
 
-    def chat(self, messages, *, audio_wav=None, model=None, stream=False, think=False, on_token=None) -> str:
+    def chat(self, messages, *, tools=None, audio_wav=None, model=None, stream=False, think=False, on_token=None) -> LLMResponse:
         if audio_wav:
             raise RuntimeError(
                 "Ollama ne prend pas en charge l'audio direct. Utilisez STT_PROVIDER=whisper ou LLM_PROVIDER=openrouter."
             )
-        target_model = model or self.model
+        kwargs = {"model": model or self.model, "messages": messages, "stream": stream}
+        if tools:
+            kwargs["tools"] = tools
         try:
-            response = self.client.chat(model=target_model, messages=messages, stream=stream, think=think)
-        except TypeError:
-            # Fallback pour versions d'Ollama ne supportant pas l'argument explicite think
-            response = self.client.chat(model=target_model, messages=messages, stream=stream)
+            try:
+                response = self.client.chat(**kwargs, think=think)
+            except TypeError:
+                # Fallback pour versions d'Ollama ne supportant pas l'argument explicite think
+                response = self.client.chat(**kwargs)
+            chunks = response if stream else [response]
 
-        if not stream:
-            return _ollama_content(response)
+            result = LLMResponse()
+            for chunk in chunks:
+                msg = chunk.message if hasattr(chunk, "message") else chunk.get("message", {})
+                content = (msg.content if hasattr(msg, "content") else msg.get("content", "")) or ""
+                if content:
+                    result.text += content
+                    if on_token and stream:
+                        on_token(content)
+                for i, tc in enumerate(getattr(msg, "tool_calls", None) or []):
+                    result.tool_calls.append(ToolCall(
+                        name=tc.function.name,
+                        arguments=parse_arguments(tc.function.arguments),
+                        id=f"call_{len(result.tool_calls)}",
+                    ))
+            return result
+        except Exception as e:
+            if tools and _is_tools_unsupported(e):
+                raise ToolsNotSupportedError(str(e)) from e
+            raise
 
-        full_text = ""
-        for chunk in response:
-            content = _ollama_content(chunk)
-            if content:
-                full_text += content
-                if on_token:
-                    on_token(content)
-        return full_text
+    def assistant_message(self, response: LLMResponse) -> dict:
+        return {
+            "role": "assistant",
+            "content": response.text,
+            "tool_calls": [{"function": {"name": c.name, "arguments": c.arguments}} for c in response.tool_calls],
+        }
 
-
-def _ollama_content(response) -> str:
-    msg = response.message if hasattr(response, "message") else response.get("message", {})
-    return (msg.content if hasattr(msg, "content") else msg.get("content", "")) or ""
+    def tool_message(self, result: ToolResult) -> dict:
+        return {"role": "tool", "content": result.output, "tool_name": result.call.name}
 
 
 @LLM_PROVIDERS.register("openrouter")
@@ -112,30 +166,62 @@ class OpenRouterLLM(LLMProvider):
     def describe(cls, settings: Settings) -> str:
         return f"OpenRouter ({settings.OPENROUTER_MODEL})"
 
-    def chat(self, messages, *, audio_wav=None, model=None, stream=False, think=False, on_token=None) -> str:
+    def chat(self, messages, *, tools=None, audio_wav=None, model=None, stream=False, think=False, on_token=None) -> LLMResponse:
         require_openrouter_key(self.settings)
 
         if audio_wav:
-            # Le dernier message (tour utilisateur) devient multimodal : texte éventuel + audio base64
+            # Le dernier tour utilisateur devient multimodal : texte éventuel + audio base64
             messages = list(messages)
-            user_msg = messages[-1]
+            idx = max(i for i, m in enumerate(messages) if m["role"] == "user")
             content = [{"type": "input_audio", "input_audio": {"data": base64.b64encode(audio_wav).decode("utf-8"), "format": "wav"}}]
-            if user_msg.get("content"):
-                content.insert(0, {"type": "text", "text": user_msg["content"]})
-            messages[-1] = {"role": "user", "content": content}
+            if messages[idx].get("content"):
+                content.insert(0, {"type": "text", "text": messages[idx]["content"]})
+            messages[idx] = {"role": "user", "content": content}
 
-        response = self.client.chat.completions.create(model=model or self.model, messages=messages, stream=stream)
+        kwargs = {"model": model or self.model, "messages": messages, "stream": stream}
+        if tools:
+            kwargs["tools"] = tools
+        try:
+            response = self.client.chat.completions.create(**kwargs)
+        except Exception as e:
+            if tools and _is_tools_unsupported(e):
+                raise ToolsNotSupportedError(str(e)) from e
+            raise
+
         if not stream:
-            return response.choices[0].message.content or ""
+            msg = response.choices[0].message
+            return LLMResponse(
+                text=msg.content or "",
+                tool_calls=[
+                    ToolCall(name=tc.function.name, arguments=parse_arguments(tc.function.arguments), id=tc.id)
+                    for tc in (msg.tool_calls or [])
+                ],
+            )
 
-        full_text = ""
+        # Streaming : le texte est transmis au fil de l'eau, les appels d'outils arrivent par fragments indexés
+        text, partial_calls = "", {}
         for chunk in response:
-            if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
-                content = chunk.choices[0].delta.content
-                full_text += content
+            if not chunk.choices or not chunk.choices[0].delta:
+                continue
+            delta = chunk.choices[0].delta
+            if delta.content:
+                text += delta.content
                 if on_token:
-                    on_token(content)
-        return full_text
+                    on_token(delta.content)
+            for tc in delta.tool_calls or []:
+                acc = partial_calls.setdefault(tc.index, {"id": "", "name": "", "arguments": ""})
+                if tc.id:
+                    acc["id"] = tc.id
+                if tc.function and tc.function.name:
+                    acc["name"] += tc.function.name
+                if tc.function and tc.function.arguments:
+                    acc["arguments"] += tc.function.arguments
+
+        calls = [
+            ToolCall(name=c["name"], arguments=parse_arguments(c["arguments"]), id=c["id"] or f"call_{i}")
+            for i, c in sorted(partial_calls.items())
+        ]
+        return LLMResponse(text=text, tool_calls=calls)
 
 
 if __name__ == "__main__":

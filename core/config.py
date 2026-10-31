@@ -104,6 +104,10 @@ class Settings(BaseModel):
     LLM_STREAM: EnvBool = True
     LLM_THINK: EnvBool = False
     LLM_HISTORY_MESSAGES: int = Field(5, ge=0)
+    # Mode d'appel d'outils : "native" (function calling), "tags" ([VOLUME 40] dans le texte), "auto" (native puis repli tags)
+    LLM_TOOL_CALLING: Literal["auto", "native", "tags"] = "auto"
+    # Nombre maximal d'allers-retours outil -> LLM pour une même demande
+    LLM_MAX_TOOL_ROUNDS: int = Field(4, ge=1)
 
     # 🔊 TTS (Piper)
     TTS_VOICE: str = "fr_FR-siwis-medium"
@@ -135,6 +139,17 @@ class Settings(BaseModel):
         "code,vscodium,kate,gedit,dolphin,nautilus,thunar,kcalc,gnome-calculator,discord,steam,obs,gimp,libreoffice"
     )
 
+    # Confirmation vocale des actions dangereuses (extinction, redémarrage, outils MCP destructeurs)
+    ACTIONS_CONFIRM_DANGEROUS: EnvBool = True
+    ACTIONS_CONFIRM_TIMEOUT: float = Field(6.0, gt=0.0)
+    ACTIONS_CONFIRM_WORDS: CsvList = _parse_list("oui,ouais,confirme,confirmé,vas-y,vas y,ok,d'accord,go,yes")
+    # Un mot d'annulation l'emporte toujours sur un mot de confirmation ("oui... non attends")
+    ACTIONS_CANCEL_WORDS: CsvList = _parse_list("non,annule,annuler,stop,attends,pas")
+    # Question posée avant une action dangereuse ({action} = description de l'action)
+    ACTIONS_CONFIRM_PROMPT: str = "Tu confirmes : {action} ?"
+    # Durée maximale d'exécution d'une action locale appelée comme outil (secondes)
+    ACTIONS_TIMEOUT: float = Field(10.0, gt=0.0)
+
     # 🔉 Ducking
     DUCKING_ENABLED: EnvBool = True
     DUCKING_VOLUME_PERCENT: int = Field(20, ge=0, le=100)
@@ -152,7 +167,7 @@ class Settings(BaseModel):
     MCP_SERVERS_CONFIG_PATH: str = "mcp_servers.json"
 
     @field_validator(
-        "LLM_PROVIDER", "TTS_PROVIDER", "MCP_TRANSPORT",
+        "LLM_PROVIDER", "TTS_PROVIDER", "MCP_TRANSPORT", "LLM_TOOL_CALLING",
         "FEEDBACK_WAKEWORD_TYPE", "FEEDBACK_RESPONSE_END_TYPE", "FEEDBACK_TIMEOUT_TYPE",
         mode="before",
     )
@@ -275,6 +290,8 @@ LLM_SYSTEM_PROMPT = settings.LLM_SYSTEM_PROMPT
 LLM_STREAM = settings.LLM_STREAM
 LLM_THINK = settings.LLM_THINK
 LLM_HISTORY_MESSAGES = settings.LLM_HISTORY_MESSAGES
+LLM_TOOL_CALLING = settings.LLM_TOOL_CALLING
+LLM_MAX_TOOL_ROUNDS = settings.LLM_MAX_TOOL_ROUNDS
 
 TTS_VOICE = settings.TTS_VOICE
 TTS_MODEL_PATH, TTS_CONFIG_PATH = resolve_piper_voice(settings)
@@ -298,6 +315,12 @@ FEEDBACK_SOUND_VOLUME = settings.FEEDBACK_SOUND_VOLUME
 ACTIONS_ENABLED = settings.ACTIONS_ENABLED
 ACTIONS_DYNAMIC_PROMPT = settings.ACTIONS_DYNAMIC_PROMPT
 ACTIONS_OPEN_ALLOWED_APPS = settings.ACTIONS_OPEN_ALLOWED_APPS
+ACTIONS_CONFIRM_DANGEROUS = settings.ACTIONS_CONFIRM_DANGEROUS
+ACTIONS_CONFIRM_TIMEOUT = settings.ACTIONS_CONFIRM_TIMEOUT
+ACTIONS_CONFIRM_WORDS = settings.ACTIONS_CONFIRM_WORDS
+ACTIONS_CANCEL_WORDS = settings.ACTIONS_CANCEL_WORDS
+ACTIONS_CONFIRM_PROMPT = settings.ACTIONS_CONFIRM_PROMPT
+ACTIONS_TIMEOUT = settings.ACTIONS_TIMEOUT
 
 DUCKING_ENABLED = settings.DUCKING_ENABLED
 DUCKING_VOLUME_PERCENT = settings.DUCKING_VOLUME_PERCENT

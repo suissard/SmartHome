@@ -26,6 +26,7 @@ if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
 from mcp.server.mcpserver import MCPServer
+from mcp.types import ToolAnnotations
 
 from core.config import (
     MCP_TRANSPORT,
@@ -52,6 +53,7 @@ from actions.manager import get_action_manager
 from actions.registry import get_all_commands, get_command_by_tag
 from llm.llm import (
     ask_llm,
+    get_conversation,
     get_history,
     clear_history,
     add_history_message,
@@ -118,6 +120,11 @@ def _get_transcriber():
     return _transcriber_instance
 
 
+# Annotations MCP : indiquent aux clients (dont le hub SmartHome) quels outils exigent une confirmation
+READ_ONLY = ToolAnnotations(read_only_hint=True, destructive_hint=False)
+SAFE = ToolAnnotations(read_only_hint=False, destructive_hint=False)
+DESTRUCTIVE = ToolAnnotations(read_only_hint=False, destructive_hint=True)
+
 # Initialisation du serveur MCP
 app = MCPServer(
     name="smarthome",
@@ -129,7 +136,7 @@ app = MCPServer(
 # 🛠️ OUTILS MCP (TOOLS) — ACTIONS SYSTÈME & OS
 # ============================================================================
 
-@app.tool()
+@app.tool(annotations=READ_ONLY)
 def list_actions() -> list[dict]:
     """
     Retourne la liste complète de toutes les commandes et actions système disponibles dans SmartHome.
@@ -150,7 +157,7 @@ def list_actions() -> list[dict]:
     return result
 
 
-@app.tool()
+@app.tool(annotations=DESTRUCTIVE)
 def execute_action(tag: str, args: str = "", dry_run: bool = False) -> str:
     """
     Exécute une action système spécifique par son tag (ex: VOLUME, NOTIFY, OPEN, MEDIA_PLAY_PAUSE, LOCK, SCREEN_OFF, SHUTDOWN, REBOOT, MUTE, UNMUTE).
@@ -178,7 +185,7 @@ def execute_action(tag: str, args: str = "", dry_run: bool = False) -> str:
         return f"⚠️ Action [{cmd.tag}] terminée avec une erreur: {err_msg}"
 
 
-@app.tool()
+@app.tool(annotations=SAFE)
 def set_volume(volume: str) -> str:
     """
     Règle ou ajuste le volume sonore du système.
@@ -194,7 +201,7 @@ def set_volume(volume: str) -> str:
     return execute_action("VOLUME", clean_val)
 
 
-@app.tool()
+@app.tool(annotations=SAFE)
 def media_control(command: str) -> str:
     """
     Contrôle la lecture multimédia sur les applications compatibles MPRIS2 (Spotify, Firefox, VLC, etc.).
@@ -211,7 +218,7 @@ def media_control(command: str) -> str:
         return execute_action("MEDIA_PLAY_PAUSE")
 
 
-@app.tool()
+@app.tool(annotations=SAFE)
 def send_notification(message: str, title: str = "SmartHome") -> str:
     """
     Affiche une notification visuelle sur le bureau Linux (via notify-send, kdialog ou zenity).
@@ -224,7 +231,7 @@ def send_notification(message: str, title: str = "SmartHome") -> str:
     return execute_action("NOTIFY", args)
 
 
-@app.tool()
+@app.tool(annotations=SAFE)
 def open_application(app_name: str) -> str:
     """
     Lance une application installée sur l'ordinateur par son nom ou sa catégorie.
@@ -235,7 +242,7 @@ def open_application(app_name: str) -> str:
     return execute_action("OPEN", app_name)
 
 
-@app.tool()
+@app.tool(annotations=SAFE)
 def lock_session() -> str:
     """
     Verrouille immédiatement la session utilisateur courante du bureau.
@@ -243,7 +250,7 @@ def lock_session() -> str:
     return execute_action("LOCK")
 
 
-@app.tool()
+@app.tool(annotations=SAFE)
 def screen_off() -> str:
     """
     Met les écrans en veille / éteint l'affichage (DPMS off).
@@ -251,7 +258,7 @@ def screen_off() -> str:
     return execute_action("SCREEN_OFF")
 
 
-@app.tool()
+@app.tool(annotations=DESTRUCTIVE)
 def system_power(action: str) -> str:
     """
     Contrôle l'alimentation du système (extinction ou redémarrage).
@@ -272,7 +279,7 @@ def system_power(action: str) -> str:
 # 🔊 OUTILS MCP (TOOLS) — AUDIO, VOIX & RETOURS SONORES
 # ============================================================================
 
-@app.tool()
+@app.tool(annotations=SAFE)
 def tts_speak(text: str) -> str:
     """
     Synthétise et énonce vocalement le texte fourni sur les haut-parleurs via le moteur TTS configuré (Piper local ou OpenRouter).
@@ -295,7 +302,7 @@ def tts_speak(text: str) -> str:
         return f"⚠️ Erreur lors de la synthèse vocale : {e}"
 
 
-@app.tool()
+@app.tool(annotations=SAFE)
 def play_feedback_sound(sound_name: str = "ding", volume: float = 0.5) -> str:
     """
     Joue un signal sonore doux ou un carillon harmonique procédural.
@@ -315,7 +322,7 @@ def play_feedback_sound(sound_name: str = "ding", volume: float = 0.5) -> str:
         return f"⚠️ Erreur lors de la lecture du son '{sound_name}' : {e}"
 
 
-@app.tool()
+@app.tool(annotations=SAFE)
 def set_system_ducking(duck: bool = True, volume_percent: int = 20) -> str:
     """
     Atténue (ducking) ou rétablit (unducking) le volume des applications tierces (musique, vidéos, jeux).
@@ -340,7 +347,7 @@ def set_system_ducking(duck: bool = True, volume_percent: int = 20) -> str:
         return f"⚠️ Erreur lors de la gestion du ducking : {e}"
 
 
-@app.tool()
+@app.tool(annotations=READ_ONLY)
 def stt_transcribe_file(audio_path: str) -> str:
     """
     Transcrit un fichier audio (.wav) en texte à l'aide du moteur de transcription configuré (faster-whisper ou OpenRouter).
@@ -374,7 +381,7 @@ def stt_transcribe_file(audio_path: str) -> str:
 # 🧠 OUTILS MCP (TOOLS) — ASSISTANT & RAISONNEMENT
 # ============================================================================
 
-@app.tool()
+@app.tool(annotations=SAFE)
 def ask_assistant(prompt: str, execute_actions: bool = True, speak_response: bool = False) -> str:
     """
     Pose une question ou donne une instruction à l'assistant SmartHome (Ollama ou OpenRouter).
@@ -390,17 +397,18 @@ def ask_assistant(prompt: str, execute_actions: bool = True, speak_response: boo
         return "⚠️ Prompt vide."
 
     try:
-        raw_response = ask_llm(prompt=clean_prompt, stream=False, use_history=True)
+        raw_response = ask_llm(prompt=clean_prompt, stream=False, use_history=True, use_tools=execute_actions)
 
         processed_text = raw_response
-        executed_tags = []
+        # Outils appelés en function calling (les outils dangereux sont refusés : pas de confirmation possible ici)
+        executed_tags = [r.call.name for r in get_conversation().last_tool_results if r.executed]
 
         if execute_actions and ACTIONS_ENABLED and raw_response:
             action_mgr = get_action_manager()
             cleaned_text, detected_actions = action_mgr.extract_actions(raw_response)
             for act in detected_actions:
-                action_mgr.execute_action(act)
-                executed_tags.append(act.get("tag", ""))
+                if action_mgr.execute_action(act):
+                    executed_tags.append(act.get("tag", ""))
             processed_text = cleaned_text
 
         if speak_response and processed_text:
@@ -417,7 +425,7 @@ def ask_assistant(prompt: str, execute_actions: bool = True, speak_response: boo
         return f"⚠️ Erreur lors de la communication avec l'assistant : {e}"
 
 
-@app.tool()
+@app.tool(annotations=READ_ONLY)
 def get_conversation_history() -> list[dict]:
     """
     Retourne la liste des derniers échanges conversationnels conservés dans la mémoire de l'assistant.
@@ -425,7 +433,7 @@ def get_conversation_history() -> list[dict]:
     return get_history()
 
 
-@app.tool()
+@app.tool(annotations=SAFE)
 def clear_conversation_history() -> str:
     """
     Efface et réinitialise l'historique conversationnel en mémoire de l'assistant.

@@ -24,6 +24,7 @@ class ShutdownAction(BaseAction):
             description="Éteindre complètement l'ordinateur.",
             script_code=_SHUTDOWN_SCRIPT,
             has_args=False,
+            danger="confirm",
             example_prompt="Éteins l'ordinateur s'il te plaît.",
             example_response="[SHUTDOWN] J'éteins l'ordinateur. Bonne nuit !"
         )

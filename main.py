@@ -17,10 +17,12 @@ from audio.transcribe import VoiceTranscriber
 from audio.tts import TextToSpeech
 from audio.feedback import FeedbackManager
 from audio.ducking import AudioDucker
-from llm.llm import ask_llm
+from audio.confirm import VoiceConfirmer
+from llm.llm import ask_llm, get_conversation
 from llm.providers import LLM_PROVIDERS
 from actions import get_action_manager, get_all_commands
 from core.mcp_hub import get_mcp_hub
+from core.tools import set_confirmation_handler
 
 
 
@@ -74,16 +76,27 @@ def main():
     )
 
     settings = get_settings()
+    conversation = get_conversation()
+    # Les actions dangereuses (extinction, outils MCP destructeurs...) sont confirmées à la voix
+    set_confirmation_handler(VoiceConfirmer(tts, transcriber, stream, settings, conversation))
+
     llm_info = LLM_PROVIDERS.get(settings.LLM_PROVIDER).describe(settings)
     stt_info = transcriber.stt.describe(settings)
     tts_info = tts.engine.describe(settings)
     actions_info = f"Activées ({len(get_all_commands())} commandes prêtes)" if ACTIONS_ENABLED else "Désactivées"
+    tools = conversation.tools.all()
+    to_confirm = sum(1 for t in tools if t.danger == "confirm")
+    tools_info = (
+        f"{settings.LLM_TOOL_CALLING} ({len(tools)} outils dont {to_confirm} avec confirmation vocale)"
+        if settings.LLM_TOOL_CALLING != "tags" else "tags [ACTION] dans le texte"
+    )
 
     print(f"\n🟢 Démarrage de SmartHome")
     print(f"  • Cerveau LLM   : {llm_info} (Mémoire: {LLM_HISTORY_MESSAGES} msgs)")
     print(f"  • Écoute STT    : {stt_info}")
     print(f"  • Voix TTS      : {tts_info}")
     print(f"  • Actions OS    : {actions_info}")
+    print(f"  • Appel d'outils: {tools_info}")
     print(f"  • Hub MCP       : {mcp_info}")
     print(f"  • Veille active : {FOLLOW_UP_TIMEOUT}s\n")
 

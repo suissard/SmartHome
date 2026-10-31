@@ -20,7 +20,7 @@ if str(ROOT_DIR) not in sys.path:
 from core.config import Settings, load_settings
 from core.providers import ProviderRegistry
 from llm.llm import Conversation
-from llm.providers import LLMProvider
+from llm.providers import LLMProvider, LLMResponse
 from audio.stt import STT_PROVIDERS, create_stt
 from audio.tts import TextToSpeech, TTSProvider
 
@@ -35,10 +35,10 @@ class FakeLLM(LLMProvider):
         return "Fake"
 
     def chat(self, messages, **kwargs):
-        self.calls.append((messages, kwargs))
+        self.calls.append((list(messages), kwargs))
         if self.error:
             raise self.error
-        return self.reply
+        return LLMResponse(text=self.reply)
 
 
 class FakeTTS(TTSProvider):
@@ -106,7 +106,7 @@ class TestProviderRegistry(unittest.TestCase):
 
 class TestConversation(unittest.TestCase):
     def setUp(self):
-        self.settings = Settings(LLM_HISTORY_MESSAGES=3, ACTIONS_DYNAMIC_PROMPT=False, LLM_STREAM=False)
+        self.settings = Settings(LLM_HISTORY_MESSAGES=3, ACTIONS_DYNAMIC_PROMPT=False, LLM_STREAM=False, LLM_TOOL_CALLING="tags")
 
     def test_history_is_saved_and_starts_with_user(self):
         conv = Conversation(FakeLLM(self.settings, reply="<think>hmm</think> Réponse"), self.settings)

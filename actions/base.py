@@ -23,6 +23,8 @@ class BaseAction:
     example_prompt: str = ""
     example_response: str = ""
     enabled: bool = True
+    # "safe" : exécution directe ; "confirm" : confirmation de l'utilisateur exigée (extinction, redémarrage...)
+    danger: str = "safe"
 
     # Regex compilée pour détecter ce tag spécifique dans une réponse LLM
     _pattern: Optional[re.Pattern] = field(default=None, init=False, repr=False)
@@ -42,6 +44,22 @@ class BaseAction:
         if self._pattern is None:
             self._init_pattern()
         return self._pattern
+
+    @property
+    def tool_name(self) -> str:
+        """Nom de l'outil exposé au LLM en function calling (ex: VOLUME -> volume)."""
+        return self.tag.lower()
+
+    @property
+    def parameters(self) -> dict:
+        """Schéma JSON des arguments pour le function calling (un argument texte libre si has_args)."""
+        if not self.has_args:
+            return {"type": "object", "properties": {}}
+        return {
+            "type": "object",
+            "properties": {"args": {"type": "string", "description": self.args_hint or "Argument de la commande"}},
+            "required": ["args"],
+        }
 
     def build_args(self, args: str = "") -> List[str]:
         """Découpe les arguments passés pour le script bash. Peut être surchargé."""
