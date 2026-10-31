@@ -38,14 +38,14 @@ Ce document est destiné aux agents IA (et aux développeurs) qui lisent, mainti
 
 
 ### 2.1 [main.py](file:///home/suissard/PROGRAMMATIONS/SmartHome/main.py) — Orchestrateur Principal
-- **Responsabilité** : Initialise le flux d'entrée micro partagé (`PyAudio`), gère la boucle d'événements, le ducking sonore, le dispatching des actions système et maintient l'état conversationnel. Affiche les fournisseurs actifs au démarrage (LLM, STT, TTS, Actions).
+- **Responsabilité** : Satellite local : flux micro partagé (`PyAudio`), wake word, ducking, feedbacks et lecture de la voix. Le traitement (LLM, outils, actions) est délégué à `AssistantCore` (session persistante `"local"`, confirmation vocale). Démarre la passerelle en arrière-plan si `GATEWAY_ENABLED=true`, sur le même cœur. Affiche les fournisseurs actifs au démarrage.
 - **Paramètres Clés** :
   - `FOLLOW_UP_TIMEOUT` (configurable via `.env`) : Durée (en secondes) pendant laquelle l'assistant reste en écoute active après une réponse. La barre d'écoulement s'adapte dynamiquement à cette durée.
 - **Cycle de Fonctionnement** :
   1. Écoute passive par paquets (`CHUNK = 1280` à `RATE = 16000`).
   2. Si le mot-clé est validé (`score > threshold`), atténuation audio globale via `ducker.duck()`, notification `feedback.on_wakeword_detected()`, puis passage en mode `in_conversation = True`.
   3. Boucle de follow-up : appel de `transcriber.record_and_transcribe(...)`.
-  4. Si du texte est reçu : inférence LLM (`ask_llm`), exécution des commandes système et nettoyage du texte (`action_manager.process_response`), vocalisation du texte épuré (`tts.speak`), puis signal sonore de fin de tour `feedback.on_response_end()`.
+  4. Si du texte (ou de l'audio en mode direct) est reçu : `core.respond("local", ...)` (LLM, outils, tags, texte épuré), vocalisation (`tts.speak`), puis signal sonore de fin de tour `feedback.on_response_end()`.
   5. Si timeout de silence : notification de mise en veille `feedback.on_timeout()`, purge du flux, restauration du son système via `ducker.unduck()`, et retour en veille passive.
 
 ### 2.2 [actions/](file:///home/suissard/PROGRAMMATIONS/SmartHome/actions) — Système Modulaire de Commandes & Actions OS
@@ -107,6 +107,15 @@ Ce document est destiné aux agents IA (et aux développeurs) qui lisent, mainti
 - **Registre** : `ProviderRegistry` associe un nom (et ses alias) à une classe instanciée avec `Settings`. Chaque fournisseur expose `describe(settings)` (résumé sans instanciation), utilisé par `main.py` et le serveur MCP.
 - **Rôle** : Charge `.env` avec conversion de types stricte (`int`, `float`, `bool`, `str`, `Optional`) et fallbacks par défaut pour toutes les constantes du projet (providers LLM/STT/TTS, OpenRouter, audio, wake word, whisper, ollama, piper, feedbacks, ducking, actions, serveur MCP).
 
+### 2.9 bis [core/assistant.py](file:///home/suissard/PROGRAMMATIONS/SmartHome/core/assistant.py) & [core/events.py](file:///home/suissard/PROGRAMMATIONS/SmartHome/core/events.py) — Cœur de Service & Bus d'Événements
+- **AssistantCore** : indépendant des entrées/sorties. Partage un fournisseur LLM, un STT, un TTS et un registre d'outils entre des **sessions** (conversation, historique, gestionnaire de confirmation et verrou propres ; expiration après `GATEWAY_SESSION_TIMEOUT`, sauf sessions persistantes). `respond(session, text|audio_wav, synthesize)` exécute le pipeline complet (bloquant, à appeler via `asyncio.to_thread` côté serveur) et renvoie un `Reply`.
+- **EventBus** : publie `transcript`, `token`, `tool`, `confirm_request`, `response`, `error` (abonnement global ou par session, thread-safe). La console de `main.py` et chaque client WebSocket sont des abonnés.
+
+### 2.9 ter [gateway/](file:///home/suissard/PROGRAMMATIONS/SmartHome/gateway) — Passerelle Réseau (LAN / Tailscale)
+- **Technologie** : Starlette + uvicorn. `GET /health`, `POST /api/ask` (sans confirmation possible : actions dangereuses refusées), `WS /ws` (protocole JSON décrit en tête de `gateway/app.py` : streaming, outils, confirmations aller-retour, voix WAV en base64).
+- **Sécurité** (`core/security.py`, partagé avec le serveur MCP) : jeton `GATEWAY_AUTH_TOKEN` (en-tête Bearer, ou premier message `auth` pour les navigateurs), refus de démarrer hors loopback sans jeton.
+- **Lancement** : dans `main.py` (`GATEWAY_ENABLED=true`) ou seul, sans micro : `python -m gateway`. Client de test : `python -m gateway.client`.
+
 ### 2.10 [mcp_server.py](file:///home/suissard/PROGRAMMATIONS/SmartHome/mcp_server.py) — Serveur MCP (Model Context Protocol) Universel
 - **Technologie** : `mcp.server.mcpserver.MCPServer` (MCP 2.x).
 - **Rôle** : Expose l'intégralité des briques logiques et physiques sous forme de standard MCP :
@@ -152,7 +161,7 @@ stateDiagram-v2
 Lors de toute intervention sur ce codebase, veillez à respecter les règles suivantes :
 
 ### 1. Préservation des Points d'Entrée de Test Autonomes
-Chaque module Python (`config.py`, `wakeword.py`, `transcribe.py`, `llm.py`, `tts.py`, `feedback.py`, `ducking.py`, `test_sound.py`) **doit impérativement conserver son bloc `if __name__ == "__main__":`**. Ces blocs permettent un diagnostic isolé sans charger toute la pile applicative.
+Chaque module Python (`config.py`, `wakeword.py`, `transcribe.py`, `stt.py`, `llm.py`, `providers.py`, `tts.py`, `feedback.py`, `ducking.py`, `confirm.py`, `tools.py`, `events.py`, `assistant.py`, `test_sound.py`) **doit impérativement conserver son bloc `if __name__ == "__main__":`**. Ces blocs permettent un diagnostic isolé sans charger toute la pile applicative.
 
 
 

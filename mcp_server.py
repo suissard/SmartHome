@@ -12,7 +12,6 @@ Transports supportés :
 """
 
 import argparse
-import hmac
 import io
 import json
 import os
@@ -49,6 +48,7 @@ from core.config import (
     DUCKING_ENABLED,
     DUCKING_VOLUME_PERCENT,
 )
+from core.security import BearerTokenMiddleware, require_token_for_host
 from actions.manager import get_action_manager
 from actions.registry import get_all_commands, get_command_by_tag
 from llm.llm import (
@@ -598,31 +598,6 @@ def parse_args():
     return parser.parse_args()
 
 
-class BearerTokenMiddleware:
-    """Middleware ASGI pur (compatible SSE/streaming) exigeant l'en-tête `Authorization: Bearer <MCP_AUTH_TOKEN>`."""
-
-    def __init__(self, asgi_app, token: str):
-        self.asgi_app = asgi_app
-        self.expected = f"Bearer {token}".encode()
-
-    async def __call__(self, scope, receive, send):
-        if scope["type"] == "http":
-            provided = dict(scope.get("headers", [])).get(b"authorization", b"")
-            if not hmac.compare_digest(provided, self.expected):
-                await send({
-                    "type": "http.response.start",
-                    "status": 401,
-                    "headers": [(b"content-type", b"text/plain; charset=utf-8"), (b"www-authenticate", b"Bearer")],
-                })
-                await send({"type": "http.response.body", "body": "Jeton MCP manquant ou invalide.".encode()})
-                return
-        await self.asgi_app(scope, receive, send)
-
-
-def _is_loopback(host: str) -> bool:
-    return host in ("127.0.0.1", "localhost", "::1")
-
-
 def main():
     args = parse_args()
 
@@ -636,13 +611,7 @@ def main():
         return
 
     # Transports réseau : refus de démarrer sans jeton hors loopback (LAN, Tailscale...)
-    if not MCP_AUTH_TOKEN and not _is_loopback(host):
-        print(
-            f"❌ [MCP] Refus d'écouter sur {host} sans MCP_AUTH_TOKEN : n'importe quel appareil du réseau "
-            "pourrait piloter l'ordinateur. Définissez MCP_AUTH_TOKEN dans .env (ex: `openssl rand -hex 32`).",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+    require_token_for_host(host, MCP_AUTH_TOKEN, "MCP", "MCP_AUTH_TOKEN")
 
     if transport == "sse":
         starlette_app = app.sse_app(host=host)

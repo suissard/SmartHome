@@ -5,6 +5,7 @@ Un fournisseur transcrit un fichier WAV en mémoire ; l'enregistrement micro / V
 
 import io
 import sys
+import threading
 from pathlib import Path
 
 _ROOT_DIR = Path(__file__).resolve().parent.parent
@@ -49,6 +50,8 @@ class WhisperSTT(STTProvider):
         from faster_whisper import WhisperModel
         self.model = WhisperModel(settings.WHISPER_MODEL, device=settings.WHISPER_DEVICE, compute_type=settings.WHISPER_COMPUTE_TYPE)
         self.beam_size = settings.WHISPER_BEAM_SIZE
+        # Modèle partagé entre le micro local et les clients distants : une transcription à la fois
+        self._lock = threading.Lock()
         print("Whisper local prêt ✅")
 
     @classmethod
@@ -56,13 +59,15 @@ class WhisperSTT(STTProvider):
         return f"Whisper ({settings.WHISPER_MODEL})"
 
     def transcribe(self, wav_bytes: bytes) -> str:
-        segments, _ = self.model.transcribe(
-            io.BytesIO(wav_bytes),
-            language=self.language,
-            beam_size=self.beam_size,
-            condition_on_previous_text=False,
-        )
-        return " ".join(seg.text for seg in segments).strip()
+        with self._lock:
+            segments, _ = self.model.transcribe(
+                io.BytesIO(wav_bytes),
+                language=self.language,
+                beam_size=self.beam_size,
+                condition_on_previous_text=False,
+            )
+            # Les segments sont générés paresseusement : la transcription a lieu pendant ce parcours
+            return " ".join(seg.text for seg in segments).strip()
 
 
 @STT_PROVIDERS.register("openrouter")

@@ -6,6 +6,7 @@ silences) et la lecture. `synthesize()` permet d'obtenir l'audio sans le jouer (
 
 import io
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Optional
@@ -113,6 +114,8 @@ class TextToSpeech:
         self.settings = s
         self.output_device = s.AUDIO_OUTPUT_DEVICE_INDEX
         self.engine = provider or TTS_PROVIDERS.create(s.TTS_PROVIDER, s)
+        # Partagé entre le micro local et les clients distants : une synthèse à la fois
+        self._lock = threading.Lock()
 
     def synthesize(self, text: str) -> tuple[np.ndarray, int]:
         """Synthétise le texte et applique le post-traitement. Retourne (int16, fréquence) ; vide si aucun texte."""
@@ -125,7 +128,8 @@ class TextToSpeech:
             clean_text += "."
 
         # 2. Synthèse selon le fournisseur
-        raw_audio, sample_rate = self.engine.synthesize(clean_text)
+        with self._lock:
+            raw_audio, sample_rate = self.engine.synthesize(clean_text)
         if len(raw_audio) == 0:
             return np.zeros(0, dtype=np.int16), sample_rate
         audio = raw_audio.astype(np.float32)

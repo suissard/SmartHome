@@ -166,6 +166,20 @@ class Settings(BaseModel):
     MCP_CLIENT_ENABLED: EnvBool = True
     MCP_SERVERS_CONFIG_PATH: str = "mcp_servers.json"
 
+    # 🌍 Passerelle (clients distants : WebSocket /ws et HTTP /api/ask)
+    # Démarre la passerelle dans main.py, à côté de l'écoute micro (sinon : python -m gateway pour un serveur sans micro)
+    GATEWAY_ENABLED: EnvBool = False
+    GATEWAY_HOST: str = "127.0.0.1"
+    GATEWAY_PORT: int = Field(8765, ge=1, le=65535)
+    # Jeton exigé par les clients ; obligatoire hors loopback (LAN, Tailscale)
+    GATEWAY_AUTH_TOKEN: str = ""
+    # Délai laissé à un client distant pour confirmer une action dangereuse (secondes)
+    GATEWAY_CONFIRM_TIMEOUT: float = Field(20.0, gt=0.0)
+    # Durée d'inactivité après laquelle une session distante (et son historique) est oubliée (secondes)
+    GATEWAY_SESSION_TIMEOUT: float = Field(3600.0, gt=0.0)
+    # Taille maximale d'un message WebSocket (audio base64 compris), en octets
+    GATEWAY_MAX_MESSAGE_BYTES: int = Field(10 * 1024 * 1024, gt=0)
+
     @field_validator(
         "LLM_PROVIDER", "TTS_PROVIDER", "MCP_TRANSPORT", "LLM_TOOL_CALLING",
         "FEEDBACK_WAKEWORD_TYPE", "FEEDBACK_RESPONSE_END_TYPE", "FEEDBACK_TIMEOUT_TYPE",
@@ -333,6 +347,14 @@ MCP_AUTH_TOKEN = settings.MCP_AUTH_TOKEN
 MCP_AUDIO_DIR = settings.MCP_AUDIO_DIR
 MCP_CLIENT_ENABLED = settings.MCP_CLIENT_ENABLED
 MCP_SERVERS_CONFIG_PATH = settings.MCP_SERVERS_CONFIG_PATH
+
+GATEWAY_ENABLED = settings.GATEWAY_ENABLED
+GATEWAY_HOST = settings.GATEWAY_HOST
+GATEWAY_PORT = settings.GATEWAY_PORT
+GATEWAY_AUTH_TOKEN = settings.GATEWAY_AUTH_TOKEN
+GATEWAY_CONFIRM_TIMEOUT = settings.GATEWAY_CONFIRM_TIMEOUT
+GATEWAY_SESSION_TIMEOUT = settings.GATEWAY_SESSION_TIMEOUT
+GATEWAY_MAX_MESSAGE_BYTES = settings.GATEWAY_MAX_MESSAGE_BYTES
 
 
 if __name__ == "__main__":

@@ -4,7 +4,8 @@ Registre d'outils unifié : actions système locales + outils des serveurs MCP c
 Chaque outil a un schéma JSON (function calling), un niveau de danger et un exécuteur.
 Les outils "confirm" passent par une politique de confirmation unique (`set_confirmation_handler`) :
 - main.py installe une confirmation vocale ;
-- sans gestionnaire installé (ex: serveur MCP), un outil dangereux est refusé.
+- une session distante fournit son propre gestionnaire (question envoyée au client) ;
+- sans gestionnaire (ex: serveur MCP), un outil dangereux est refusé.
 """
 
 import json
@@ -70,16 +71,22 @@ def set_confirmation_handler(handler: Optional[ConfirmationHandler]):
     _confirmation_handler = handler
 
 
-def request_confirmation(description: str, settings: Optional[Settings] = None) -> bool:
-    """Retourne True si l'action dangereuse décrite peut être exécutée."""
+def request_confirmation(
+    description: str,
+    settings: Optional[Settings] = None,
+    handler: Optional[ConfirmationHandler] = None,
+) -> bool:
+    """Retourne True si l'action dangereuse décrite peut être exécutée.
+    `handler` (propre à une session) est prioritaire sur le gestionnaire global."""
     s = settings or get_settings()
     if not s.ACTIONS_CONFIRM_DANGEROUS:
         return True
-    if _confirmation_handler is None:
+    handler = handler or _confirmation_handler
+    if handler is None:
         print(f"⛔ [TOOLS] « {description} » refusé : confirmation requise mais aucun moyen de la demander.")
         return False
     try:
-        return bool(_confirmation_handler(description))
+        return bool(handler(description))
     except Exception as e:
         print(f"⚠️ [TOOLS] Erreur pendant la confirmation : {e}")
         return False
@@ -111,7 +118,7 @@ class ToolRegistry:
     def schemas(self) -> list[dict]:
         return [t.schema() for t in self._tools.values()]
 
-    def call(self, call: ToolCall) -> ToolResult:
+    def call(self, call: ToolCall, confirm: Optional[ConfirmationHandler] = None) -> ToolResult:
         """Exécute un appel d'outil (avec confirmation si nécessaire). Ne lève jamais : l'erreur devient le résultat."""
         tool = self.get(call.name)
         if tool is None:
@@ -121,7 +128,7 @@ class ToolRegistry:
             summary = tool.description
             if call.arguments:
                 summary += f" ({json.dumps(call.arguments, ensure_ascii=False)})"
-            if not request_confirmation(summary, self.settings):
+            if not request_confirmation(summary, self.settings, confirm):
                 return ToolResult(call, "Action annulée : l'utilisateur n'a pas confirmé.", executed=False)
 
         print(f"🛠️ [TOOLS] {tool.name}({json.dumps(call.arguments, ensure_ascii=False)})")

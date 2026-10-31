@@ -18,11 +18,13 @@ from audio.tts import TextToSpeech
 from audio.feedback import FeedbackManager
 from audio.ducking import AudioDucker
 from audio.confirm import VoiceConfirmer
-from llm.llm import ask_llm, get_conversation
 from llm.providers import LLM_PROVIDERS
-from actions import get_action_manager, get_all_commands
+from actions import get_all_commands
+from core.assistant import AssistantCore
 from core.mcp_hub import get_mcp_hub
-from core.tools import set_confirmation_handler
+from core.security import require_token_for_host
+
+LOCAL_SESSION = "local"
 
 
 
@@ -37,6 +39,21 @@ def flush_stream(stream):
         pass
 
 
+def _print_event(event):
+    """Affichage console : réponse en streaming pour le micro local, résumé des échanges distants."""
+    if event.session_id == LOCAL_SESSION:
+        if event.type == "token":
+            print(event.data["text"], end="", flush=True)
+        return
+    tag = f"🌍 [{event.session_id}]"
+    if event.type == "transcript":
+        print(f"\n{tag} 👤 « {event.data['text']} »")
+    elif event.type == "response":
+        print(f"\n{tag} 🤖 « {event.data['text']} »")
+    elif event.type == "confirm_request":
+        print(f"\n{tag} ❓ {event.data['question']} (en attente du client)")
+
+
 def main():
     if len(sys.argv) > 1 and sys.argv[1] in ("--reset-sound", "--reset", "--restore", "-r"):
         AudioDucker.reset_all()
@@ -48,7 +65,6 @@ def main():
     tts = TextToSpeech()
     feedback = FeedbackManager(tts=tts)
     ducker = AudioDucker()
-    action_manager = get_action_manager()
     mcp_hub = get_mcp_hub() if MCP_CLIENT_ENABLED else None
 
     # Connexion aux serveurs MCP configurés
@@ -76,9 +92,13 @@ def main():
     )
 
     settings = get_settings()
-    conversation = get_conversation()
-    # Les actions dangereuses (extinction, outils MCP destructeurs...) sont confirmées à la voix
-    set_confirmation_handler(VoiceConfirmer(tts, transcriber, stream, settings, conversation))
+    # Cœur partagé entre le micro local et les clients distants (mêmes modèles chargés une seule fois)
+    core = AssistantCore(settings, stt=transcriber.stt, tts=tts)
+    local = core.open_session(LOCAL_SESSION, persistent=True)
+    # Les actions dangereuses demandées au micro (extinction, outils MCP destructeurs...) sont confirmées à la voix
+    local.conversation.confirm = VoiceConfirmer(tts, transcriber, stream, settings, local.conversation)
+    core.events.subscribe(_print_event)
+    conversation = local.conversation
 
     llm_info = LLM_PROVIDERS.get(settings.LLM_PROVIDER).describe(settings)
     stt_info = transcriber.stt.describe(settings)
@@ -98,6 +118,16 @@ def main():
     print(f"  • Actions OS    : {actions_info}")
     print(f"  • Appel d'outils: {tools_info}")
     print(f"  • Hub MCP       : {mcp_info}")
+
+    gateway = None
+    if settings.GATEWAY_ENABLED:
+        require_token_for_host(settings.GATEWAY_HOST, settings.GATEWAY_AUTH_TOKEN, "GATEWAY", "GATEWAY_AUTH_TOKEN")
+        from gateway.app import start_in_thread
+        gateway, _ = start_in_thread(core, settings)
+        auth = "jeton requis" if settings.GATEWAY_AUTH_TOKEN else "loopback, sans jeton"
+        print(f"  • Passerelle    : ws://{settings.GATEWAY_HOST}:{settings.GATEWAY_PORT}/ws ({auth})")
+    else:
+        print("  • Passerelle    : Désactivée (GATEWAY_ENABLED=false)")
     print(f"  • Veille active : {FOLLOW_UP_TIMEOUT}s\n")
 
     try:
@@ -107,6 +137,7 @@ def main():
             detected, score = detector.process_chunk(chunk)
 
             if detected:
+                print(f"\n🎯 Mot-clé détecté ({detector.model_name}, score {score:.2f})")
                 # 1. Atténuation immédiate des autres sources audio (musique, vidéos, etc.)
                 ducker.duck()
 
@@ -125,20 +156,16 @@ def main():
                             if isinstance(user_input, bytes):
                                 print(f"👤 : 🎙️ [Audio envoyé au LLM] ({elapsed_t:.2f} s)")
                                 print("🤖 : ", end="", flush=True)
-                                response_text = ask_llm(audio_bytes=user_input)
+                                reply = core.respond(LOCAL_SESSION, audio_wav=user_input)
                             else:
                                 print(f"👤 : « {user_input} » ({elapsed_t:.2f} s)")
                                 print("🤖 : ", end="", flush=True)
-                                response_text = ask_llm(prompt=user_input)
+                                reply = core.respond(LOCAL_SESSION, text=user_input)
+                            print()
 
-                            # 2. Exécution des actions système & Nettoyage du texte pour la voix
-                            clean_voice_text = response_text
-                            if response_text and ACTIONS_ENABLED:
-                                clean_voice_text = action_manager.process_response(response_text)
-
-                            # 3. Vocalisation de la réponse
-                            if clean_voice_text:
-                                tts.speak(clean_voice_text)
+                            # 2. Vocalisation de la réponse (actions déjà exécutées et texte épuré par le cœur)
+                            if reply.text:
+                                tts.speak(reply.text)
 
                             # 4. Signal de fin de réponse (passage de la parole)
                             feedback.on_response_end()
@@ -161,6 +188,8 @@ def main():
     except KeyboardInterrupt:
         print("\nArrêt de l'assistant.")
     finally:
+        if gateway:
+            gateway.should_exit = True
         if mcp_hub and MCP_CLIENT_ENABLED:
             mcp_hub.disconnect_all()
         ducker.unduck()

@@ -230,6 +230,23 @@ FEEDBACK_SOUND_VOLUME=0.5
 
 ---
 
+## 🌍 Accès Distant (LAN & Tailscale)
+
+La passerelle permet de parler à SmartHome depuis un autre appareil (téléphone, portable...) : texte ou audio en entrée, réponse en streaming, voix synthétisée renvoyée, confirmations des actions dangereuses.
+
+1. Générer un jeton et le placer dans `.env` :
+   ```bash
+   openssl rand -hex 32
+   ```
+   puis `GATEWAY_AUTH_TOKEN=<jeton>` et `GATEWAY_HOST=<IP Tailscale 100.x.y.z>` (`tailscale ip -4`).
+2. Lancer avec le micro local (`GATEWAY_ENABLED=true python main.py`) ou sans micro (`python -m gateway`).
+3. Depuis l'autre appareil :
+   ```bash
+   python -m gateway.client --url ws://100.x.y.z:8765/ws --token <jeton>
+   ```
+
+Sans jeton, la passerelle refuse d'écouter ailleurs que sur `127.0.0.1`. Pour un client navigateur (micro du téléphone), le HTTPS est requis : `tailscale serve` fournit le certificat devant la passerelle.
+
 ## 🔌 Serveur MCP Universel (Model Context Protocol)
 
 SmartHome expose l'ensemble de ses fonctionnalités sous forme d'un **serveur MCP standardisé** (`mcp_server.py`), compatible avec tous les clients IA modernes (Claude Desktop, Antigravity IDE, Cursor, VS Code, Home Assistant, agents distants et scripts automatisés).

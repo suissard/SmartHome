@@ -9,7 +9,7 @@ API publique conservée : ask_llm(), get_history(), clear_history(), add_history
 import re
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 # Inclusion de la racine du projet pour import autonome
 _ROOT_DIR = Path(__file__).resolve().parent.parent
@@ -17,7 +17,7 @@ if str(_ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(_ROOT_DIR))
 
 from core.config import Settings, get_settings
-from core.tools import ToolRegistry, ToolResult, build_tool_registry
+from core.tools import ConfirmationHandler, ToolRegistry, ToolResult, build_tool_registry
 from llm.providers import LLM_PROVIDERS, LLMProvider, ToolsNotSupportedError
 
 _THINK_TAGS = re.compile(r"<think>.*?</think>", flags=re.DOTALL)
@@ -62,6 +62,7 @@ class Conversation:
         provider: Optional[LLMProvider] = None,
         settings: Optional[Settings] = None,
         tools: Optional[ToolRegistry] = None,
+        confirm: Optional[ConfirmationHandler] = None,
     ):
         self.settings = settings or get_settings()
         self._provider = provider
@@ -71,6 +72,9 @@ class Conversation:
         # "auto" bascule définitivement sur "tags" si le modèle refuse les outils
         self.tool_mode = self.settings.LLM_TOOL_CALLING
         self.last_tool_results: list[ToolResult] = []
+        # Confirmation propre à cette conversation (sinon le gestionnaire global de core.tools)
+        self.confirm = confirm
+        self._on_tool: Optional[Callable[[ToolResult], None]] = None
 
     @property
     def tools(self) -> ToolRegistry:
@@ -114,8 +118,11 @@ class Conversation:
         think: Optional[bool] = None,
         use_history: bool = True,
         use_tools: bool = True,
+        on_token: Optional[Callable[[str], None]] = None,
+        on_tool: Optional[Callable[[ToolResult], None]] = None,
     ) -> str:
-        """Envoie un prompt texte ou un enregistrement audio et retourne la réponse (ou un message ⚠️ en cas d'erreur)."""
+        """Envoie un prompt texte ou un enregistrement audio et retourne la réponse (ou un message ⚠️ en cas d'erreur).
+        `on_token` reçoit les fragments en streaming (affichage console par défaut), `on_tool` chaque outil exécuté."""
         stream = self.settings.LLM_STREAM if stream is None else stream
         think = self.settings.LLM_THINK if think is None else think
         self.last_tool_results = []
@@ -129,7 +136,10 @@ class Conversation:
 
         # Le registre contient les actions activées et les outils MCP : vide => pas d'outils à proposer
         native = use_tools and self.tool_mode != "tags" and bool(self.tools.all())
-        options = dict(audio_wav=audio_bytes, model=model, stream=stream, think=think, on_token=_print_token if stream else None)
+        console = stream and on_token is None
+        self._on_tool = on_tool
+        options = dict(audio_wav=audio_bytes, model=model, stream=stream, think=think,
+                       on_token=(on_token or _print_token) if stream else None)
         try:
             try:
                 full_text = self._run(build_messages(use_tags=not native), native, options)
@@ -139,7 +149,7 @@ class Conversation:
                 print("\nℹ️ [LLM] Le modèle ne gère pas les outils : repli sur les tags d'actions.")
                 self.tool_mode = "tags"
                 full_text = self._run(build_messages(use_tags=True), False, options)
-            if stream:
+            if console:
                 print()
         except Exception as e:
             err_str = f"⚠️ Erreur {self.settings.LLM_PROVIDER} : {e}"
@@ -164,8 +174,10 @@ class Conversation:
                 return response.text
             messages.append(self.provider.assistant_message(response))
             for call in response.tool_calls:
-                result = self.tools.call(call)
+                result = self.tools.call(call, confirm=self.confirm)
                 self.last_tool_results.append(result)
+                if self._on_tool:
+                    self._on_tool(result)
                 messages.append(self.provider.tool_message(result))
 
         # Trop d'allers-retours : on résume ce qui a été fait plutôt que de boucler
