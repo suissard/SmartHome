@@ -153,7 +153,8 @@ Chaque fichier peut être exécuté de manière autonome pour tester et régler 
 
 | Composant | Commande de test | Objectif du test |
 | :--- | :--- | :--- |
-| **Configuration** | `python config.py` | Affiche l'ensemble des variables chargées depuis `.env`. |
+| **Configuration** | `python core/config.py` | Affiche et valide l'ensemble des variables chargées (environnement > `.env`). |
+| **Fournisseurs** | `python core/providers.py` | Liste les fournisseurs LLM / STT / TTS disponibles. |
 | **Audio / Sortie** | `python test_sound.py` | Liste les périphériques et joue un bip de contrôle. |
 | **Mot-Clé** | `python wakeword.py` | Affiche un VU-mètre en direct et le score de détection. |
 | **Transcription** | `python transcribe.py` | Enregistre au micro et transcrit votre voix en texte. |

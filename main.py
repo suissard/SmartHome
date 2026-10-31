@@ -1,22 +1,13 @@
 import sys
-from pathlib import Path
 import numpy as np
 import pyaudio
 from core.config import (
+    get_settings,
     CHUNK,
     RATE,
     CHANNELS,
     AUDIO_INPUT_DEVICE_INDEX,
     FOLLOW_UP_TIMEOUT,
-    LLM_PROVIDER,
-    OLLAMA_MODEL,
-    OPENROUTER_MODEL,
-    STT_PROVIDER,
-    WHISPER_MODEL,
-    OPENROUTER_STT_MODEL,
-    TTS_PROVIDER,
-    TTS_MODEL_PATH,
-    OPENROUTER_TTS_MODEL,
     LLM_HISTORY_MESSAGES,
     ACTIONS_ENABLED,
     MCP_CLIENT_ENABLED,
@@ -27,6 +18,7 @@ from audio.tts import TextToSpeech
 from audio.feedback import FeedbackManager
 from audio.ducking import AudioDucker
 from llm.llm import ask_llm
+from llm.providers import LLM_PROVIDERS
 from actions import get_action_manager, get_all_commands
 from core.mcp_hub import get_mcp_hub
 
@@ -81,16 +73,10 @@ def main():
         frames_per_buffer=CHUNK
     )
 
-    llm_info = f"OpenRouter ({OPENROUTER_MODEL})" if LLM_PROVIDER == "openrouter" else f"Ollama ({OLLAMA_MODEL})"
-    if STT_PROVIDER in ("none", "direct", "bypass"):
-        stt_info = "Direct Audio (Bypass STT ⏩ Multimodal LLM)"
-    elif STT_PROVIDER == "openrouter":
-        stt_info = f"OpenRouter ({OPENROUTER_STT_MODEL})"
-    else:
-        stt_info = f"Whisper ({WHISPER_MODEL})"
-
-    voice_name = Path(TTS_MODEL_PATH).stem.replace(".onnx", "")
-    tts_info = f"OpenRouter ({OPENROUTER_TTS_MODEL})" if TTS_PROVIDER == "openrouter" else f"Piper ({voice_name})"
+    settings = get_settings()
+    llm_info = LLM_PROVIDERS.get(settings.LLM_PROVIDER).describe(settings)
+    stt_info = transcriber.stt.describe(settings)
+    tts_info = tts.engine.describe(settings)
     actions_info = f"Activées ({len(get_all_commands())} commandes prêtes)" if ACTIONS_ENABLED else "Désactivées"
 
     print(f"\n🟢 Démarrage de SmartHome")

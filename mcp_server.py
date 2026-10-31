@@ -33,17 +33,14 @@ from core.config import (
     MCP_PORT,
     MCP_AUTH_TOKEN,
     MCP_AUDIO_DIR,
+    get_settings,
     LLM_PROVIDER,
     OLLAMA_MODEL,
-    OLLAMA_HOST,
     OPENROUTER_MODEL,
     STT_PROVIDER,
     WHISPER_MODEL,
-    OPENROUTER_STT_MODEL,
     TTS_PROVIDER,
     TTS_MODEL_PATH,
-    OPENROUTER_TTS_MODEL,
-    OPENROUTER_TTS_VOICE,
     FOLLOW_UP_TIMEOUT,
     LLM_HISTORY_MESSAGES,
     ACTIONS_ENABLED,
@@ -109,14 +106,14 @@ def _get_ducker():
 
 
 def _get_transcriber():
-    """Charge ou retourne l'instance VoiceTranscriber."""
+    """Charge ou retourne le fournisseur STT (le serveur MCP transcrit des fichiers, sans micro)."""
     global _transcriber_instance
     if _transcriber_instance is None:
         try:
-            from audio.transcribe import VoiceTranscriber
-            _transcriber_instance = VoiceTranscriber()
+            from audio.stt import create_stt
+            _transcriber_instance = create_stt(get_settings())
         except Exception as e:
-            print(f"⚠️ [MCP] Impossible d'initialiser VoiceTranscriber : {e}", file=sys.stderr)
+            print(f"⚠️ [MCP] Impossible d'initialiser le STT : {e}", file=sys.stderr)
             return None
     return _transcriber_instance
 
@@ -360,32 +357,14 @@ def stt_transcribe_file(audio_path: str) -> str:
     if not path.is_file():
         return f"❌ Fichier audio introuvable : {audio_path}"
 
-    transcriber = _get_transcriber()
-    if not transcriber:
+    stt = _get_transcriber()
+    if not stt:
         return "⚠️ Moteur de transcription non disponible."
+    if stt.passthrough:
+        return "⚠️ STT_PROVIDER=direct : aucun moteur de transcription configuré."
 
     try:
-        if transcriber.provider == "openrouter":
-            if not transcriber.client:
-                return "⚠️ Client OpenRouter non configuré."
-            with open(path, "rb") as f:
-                data = f.read()
-            audio_tuple = (path.name, data, "audio/wav")
-            res = transcriber.client.audio.transcriptions.create(
-                model=OPENROUTER_STT_MODEL,
-                file=audio_tuple,
-                language=transcriber.language if transcriber.language else None
-            )
-            text = res.text.strip() if hasattr(res, "text") else ""
-        else:
-            segments, _ = transcriber.model.transcribe(
-                str(path),
-                language=transcriber.language,
-                beam_size=transcriber.beam_size,
-                condition_on_previous_text=False
-            )
-            text = " ".join([seg.text for seg in segments]).strip()
-
+        text = stt.transcribe(path.read_bytes())
         return text or "(Aucune parole détectée dans le fichier audio)"
     except Exception as e:
         return f"⚠️ Erreur lors de la transcription du fichier : {e}"
@@ -464,6 +443,11 @@ def get_status_resource() -> str:
     """
     Retourne l'état complet en temps réel du serveur SmartHome et de ses composants sous format JSON.
     """
+    from audio.stt import STT_PROVIDERS
+    from audio.tts import TTS_PROVIDERS
+    from llm.providers import LLM_PROVIDERS
+
+    settings = get_settings()
     commands = get_all_commands()
     history = get_history()
 
@@ -472,19 +456,9 @@ def get_status_resource() -> str:
         "version": "1.0.0",
         "status": "online",
         "providers": {
-            "llm": {
-                "provider": LLM_PROVIDER,
-                "model": OPENROUTER_MODEL if LLM_PROVIDER == "openrouter" else OLLAMA_MODEL,
-                "host": OLLAMA_HOST if LLM_PROVIDER == "ollama" else "OpenRouter Cloud API",
-            },
-            "stt": {
-                "provider": STT_PROVIDER,
-                "model": OPENROUTER_STT_MODEL if STT_PROVIDER == "openrouter" else WHISPER_MODEL,
-            },
-            "tts": {
-                "provider": TTS_PROVIDER,
-                "voice": OPENROUTER_TTS_VOICE if TTS_PROVIDER == "openrouter" else Path(TTS_MODEL_PATH).stem,
-            }
+            "llm": {"provider": LLM_PROVIDER, "description": LLM_PROVIDERS.get(LLM_PROVIDER).describe(settings)},
+            "stt": {"provider": STT_PROVIDER, "description": STT_PROVIDERS.get(STT_PROVIDER).describe(settings)},
+            "tts": {"provider": TTS_PROVIDER, "description": TTS_PROVIDERS.get(TTS_PROVIDER).describe(settings)},
         },
         "features": {
             "actions_enabled": ACTIONS_ENABLED,

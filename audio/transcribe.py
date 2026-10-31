@@ -13,24 +13,14 @@ if str(_ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(_ROOT_DIR))
 
 from core.config import (
-    STT_PROVIDER,
-    LLM_PROVIDER,
-    OPENROUTER_API_KEY,
-    OPENROUTER_BASE_URL,
-    OPENROUTER_STT_MODEL,
+    Settings,
+    get_settings,
     AUDIO_CHUNK,
     AUDIO_RATE,
     AUDIO_INPUT_DEVICE_INDEX,
-    WHISPER_MODEL,
-    WHISPER_DEVICE,
-    WHISPER_COMPUTE_TYPE,
-    WHISPER_LANGUAGE,
-    WHISPER_BEAM_SIZE,
-    VOICE_THRESHOLD,
-    SILENCE_DURATION,
-    MAX_SPEECH_DURATION,
     FOLLOW_UP_TIMEOUT,
 )
+from audio.stt import STT_PROVIDERS, STTProvider, create_stt
 
 CHUNK = AUDIO_CHUNK
 RATE = AUDIO_RATE
@@ -39,48 +29,16 @@ FORMAT = pyaudio.paInt16
 
 
 class VoiceTranscriber:
-    def __init__(
-        self,
-        provider=STT_PROVIDER,
-        model_name=WHISPER_MODEL,
-        device=WHISPER_DEVICE,
-        compute_type=WHISPER_COMPUTE_TYPE,
-        voice_threshold=VOICE_THRESHOLD,
-        silence_duration=SILENCE_DURATION,
-        follow_up_timeout=FOLLOW_UP_TIMEOUT,
-        max_speech_duration=MAX_SPEECH_DURATION
-    ):
-        self.provider = provider.lower()
-        # Ollama ne sait pas recevoir d'audio : le bypass STT perdrait la parole de l'utilisateur
-        if self.provider in ("none", "direct", "bypass") and LLM_PROVIDER == "ollama":
-            print("⚠️ STT_PROVIDER=direct incompatible avec LLM_PROVIDER=ollama (pas d'entrée audio) : repli sur Whisper local.")
-            self.provider = "whisper"
-        self.voice_threshold = voice_threshold
-        self.silence_duration = silence_duration
-        self.follow_up_timeout = follow_up_timeout
-        self.max_speech_duration = max_speech_duration
-        self.language = WHISPER_LANGUAGE
-        self.beam_size = WHISPER_BEAM_SIZE
+    """Enregistrement micro avec détection d'activité vocale (VAD), puis transcription par le fournisseur STT."""
 
-        if self.provider in ("none", "direct", "bypass"):
-            print("Mode Direct Audio actif (Bypass STT ⏩ Multimodal LLM) ✅")
-            self.client = None
-            self.model = None
-        elif self.provider == "openrouter":
-            print(f"Chargement STT OpenRouter (Modèle: {OPENROUTER_STT_MODEL})... ⏳")
-            from openai import OpenAI
-            self.client = OpenAI(
-                base_url=OPENROUTER_BASE_URL,
-                api_key=OPENROUTER_API_KEY or "missing-key"
-            )
-            self.model = None
-            print("STT OpenRouter prêt ✅")
-        else:
-            print(f"Chargement Whisper local ({model_name} sur {device})... ⏳")
-            from faster_whisper import WhisperModel
-            self.model = WhisperModel(model_name, device=device, compute_type=compute_type)
-            self.client = None
-            print("Whisper local prêt ✅")
+    def __init__(self, settings: Settings | None = None, stt: STTProvider | None = None):
+        s = settings or get_settings()
+        self.settings = s
+        self.voice_threshold = s.VOICE_THRESHOLD
+        self.silence_duration = s.SILENCE_DURATION
+        self.follow_up_timeout = s.FOLLOW_UP_TIMEOUT
+        self.max_speech_duration = s.MAX_SPEECH_DURATION
+        self.stt = stt or create_stt(s)
 
     def _flush_stream(self, stream):
         """Purge les paquets résiduels dans le micro"""
@@ -171,32 +129,14 @@ class VoiceTranscriber:
                     aud_d = (len(frames) * CHUNK) / RATE
 
                     # Si mode Direct Audio : renvoie directement les octets WAV sans transcription
-                    if self.provider in ("none", "direct", "bypass"):
+                    if self.stt.passthrough:
                         sys.stdout.write("\r" + " " * 80 + "\r")
                         sys.stdout.flush()
                         return wav_buffer.getvalue(), time.perf_counter() - t0, aud_d
 
                     text = ""
                     try:
-                        if self.provider == "openrouter":
-                            if not OPENROUTER_API_KEY:
-                                print("\n⚠️ Clé API OpenRouter manquante pour la transcription STT.")
-                            else:
-                                audio_tuple = ("audio.wav", wav_buffer.getvalue(), "audio/wav")
-                                transcription = self.client.audio.transcriptions.create(
-                                    model=OPENROUTER_STT_MODEL,
-                                    file=audio_tuple,
-                                    language=self.language if self.language else None
-                                )
-                                text = transcription.text.strip() if hasattr(transcription, "text") else ""
-                        else:
-                            segments, _ = self.model.transcribe(
-                                wav_buffer,
-                                language=self.language,
-                                beam_size=self.beam_size,
-                                condition_on_previous_text=False
-                            )
-                            text = " ".join([seg.text for seg in segments]).strip()
+                        text = self.stt.transcribe(wav_buffer.getvalue())
                     except Exception as e:
                         print(f"\n⚠️ Erreur de transcription : {e}")
 
@@ -218,15 +158,8 @@ Transcriber = VoiceTranscriber
 
 
 if __name__ == "__main__":
-
-    if STT_PROVIDER in ("none", "direct", "bypass"):
-        active_stt = "Bypass (Direct Audio)"
-    elif STT_PROVIDER == "openrouter":
-        active_stt = OPENROUTER_STT_MODEL
-    else:
-        active_stt = WHISPER_MODEL
-
-    print(f"🧪 [DEBUG] Mode test Transcription (Fournisseur: {STT_PROVIDER.upper()}, Modèle: {active_stt}, Timer: {FOLLOW_UP_TIMEOUT}s)...")
+    s = get_settings()
+    print(f"🧪 [DEBUG] Mode test Transcription ({STT_PROVIDERS.get(s.STT_PROVIDER).describe(s)}, Timer: {FOLLOW_UP_TIMEOUT}s)...")
     transcriber = VoiceTranscriber()
     p = pyaudio.PyAudio()
     stream = p.open(
