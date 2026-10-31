@@ -47,12 +47,13 @@ Ce document est destiné aux agents IA (et aux développeurs) qui lisent, mainti
   3. Boucle de follow-up : appel de `transcriber.record_and_transcribe(...)`.
   4. Si du texte (ou de l'audio en mode direct) est reçu : `run_local_turn()` lance `core.respond("local", on_sentence=speech.say)` dans un thread ; chaque phrase est prononcée dès qu'elle est générée (`SpeechPipeline`) pendant que le thread principal continue de lire le micro (`mic_lock` partagé avec la confirmation vocale) pour détecter une interruption (`BargeInDetector`). Interruption → `core.cancel()` + `speech.interrupt()` + son `BARGE_IN_SOUND`, et écoute immédiate ; sinon signal de fin de tour `feedback.on_response_end()`.
   5. Si timeout de silence : notification de mise en veille `feedback.on_timeout()`, purge du flux, restauration du son système via `ducker.unduck()`, et retour en veille passive.
+  6. **Fin de conversation demandée** (`reply.end_conversation`) : même retour en veille, sans attendre le timeout. Déclenchée par une phrase de `CONVERSATION_END_PHRASES` (énoncé entier, aux mots `CONVERSATION_END_FILLERS` près : traitée par `AssistantCore` sans appeler le LLM) ou par l'outil `sleep` / tag `[SLEEP]` ([actions/modules/sleep.py](file:///home/suissard/PROGRAMMATIONS/SmartHome/actions/modules/sleep.py)) que le LLM choisit pour les formulations libres. L'événement `response` porte `end_conversation` (la PWA affiche « Conversation terminée »).
 
 ### 2.2 [actions/](file:///home/suissard/PROGRAMMATIONS/SmartHome/actions) — Système Modulaire de Commandes & Actions OS
 - **Responsabilité** : Détection des tags d'actions insérés par le LLM (`[SHUTDOWN]`, `[REBOOT]`, `[LOCK]`, `[VOLUME]`, `[MUTE]`, `[OPEN]`, etc.), exécution asynchrone non-bloquante et purification du texte transmis à la synthèse vocale.
 - **Architecture Modulaire & Auto-Découverte** :
   - `actions/base.py` : Classe de base abstraite `BaseAction` encapsulant métadonnées, script bash embarqué (`script_code`) et méthode `execute()`.
-  - `actions/modules/*.py` : Modules d'actions 100% autonomes (`volume.py`, `media.py`, `notify.py`, `open_app.py`, `lock.py`, `screen_off.py`, `shutdown.py`, `reboot.py`).
+  - `actions/modules/*.py` : Modules d'actions 100% autonomes (`volume.py`, `media.py`, `notify.py`, `open_app.py`, `lock.py`, `screen_off.py`, `shutdown.py`, `reboot.py`, `sleep.py`).
   - `actions/registry.py` : Chargeur dynamique avec auto-découverte des définitions sans couplage.
   - `actions/manager.py` : Moteur d'extraction regex générique et d'exécution asynchrone déléguée sans logique en dur (mode tags, repli des modèles sans function calling).
 - **Exposition au LLM** : chaque action devient aussi un outil de function calling (`tool_name`, schéma `parameters`) et déclare `danger` (`"safe"` ou `"confirm"` pour SHUTDOWN / REBOOT).
@@ -73,8 +74,10 @@ Ce document est destiné aux agents IA (et aux développeurs) qui lisent, mainti
 - **Technologie** : `transcribe.py` gère uniquement l'enregistrement micro et la VAD ; la transcription est déléguée au fournisseur `STTProvider` choisi par `STT_PROVIDER` dans le registre `STT_PROVIDERS` de `stt.py` (`whisper` via `faster-whisper`, `openrouter` via `/audio/transcriptions`, ou `direct` — alias `none`/`bypass` — pour le bypass STT vers LLM multimodal). `create_stt()` repasse sur Whisper si le LLM ne gère pas l'audio (`supports_audio`).
 - **Gestion VAD & Audio** :
   - `pre_buffer` (`deque(maxlen=4)`) : Conserve les 4 dernières trames (320 ms) pour ne jamais couper l'attaque de la voix.
-  - `voice_threshold = 700` : Détection du début de parole par calcul de la moyenne absolue des amplitudes (`np.abs(chunk).mean()`).
+  - **VAD** ([audio/vad.py](file:///home/suissard/PROGRAMMATIONS/SmartHome/audio/vad.py), `SpeechDetector`) : `VAD_ENGINE=silero` (réseau Silero fourni par openWakeWord, local, ~0,3 ms/trame). Début de parole = niveau > `VOICE_THRESHOLD` **et** probabilité de voix ≥ `VAD_SPEECH_THRESHOLD` ; la fin de phrase suit la probabilité de voix (hystérésis), si bien qu'un bruit continu (ventilateur, musique) ne prolonge plus l'enregistrement jusqu'à `MAX_SPEECH_DURATION`. `VAD_ENGINE=energy` = ancien seuil de niveau seul.
+  - Un enregistrement contenant moins de `VAD_MIN_SPEECH_DURATION` de parole n'est pas transcrit. Durées mesurées en temps audio (trames lues).
   - `silence_duration = 0.8s` : Seuil de silence consécutif marquant la fin naturelle d'une phrase.
+  - **Anti-hallucinations** : `WHISPER_VAD_FILTER` (VAD intégrée à faster-whisper) et `STT_IGNORED_PHRASES` (« Sous-titres réalisés par… », transcriptions sans mot) appliqués par `STTProvider._discard_hallucination()`.
   - `_flush_stream()` : Purge le buffer résiduel de la carte son avant chaque écoute pour éliminer les bruits résiduels ou l'écho de la synthèse précédente.
 - **Conversion & Transcription** : Assemblage des trames dans un buffer WAV en mémoire (`io.BytesIO`). Si `STT_PROVIDER=none` ou `direct`, retourne directement les octets WAV sans charger ni appeler de moteur STT. Sinon, effectue la transcription via Whisper local ou OpenRouter.
 
@@ -150,7 +153,7 @@ stateDiagram-v2
 
     state SESSION_ACTIVE {
         [*] --> ECOUTE_VAD
-        ECOUTE_VAD --> ENREGISTREMENT : Voix > Seuil (700)
+        ECOUTE_VAD --> ENREGISTREMENT : Niveau > 700 et voix (Silero)
         ENREGISTREMENT --> TRANSCRIPTION : Silence >= 0.8s ou Max 12s
         TRANSCRIPTION --> GENERATION_LLM : Texte valide
         GENERATION_LLM --> SYNTHESE_TTS : Réponse prête
@@ -160,6 +163,7 @@ stateDiagram-v2
     }
 
     SESSION_ACTIVE --> VEILLE_PASSIVE : Timeout silence global (30s) -> Feedback Veille + ducker.unduck()
+    SESSION_ACTIVE --> VEILLE_PASSIVE : « Au revoir » / outil sleep -> Feedback Veille + ducker.unduck()
 ```
 
 ---
@@ -169,7 +173,7 @@ stateDiagram-v2
 Lors de toute intervention sur ce codebase, veillez à respecter les règles suivantes :
 
 ### 1. Préservation des Points d'Entrée de Test Autonomes
-Chaque module Python (`config.py`, `wakeword.py`, `transcribe.py`, `stt.py`, `llm.py`, `providers.py`, `tts.py`, `speech.py`, `barge_in.py`, `sentences.py`, `feedback.py`, `ducking.py`, `confirm.py`, `tools.py`, `events.py`, `assistant.py`, `test_sound.py`) **doit impérativement conserver son bloc `if __name__ == "__main__":`**. Ces blocs permettent un diagnostic isolé sans charger toute la pile applicative.
+Chaque module Python (`config.py`, `wakeword.py`, `transcribe.py`, `stt.py`, `llm.py`, `providers.py`, `tts.py`, `speech.py`, `barge_in.py`, `vad.py`, `sentences.py`, `feedback.py`, `ducking.py`, `confirm.py`, `tools.py`, `events.py`, `assistant.py`, `test_sound.py`) **doit impérativement conserver son bloc `if __name__ == "__main__":`**. Ces blocs permettent un diagnostic isolé sans charger toute la pile applicative.
 
 
 

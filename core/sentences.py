@@ -11,10 +11,34 @@ import re
 _BOUNDARY = re.compile(r"(?:[.!?…]+[\"»)]*|\n+)(?=\s)")
 _TAGS = re.compile(r"\[[A-Z_]+(?:\s+[^\]]+)?\]")
 _HAS_WORD = re.compile(r"\w")
+_NON_WORD = re.compile(r"[^\w'\- ]+")
 
 
 def clean_for_speech(text: str) -> str:
     return re.sub(r"\s+", " ", _TAGS.sub("", text)).strip()
+
+
+def normalize_utterance(text: str) -> str:
+    """Minuscules, apostrophes unifiées, ponctuation retirée : « Au revoir ! » -> « au revoir »."""
+    text = (text or "").lower().replace("’", "'")
+    return " ".join(_NON_WORD.sub(" ", text).split())
+
+
+def matches_phrase(text: str, phrases: list[str], fillers: list[str] = ()) -> bool:
+    """True si l'énoncé entier est l'une des phrases, aux mots de remplissage près en début ou en fin
+    (« Merci, au revoir ! » correspond à « au revoir », mais pas « baisse le son au revoir »)."""
+    words = normalize_utterance(text).split()
+    targets = {normalize_utterance(p) for p in phrases}
+    filler_set = {normalize_utterance(f) for f in fillers}
+    lead = next((i for i, w in enumerate(words) if w not in filler_set), len(words))
+    trail = next((i for i, w in enumerate(reversed(words)) if w not in filler_set), len(words))
+    # Toutes les façons de retirer des mots de remplissage aux extrémités (« c'est tout » garde son « c'est »)
+    for i in range(lead + 1):
+        for j in range(trail + 1):
+            candidate = " ".join(words[i:len(words) - j])
+            if candidate and candidate in targets:
+                return True
+    return False
 
 
 class SentenceSplitter:

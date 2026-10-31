@@ -160,6 +160,13 @@ function handleEvent(event) {
       break;
     case "response":
       finishBotBubble(event.text);
+      if (event.end_conversation) {
+        const el = document.createElement("div");
+        el.className = "tool";
+        el.textContent = "💤 Conversation terminée";
+        ui.log.append(el);
+        scrollDown();
+      }
       break;
     case "audio":
     case "audio_chunk":

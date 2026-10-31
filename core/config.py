@@ -90,9 +90,32 @@ class Settings(BaseModel):
     VOICE_THRESHOLD: float = Field(700.0, ge=0.0)
     SILENCE_DURATION: float = Field(0.8, gt=0.0)
     MAX_SPEECH_DURATION: float = Field(12.0, gt=0.0)
+    # Détection de la parole : "silero" (réseau local, ignore le bruit ambiant) ou "energy" (niveau sonore seul)
+    VAD_ENGINE: Literal["silero", "energy"] = "silero"
+    # Probabilité de parole (0-1) au-delà de laquelle une trame est considérée comme de la voix
+    VAD_SPEECH_THRESHOLD: float = Field(0.5, gt=0.0, lt=1.0)
+    # Durée minimale de parole pour qu'un enregistrement soit transcrit (un bruit bref est ignoré)
+    VAD_MIN_SPEECH_DURATION: float = Field(0.3, ge=0.0)
+    # Filtre VAD de faster-whisper : retire les passages sans parole avant la transcription
+    WHISPER_VAD_FILTER: EnvBool = True
+    # Phrases que Whisper invente dans le bruit : une transcription identique est ignorée
+    STT_IGNORED_PHRASES: CsvList = _parse_list(
+        "sous-titres réalisés par la communauté d'amara.org,sous-titres réalisés para la communauté d'amara.org,"
+        "sous-titrage st' 501,sous-titrage société radio-canada,merci d'avoir regardé,merci d'avoir regardé cette vidéo,"
+        "abonnez-vous,n'oubliez pas de vous abonner,applaudissements,rires"
+    )
     FOLLOW_UP_TIMEOUT: float = Field(
         30.0, gt=0.0, validation_alias=AliasChoices("FOLLOW_UP_TIMEOUT", "ACTIVE_STANDBY_TIMEOUT")
     )
+    # Phrases qui terminent la conversation et remettent l'assistant en veille, sans passer par le LLM
+    # (le LLM dispose aussi de l'outil « sleep » pour les formulations libres)
+    CONVERSATION_END_PHRASES: CsvList = _parse_list(
+        "stop,au revoir,c'est tout,ce sera tout,ça sera tout,ça ira,c'est bon,non c'est bon,non merci,"
+        "bonne nuit,à plus,à plus tard,à bientôt,à tout à l'heure,ciao,bye,fin de conversation,"
+        "va dormir,dors,mets-toi en veille,en veille,veille,tais-toi,laisse tomber,rien,j'ai fini,terminé"
+    )
+    # Mots ignorés autour de ces phrases (« Merci, au revoir ! » -> « au revoir »)
+    CONVERSATION_END_FILLERS: CsvList = _parse_list("merci,beaucoup,ok,okay,bon,bah,ben,alors,eh,euh,bien,jarvis,pour,moi")
 
     # 🧠 LLM
     OLLAMA_MODEL: str = "qwen2.5:7b"

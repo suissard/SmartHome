@@ -216,7 +216,18 @@ def main():
                             reply = run_local_turn(core, speech, stream, mic_lock, barge_in, user_input)
                             print()
 
-                            # 3. Signal de passage de la parole (son court si l'utilisateur a interrompu)
+                            # 3. Fin de conversation demandée (« au revoir », outil sleep) : retour en veille
+                            if reply.end_conversation:
+                                print("💤 Fin de conversation demandée.")
+                                # Le LLM a déjà pris congé à voix haute : un simple son suffit
+                                if reply.text:
+                                    feedback.play_sound(settings.FEEDBACK_TIMEOUT_SOUND)
+                                else:
+                                    feedback.on_timeout()
+                                in_conversation = False
+                                continue
+
+                            # 4. Signal de passage de la parole (son court si l'utilisateur a interrompu)
                             if reply.interrupted:
                                 if settings.BARGE_IN_SOUND:
                                     feedback.play_sound(settings.BARGE_IN_SOUND)

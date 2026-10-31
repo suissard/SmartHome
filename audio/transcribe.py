@@ -21,6 +21,7 @@ from core.config import (
     FOLLOW_UP_TIMEOUT,
 )
 from audio.stt import STT_PROVIDERS, STTProvider, create_stt
+from audio.vad import SpeechDetector
 
 CHUNK = AUDIO_CHUNK
 RATE = AUDIO_RATE
@@ -31,14 +32,17 @@ FORMAT = pyaudio.paInt16
 class VoiceTranscriber:
     """Enregistrement micro avec détection d'activité vocale (VAD), puis transcription par le fournisseur STT."""
 
-    def __init__(self, settings: Settings | None = None, stt: STTProvider | None = None):
+    def __init__(self, settings: Settings | None = None, stt: STTProvider | None = None, vad: SpeechDetector | None = None):
         s = settings or get_settings()
         self.settings = s
         self.voice_threshold = s.VOICE_THRESHOLD
         self.silence_duration = s.SILENCE_DURATION
         self.follow_up_timeout = s.FOLLOW_UP_TIMEOUT
         self.max_speech_duration = s.MAX_SPEECH_DURATION
+        self.min_speech_duration = s.VAD_MIN_SPEECH_DURATION
         self.stt = stt or create_stt(s)
+        # Distingue la parole du bruit ambiant : le bruit ne déclenche plus d'enregistrement et n'empêche plus la fin de phrase
+        self.vad = vad or SpeechDetector(s)
 
     def _flush_stream(self, stream):
         """Purge les paquets résiduels dans le micro"""
@@ -65,6 +69,7 @@ class VoiceTranscriber:
         self._flush_stream(stream)
         start_wait = time.time()
         pre_buffer = deque(maxlen=4)
+        self.vad.reset()
 
         while True:
             elapsed = time.time() - start_wait
@@ -86,34 +91,35 @@ class VoiceTranscriber:
 
             data = stream.read(CHUNK, exception_on_overflow=False)
             chunk = np.frombuffer(data, dtype=np.int16)
-            vol = np.abs(chunk).mean()
             pre_buffer.append(data)
 
             # Voix détectée -> Enregistrement
-            if vol > self.voice_threshold:
+            if self.vad.is_speech_start(chunk):
                 sys.stdout.write("\r" + " " * 80 + "\r🎤 [Enregistrement...] ")
                 sys.stdout.flush()
 
                 frames = list(pre_buffer)
-                silence_start = None
-                speech_start = time.time()
+                speech_chunks = 1
+                silent_chunks = 0
+                # Durées mesurées en temps audio (trames lues), indépendamment de la vitesse de lecture du flux
+                chunk_seconds = CHUNK / RATE
+                max_chunks = int(max_speech_duration / chunk_seconds)
 
-                while (time.time() - speech_start) < max_speech_duration:
+                for _ in range(max_chunks):
                     s_data = stream.read(CHUNK, exception_on_overflow=False)
                     s_chunk = np.frombuffer(s_data, dtype=np.int16)
-                    s_vol = np.abs(s_chunk).mean()
                     frames.append(s_data)
 
-                    if s_vol > self.voice_threshold:
-                        silence_start = None
+                    if self.vad.is_speech_continuing(s_chunk):
+                        speech_chunks += 1
+                        silent_chunks = 0
                     else:
-                        if silence_start is None:
-                            silence_start = time.perf_counter()
-                        elif time.perf_counter() - silence_start > self.silence_duration:
+                        silent_chunks += 1
+                        if silent_chunks * chunk_seconds > self.silence_duration:
                             break
 
-                # Analyse seulement si l'enregistrement a capté assez de matière
-                if len(frames) > 5:
+                # Analyse seulement si l'enregistrement contient assez de parole (un bruit bref n'est pas transcrit)
+                if speech_chunks * CHUNK / RATE >= self.min_speech_duration:
                     sys.stdout.write("\r" + " " * 80 + "\r⚙️ [Analyse en cours...] ")
                     sys.stdout.flush()
 
@@ -149,8 +155,10 @@ class VoiceTranscriber:
                         return text, inf_t, aud_d
 
                 # Bruit parasite ignoré : réinitialisation rapide
+                sys.stdout.write("\r" + " " * 80 + "\r")
                 self._flush_stream(stream)
                 pre_buffer.clear()
+                self.vad.reset()
 
 
 # Alias de compatibilité

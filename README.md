@@ -14,6 +14,8 @@ SmartHome est un assistant vocal intelligent, modulaire, ultra-réactif et enti�
 - **🔔 Signaux Sonores & Retours Vocaux** : Accords harmoniques, carillons (*ding* de fin de phrase), et phrases personnalisables (*"Que puis je pour toi ?"*, *"Bisous a plus tard"*).
 - **⚡ Réponse Vocale en Streaming** : l'assistant commence à parler dès la première phrase générée, pendant que le LLM écrit la suite.
 - **✋ Barge-in** : redites le mot-clé pendant qu'il parle (ou touchez le micro sur le téléphone) pour lui couper la parole et enchaîner.
+- **💤 Fin de conversation** : dites « au revoir », « c'est tout » ou « stop » (liste `CONVERSATION_END_PHRASES`) pour le remettre en veille aussitôt ; les formulations libres (« je vais me coucher ») passent par l'outil `sleep` du LLM.
+- **🔇 Résistant au bruit** : la détection de voix Silero (locale) ignore ventilateur, musique ou claquements ; les phrases inventées par Whisper dans le bruit sont écartées (`VAD_ENGINE`, `STT_IGNORED_PHRASES`). Testez votre micro avec `python audio/vad.py`.
 - **💬 Mode Conversation Suivie (*Follow-up*)** : Après le réveil par mot-clé, l'assistant reste en veille active pendant 30 secondes pour enchaîner les questions sans répéter le mot d'activation.
 
 ---

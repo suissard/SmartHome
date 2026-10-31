@@ -22,7 +22,7 @@ if str(_ROOT_DIR) not in sys.path:
 
 from core.config import Settings, get_settings
 from core.events import EventBus
-from core.sentences import SentenceSplitter
+from core.sentences import SentenceSplitter, matches_phrase
 from core.tools import ConfirmationHandler, ToolRegistry, ToolResult, build_tool_registry
 from llm.llm import Conversation, ResponseInterrupted
 
@@ -47,6 +47,14 @@ def _tool_summary(result: ToolResult) -> dict:
     }
 
 
+def _asks_to_sleep(raw: str, tools: list[dict]) -> bool:
+    """Le LLM a demandé la mise en veille : outil « sleep » exécuté, ou tag [SLEEP] dans le texte."""
+    from actions.modules.sleep import SLEEP_ACTION
+    if any(t["name"] == SLEEP_ACTION.tool_name and t["executed"] for t in tools):
+        return True
+    return bool(raw and SLEEP_ACTION.pattern.search(raw))
+
+
 @dataclass
 class Reply:
     session_id: str
@@ -55,6 +63,7 @@ class Reply:
     tools: list[dict] = field(default_factory=list)
     audio_wav: Optional[bytes] = None
     interrupted: bool = False     # génération abandonnée (barge-in, bouton stop)
+    end_conversation: bool = False  # l'utilisateur a pris congé : retour en veille (phrase de fin ou outil « sleep »)
 
 
 @dataclass
@@ -197,6 +206,13 @@ class AssistantCore:
                 emit("response", sid, text="", tools=[])
                 return reply
 
+            # « Au revoir », « c'est tout »... : fin immédiate, sans solliciter le LLM
+            s = self.settings
+            if reply.transcript and matches_phrase(reply.transcript, s.CONVERSATION_END_PHRASES, s.CONVERSATION_END_FILLERS):
+                reply.end_conversation = True
+                emit("response", sid, text="", tools=[], end_conversation=True)
+                return reply
+
             splitter = SentenceSplitter(self.settings.TTS_STREAM_MIN_CHARS) if on_sentence else None
             spoken: list[str] = []
 
@@ -234,7 +250,8 @@ class AssistantCore:
                 from actions.manager import get_action_manager
                 reply.text = get_action_manager().process_response(raw, confirm=session.conversation.confirm)
 
-            emit("response", sid, text=reply.text, tools=reply.tools)
+            reply.end_conversation = _asks_to_sleep(raw, reply.tools)
+            emit("response", sid, text=reply.text, tools=reply.tools, end_conversation=reply.end_conversation)
 
             # Rien n'a été prononcé en direct (réponse non streamée, message d'erreur...) : on dit le texte final
             if on_sentence and not spoken and reply.text:

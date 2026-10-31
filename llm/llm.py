@@ -32,7 +32,9 @@ _NATIVE_TOOLS_GUIDANCE = """
 Tu peux agir sur l'ordinateur et la maison grâce aux outils fournis.
 1. N'appelle un outil QUE si l'utilisateur le demande expressément.
 2. Après l'exécution, réponds par une courte phrase de confirmation orale (sans markdown).
-3. Si un outil échoue ou si l'action est annulée, dis-le simplement à l'utilisateur."""
+3. Si un outil échoue ou si l'action est annulée, dis-le simplement à l'utilisateur.
+4. Quand l'utilisateur prend congé ou n'a plus besoin de rien (au revoir, c'est tout, bonne nuit...), appelle l'outil sleep, puis salue-le en une courte phrase.
+5. N'écris jamais le nom d'un outil dans ta réponse : appelle-le."""
 
 
 def get_default_system_prompt(settings: Optional[Settings] = None, use_tags: Optional[bool] = None) -> str:

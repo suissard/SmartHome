@@ -14,6 +14,7 @@ if str(_ROOT_DIR) not in sys.path:
 
 from core.config import Settings
 from core.providers import ProviderRegistry, require_openrouter_key
+from core.sentences import matches_phrase, normalize_utterance
 
 
 class STTProvider:
@@ -35,6 +36,13 @@ class STTProvider:
     def transcribe(self, wav_bytes: bytes) -> str:
         """Retourne le texte reconnu dans l'enregistrement WAV (chaîne vide si rien). Lève en cas d'erreur."""
         raise NotImplementedError
+
+    def _discard_hallucination(self, text: str) -> str:
+        """Whisper « entend » des phrases toutes faites dans le bruit (« Sous-titres réalisés par... ») : on les ignore."""
+        if text and (not normalize_utterance(text) or matches_phrase(text, self.settings.STT_IGNORED_PHRASES)):
+            print(f"\n🔇 [STT] Transcription ignorée (bruit) : « {text} »")
+            return ""
+        return text
 
 
 STT_PROVIDERS: ProviderRegistry[STTProvider] = ProviderRegistry("STT")
@@ -65,9 +73,12 @@ class WhisperSTT(STTProvider):
                 language=self.language,
                 beam_size=self.beam_size,
                 condition_on_previous_text=False,
+                # Silero VAD intégré à faster-whisper : retire les passages sans parole avant le décodage
+                vad_filter=self.settings.WHISPER_VAD_FILTER,
             )
             # Les segments sont générés paresseusement : la transcription a lieu pendant ce parcours
-            return " ".join(seg.text for seg in segments).strip()
+            text = " ".join(seg.text for seg in segments).strip()
+        return self._discard_hallucination(text)
 
 
 @STT_PROVIDERS.register("openrouter")
@@ -91,7 +102,7 @@ class OpenRouterSTT(STTProvider):
             file=("audio.wav", wav_bytes, "audio/wav"),
             language=self.language,
         )
-        return (getattr(transcription, "text", "") or "").strip()
+        return self._discard_hallucination((getattr(transcription, "text", "") or "").strip())
 
 
 @STT_PROVIDERS.register("direct", "none", "bypass")
