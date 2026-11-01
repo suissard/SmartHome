@@ -21,6 +21,7 @@ class ShutdownAction(BaseAction):
     def __init__(self):
         super().__init__(
             tag="SHUTDOWN",
+            done_message="J'éteins l'ordinateur.",
             description="Éteindre complètement l'ordinateur.",
             script_code=_SHUTDOWN_SCRIPT,
             has_args=False,

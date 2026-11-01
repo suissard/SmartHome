@@ -585,6 +585,10 @@ function renderField(field) {
       if (field.min !== undefined && field.min !== null) input.min = field.min;
       if (field.max !== undefined && field.max !== null) input.max = field.max;
       input.value = field.value ?? "";
+    } else if (field.kind === "json") {
+      input = document.createElement("textarea");
+      input.spellcheck = false;
+      input.value = Object.keys(field.value || {}).length ? JSON.stringify(field.value, null, 2) : "{}";
     } else if (field.multiline) {
       input = document.createElement("textarea");
       input.value = field.kind === "list" ? field.value.join(", ") : field.value;
@@ -603,7 +607,9 @@ function renderField(field) {
   }
   input.dataset.name = field.name;
   input.addEventListener("input", () => {
-    wrap.classList.toggle("changed", readField(field, input) !== undefined);
+    let changed = true;
+    try { changed = readField(field, input) !== undefined; } catch { /* JSON en cours de saisie */ }
+    wrap.classList.toggle("changed", changed);
     ui.advancedForm.dataset.dirty = "1";
   });
   if (field.help) {
@@ -611,6 +617,19 @@ function renderField(field) {
     help.className = "help";
     help.textContent = field.help;
     wrap.append(help);
+  }
+  if (field.defaults) {
+    // Messages déclarés par les actions : rappel des commandes disponibles et de leur phrase par défaut
+    const details = document.createElement("details");
+    details.className = "help";
+    const summary = document.createElement("summary");
+    summary.textContent = "Messages par défaut des commandes";
+    const list = document.createElement("pre");
+    list.className = "defaults";
+    list.textContent = Object.entries(field.defaults)
+      .map(([tool, message]) => `${tool} : ${message || "(réponse type)"}`).join("\n");
+    details.append(summary, list);
+    wrap.append(details);
   }
   return wrap;
 }
@@ -641,6 +660,13 @@ function readField(field, input) {
     if (input.value.trim() === "") return undefined;
     value = Number(input.value);
   } else if (field.kind === "list") value = input.value.split(",").map((v) => v.trim()).filter(Boolean);
+  else if (field.kind === "json") {
+    try {
+      value = JSON.parse(input.value.trim() || "{}");
+    } catch {
+      throw new Error(`${field.label} : JSON invalide (ex: {"volume": "Volume \${ARGS}."}).`);
+    }
+  }
   else value = input.value;
   return JSON.stringify(value) === JSON.stringify(field.value) ? undefined : value;
 }
@@ -658,10 +684,15 @@ $("advanced-close").addEventListener("click", () => ui.advanced.close());
 ui.advancedForm.addEventListener("submit", (e) => {
   e.preventDefault();
   const values = {};
-  for (const input of ui.advancedFields.querySelectorAll("[data-name]")) {
-    const field = fieldByName(input.dataset.name);
-    const value = field && readField(field, input);
-    if (value !== undefined) values[field.name] = value;
+  try {
+    for (const input of ui.advancedFields.querySelectorAll("[data-name]")) {
+      const field = fieldByName(input.dataset.name);
+      const value = field && readField(field, input);
+      if (value !== undefined) values[field.name] = value;
+    }
+  } catch (err) {
+    setMessage(ui.advancedMsg, err.message, "error");
+    return;
   }
   if (!Object.keys(values).length) {
     setMessage(ui.advancedMsg, "Aucun changement.");

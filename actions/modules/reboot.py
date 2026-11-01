@@ -21,6 +21,7 @@ class RebootAction(BaseAction):
     def __init__(self):
         super().__init__(
             tag="REBOOT",
+            done_message="Je redémarre l'ordinateur.",
             description="Redémarrer l'ordinateur.",
             script_code=_REBOOT_SCRIPT,
             has_args=False,

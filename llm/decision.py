@@ -5,13 +5,16 @@ Une demande se traite en deux décisions puis une réponse type :
 1. « Quelle commande ? » : un choix parmi les outils décidables, plus « aucune » ;
 2. les arguments de l'outil choisi, chacun parmi des valeurs fermées (choix déclarés par l'action locale,
    `enum`, booléen, petite échelle d'entiers). Un outil dont un argument requis est libre n'est pas proposé ;
-3. exécution de l'outil (confirmation comprise), puis réponse construite à partir de ce qui a été compris
-   (LLM_DECISION_DONE_TEMPLATE / LLM_DECISION_REFUSED_TEMPLATE / LLM_DECISION_UNKNOWN_TEXT).
+3. exécution de l'outil (confirmation comprise), puis phrase de confirmation : message de la commande
+   (LLM_DECISION_MESSAGES, sinon `done_message` de l'action), à défaut réponse type générique
+   (LLM_DECISION_DONE_TEMPLATE / _NO_ARGS_TEMPLATE / REFUSED_TEMPLATE / UNKNOWN_TEXT).
+   Les gabarits acceptent ${COMMAND}, ${ARGS}, ${OUTPUT}, ${TOOL} et ${<ARGUMENT>} pour chaque argument.
 """
 
 import re
 import sys
 from dataclasses import dataclass
+from string import Template
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -26,6 +29,8 @@ COMMAND_QUESTION = "command"
 # Une échelle "score" du modèle compte au plus 10 niveaux
 _MAX_SCORE_LEVELS = 10
 _LABEL_END = re.compile(r"\s*[(.,;:]")
+# Préfixe ajouté par les actions locales à leur sortie (core/tools.py), inutile à l'oral
+_OUTPUT_PREFIX = re.compile(r"^Succès\.\s*")
 
 
 @dataclass
@@ -127,10 +132,9 @@ def run_decision(conversation, prompt: str, on_tool: Optional[Callable[[ToolResu
     tool, arguments = candidates[choice]
     questions = {name: arg.question for name, arg in arguments.items() if arg.question}
     answers = provider.decide(prompt, questions) if questions else {}
-    values, labels = {}, []
+    values, labels = {}, {}
     for name, arg in arguments.items():
-        values[name], label = arg.convert(answers.get(name))
-        labels.append(label)
+        values[name], labels[name] = arg.convert(answers.get(name))
     if labels:
         print(f"🎯 [DÉCISION] Arguments : {values}")
 
@@ -139,13 +143,32 @@ def run_decision(conversation, prompt: str, on_tool: Optional[Callable[[ToolResu
     if on_tool:
         on_tool(result)
 
-    command = tool_label(tool) + (f" ({', '.join(labels)})" if labels else "")
-    template = s.LLM_DECISION_DONE_TEMPLATE if result.executed else s.LLM_DECISION_REFUSED_TEMPLATE
-    try:
-        return template.format(command=command, output=result.output)
-    except (KeyError, IndexError, ValueError):
-        # Gabarit mal formé (accolade inconnue) : on dit au moins ce qui a été compris
-        return f"{template} {command}"
+    return confirmation_message(s, tool, result, labels)
+
+
+def _spoken_output(output: str) -> str:
+    """Sortie d'outil lisible à voix haute : sans préfixe technique, une phrase par ligne."""
+    lines = [line.strip().rstrip(".") for line in _OUTPUT_PREFIX.sub("", output or "").splitlines() if line.strip()]
+    return ". ".join(lines) + "." if lines else ""
+
+
+def confirmation_message(settings, tool: Tool, result: ToolResult, labels: dict[str, str]) -> str:
+    """Phrase dite après la commande. Gabarit : message configuré pour l'outil (.env), sinon celui de l'action,
+    sinon la réponse type générique ; une commande non exécutée utilise toujours LLM_DECISION_REFUSED_TEMPLATE."""
+    s = settings
+    generic = s.LLM_DECISION_DONE_TEMPLATE if labels else s.LLM_DECISION_DONE_NO_ARGS_TEMPLATE
+    if result.executed:
+        template = s.LLM_DECISION_MESSAGES.get(tool.name) or tool.decision_message or generic
+    else:
+        template = s.LLM_DECISION_REFUSED_TEMPLATE
+    variables = {name.upper(): label for name, label in labels.items()}
+    variables.update(
+        COMMAND=tool_label(tool), ARGS=", ".join(labels.values()), TOOL=tool.name, OUTPUT=_spoken_output(result.output),
+    )
+    # safe_substitute : une variable inconnue reste telle quelle au lieu de faire échouer la réponse
+    text = Template(template).safe_substitute(variables).strip()
+    # Message vide (ex: ${OUTPUT} sans sortie) : on dit au moins ce qui a été fait
+    return text or Template(generic).safe_substitute(variables).strip()
 
 
 if __name__ == "__main__":

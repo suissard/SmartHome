@@ -29,6 +29,7 @@ class CloseAppAction(BaseAction):
     def __init__(self):
         super().__init__(
             tag="CLOSE",
+            done_message="Je ferme ${ARGS}.",
             description="Fermer une application ouverte (ex: firefox, spotify, vlc). Seules les applications autorisées.",
             script_code=_CLOSE_SCRIPT,
             has_args=True,

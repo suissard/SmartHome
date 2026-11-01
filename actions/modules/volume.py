@@ -107,6 +107,7 @@ class VolumeAction(BaseAction):
     def __init__(self):
         super().__init__(
             tag="VOLUME",
+            done_message="Volume ${ARGS}.",
             description="Régler le volume sonore : monter ou baisser le son, ou fixer un niveau de 0 à 100.",
             script_code=_VOLUME_SCRIPT,
             has_args=True,
@@ -127,6 +128,7 @@ class MuteAction(BaseAction):
     def __init__(self):
         super().__init__(
             tag="MUTE",
+            done_message="Son coupé.",
             description="Couper le son de l'ordinateur (muet).",
             script_code=_VOLUME_SCRIPT,
             has_args=False,
@@ -142,6 +144,7 @@ class UnmuteAction(BaseAction):
     def __init__(self):
         super().__init__(
             tag="UNMUTE",
+            done_message="Son réactivé.",
             description="Réactiver le son de l'ordinateur.",
             script_code=_VOLUME_SCRIPT,
             has_args=False,

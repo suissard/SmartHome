@@ -39,6 +39,7 @@ class ScreenshotAction(BaseAction):
     def __init__(self):
         super().__init__(
             tag="SCREENSHOT",
+            done_message="Capture d'écran enregistrée.",
             description="Prendre une capture d'écran du bureau et l'enregistrer dans le dossier d'images.",
             script_code=_SCREENSHOT_SCRIPT,
             example_prompt="Fais une capture d'écran.",

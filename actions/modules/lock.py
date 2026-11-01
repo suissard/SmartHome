@@ -48,6 +48,7 @@ class LockAction(BaseAction):
     def __init__(self):
         super().__init__(
             tag="LOCK",
+            done_message="Je verrouille la session.",
             description="Verrouiller la session de l'utilisateur.",
             script_code=_LOCK_SCRIPT,
             has_args=False,

@@ -36,6 +36,8 @@ class Tool:
     source: str = "local"         # "local" ou nom du serveur MCP
     # Valeurs possibles de l'argument "args" d'une action locale, pour les modèles de décision (voir llm/decision.py)
     decision_choices: Optional[dict[str, str]] = None
+    # Phrase de confirmation prononcée après exécution par un modèle de décision (variables ${ARGS}, ${OUTPUT}...)
+    decision_message: str = ""
 
     def schema(self) -> dict:
         """Définition au format function calling (compatible OpenAI et Ollama)."""
@@ -155,6 +157,7 @@ def _action_tool(action, settings: Settings) -> Tool:
         danger=action.danger,
         source="local",
         decision_choices=action.decision_choices() if action.has_args else None,
+        decision_message=action.done_message,
     )
 
 

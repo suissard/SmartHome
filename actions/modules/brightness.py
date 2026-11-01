@@ -55,6 +55,7 @@ class BrightnessAction(BaseAction):
     def __init__(self):
         super().__init__(
             tag="BRIGHTNESS",
+            done_message="Luminosité ${ARGS}.",
             description="Régler la luminosité de l'écran : plus ou moins lumineux, ou fixer un pourcentage de 0 à 100.",
             script_code=_BRIGHTNESS_SCRIPT,
             has_args=True,

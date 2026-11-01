@@ -32,6 +32,9 @@ class BaseAction:
     enabled: bool = True
     # "safe" : exécution directe ; "confirm" : confirmation de l'utilisateur exigée (extinction, redémarrage...)
     danger: str = "safe"
+    # Phrase prononcée après exécution par un modèle de décision (qui ne rédige pas de réponse).
+    # Variables : ${ARGS} (argument choisi), ${COMMAND}, ${OUTPUT} (sortie du script). Vide = réponse type générique.
+    done_message: str = ""
 
     # Regex compilée pour détecter ce tag spécifique dans une réponse LLM
     _pattern: Optional[re.Pattern] = field(default=None, init=False, repr=False)

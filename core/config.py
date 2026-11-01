@@ -8,6 +8,7 @@ Le nouveau code reçoit l'objet `Settings` (via `get_settings()`) ; les constant
 (LLM_PROVIDER, AUDIO_RATE, ...) restent exportées pour compatibilité.
 """
 
+import json
 import os
 import sys
 from pathlib import Path
@@ -47,7 +48,16 @@ def _parse_list(value):
     return value
 
 
+def _parse_json_dict(value):
+    if isinstance(value, str):
+        value = json.loads(value) if value.strip() else {}
+    if isinstance(value, dict):
+        return {str(k).strip().lower(): v for k, v in value.items()}
+    return value
+
+
 EnvBool = Annotated[bool, BeforeValidator(_parse_bool)]
+JsonDict = Annotated[dict[str, str], BeforeValidator(_parse_json_dict)]
 CsvList = Annotated[list[str], BeforeValidator(_parse_list)]
 FeedbackType = Literal["phrase", "sound", "none"]
 
@@ -142,9 +152,13 @@ class Settings(BaseModel):
     )
     # Probabilité minimale de la commande choisie ; en dessous, la demande est considérée comme non comprise
     LLM_DECISION_MIN_CONFIDENCE: float = Field(0.5, ge=0.0, le=1.0)
-    # Réponses types ({command} = ce qui a été compris, {output} = résultat de l'outil)
-    LLM_DECISION_DONE_TEMPLATE: str = "Compris : {command}."
-    LLM_DECISION_REFUSED_TEMPLATE: str = "Commande non exécutée : {command}."
+    # Réponses types. Variables : ${COMMAND} (commande comprise), ${ARGS} (arguments choisis), ${OUTPUT} (résultat
+    # de l'outil), ${TOOL} (nom de l'outil) et ${<ARGUMENT>} pour chaque argument (ex: ${ROOM})
+    LLM_DECISION_DONE_TEMPLATE: str = "Commande ${COMMAND} initiée avec ${ARGS}."
+    LLM_DECISION_DONE_NO_ARGS_TEMPLATE: str = "Commande ${COMMAND} initiée."
+    LLM_DECISION_REFUSED_TEMPLATE: str = "Commande non exécutée : ${COMMAND}."
+    # Message de confirmation par commande ({"outil": "gabarit"}), prioritaire sur celui déclaré par l'action
+    LLM_DECISION_MESSAGES: JsonDict = Field(default_factory=dict)
     LLM_DECISION_UNKNOWN_TEXT: str = "Je n'ai pas compris la commande."
     # Délai maximal d'une décision (le premier appel charge le modèle en mémoire), en secondes
     LLM_DECISION_TIMEOUT: float = Field(60.0, gt=0.0)
@@ -260,7 +274,8 @@ _KNOWN_KEYS = set(Settings.model_fields) | {"ACTIVE_STANDBY_TIMEOUT"}
 def load_settings(env_file: Path = ENV_FILE) -> Settings:
     """Charge et valide la configuration. Une valeur vide est considérée comme absente."""
     raw: dict[str, str] = {}
-    sources = [dotenv_values(env_file) if env_file.exists() else {}, os.environ]
+    # interpolate=False : les gabarits de réponse utilisent ${COMMAND}, ${ARGS}... qui ne sont pas des variables .env
+    sources = [dotenv_values(env_file, interpolate=False) if env_file.exists() else {}, os.environ]
     for source in sources:
         for key, value in source.items():
             if key in _KNOWN_KEYS and value is not None and value.strip():

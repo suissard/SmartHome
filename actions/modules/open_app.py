@@ -108,6 +108,7 @@ class OpenAppAction(BaseAction):
     def __init__(self):
         super().__init__(
             tag="OPEN",
+            done_message="J'ouvre ${ARGS}.",
             description="Lancer une application installée (ex: firefox, spotify, code, calculatrice).",
             script_code=_OPEN_APP_SCRIPT,
             has_args=True,

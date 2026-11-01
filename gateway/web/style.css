@@ -297,3 +297,5 @@ svg { width: 24px; height: 24px; fill: currentColor; }
 }
 .ok-text { color: var(--ok) !important; }
 .actions.sticky { position: sticky; bottom: -20px; background: var(--surface); padding: 10px 0 4px; margin-bottom: -4px; }
+.field details.help summary { cursor: pointer; }
+.defaults { white-space: pre-wrap; font-size: 12px; margin: 6px 0 0; color: var(--muted); }

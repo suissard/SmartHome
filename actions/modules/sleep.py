@@ -10,6 +10,7 @@ class SleepAction(BaseAction):
     def __init__(self):
         super().__init__(
             tag="SLEEP",
+            done_message="À bientôt !",
             description=(
                 "Terminer la conversation et remettre l'assistant en veille, quand l'utilisateur prend congé "
                 "ou n'a plus besoin de rien (au revoir, merci c'est tout, bonne nuit...). N'éteint pas l'ordinateur."

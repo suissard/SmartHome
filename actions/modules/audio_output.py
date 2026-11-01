@@ -71,6 +71,7 @@ class AudioOutputAction(BaseAction):
     def __init__(self):
         super().__init__(
             tag="AUDIO_OUTPUT",
+            done_message="Sortie audio : ${ARGS}.",
             description="Changer la sortie audio (next, list, ou un mot du nom : casque, enceintes, hdmi, bluetooth).",
             script_code=_AUDIO_OUTPUT_SCRIPT,
             has_args=True,

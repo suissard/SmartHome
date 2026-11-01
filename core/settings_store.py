@@ -7,6 +7,7 @@ AssistantCore à chaque demande) ou seulement au prochain démarrage (lu une foi
 L'aide affichée est le commentaire qui précède la variable dans `.env.example`.
 """
 
+import json
 import os
 import re
 import sys
@@ -41,7 +42,9 @@ EDITABLE_GROUPS: list[tuple[str, list[tuple[str, str, bool]]]] = [
     ("Modèle de décision", [
         ("LLM_DECISION_PROMPT", "Question de choix de la commande", LIVE),
         ("LLM_DECISION_MIN_CONFIDENCE", "Confiance minimale", LIVE),
-        ("LLM_DECISION_DONE_TEMPLATE", "Réponse : commande exécutée", LIVE),
+        ("LLM_DECISION_MESSAGES", "Messages de confirmation par commande", LIVE),
+        ("LLM_DECISION_DONE_TEMPLATE", "Réponse type : commande exécutée", LIVE),
+        ("LLM_DECISION_DONE_NO_ARGS_TEMPLATE", "Réponse type : commande sans argument", LIVE),
         ("LLM_DECISION_REFUSED_TEMPLATE", "Réponse : commande non exécutée", LIVE),
         ("LLM_DECISION_UNKNOWN_TEXT", "Réponse : rien compris", LIVE),
         ("LLM_DECISION_TIMEOUT", "Délai maximal (s)", LIVE),
@@ -139,6 +142,8 @@ def _field_spec(name: str) -> dict:
         spec = {"kind": "bool"}
     elif typing.get_origin(annotation) is list:
         spec = {"kind": "list", "multiline": name in _MULTILINE}
+    elif typing.get_origin(annotation) is dict:
+        spec = {"kind": "json"}
     elif annotation in (int, float):
         spec = {"kind": "number", "step": 1 if annotation is int else "any"}
         for constraint in info.metadata:
@@ -157,6 +162,12 @@ def _field_spec(name: str) -> dict:
         spec = {"kind": "select", "options": voices} if voices else spec
     elif name == "OLLAMA_MODEL":
         spec = {"kind": "model"}  # liste fournie à part par le fournisseur (message "list_models")
+    elif name == "LLM_DECISION_MESSAGES":
+        try:
+            from actions.registry import get_all_commands
+            spec["defaults"] = {a.tool_name: a.done_message for a in get_all_commands()}
+        except Exception:
+            pass
     return spec
 
 
@@ -200,6 +211,8 @@ def to_env_value(value: Any) -> str:
         text = "true" if value else "false"
     elif isinstance(value, (list, tuple)):
         text = ",".join(str(v) for v in value)
+    elif isinstance(value, dict):
+        text = json.dumps(value, ensure_ascii=False)
     else:
         text = str(value)
     if re.search(r"[\s#'\"\\]", text):

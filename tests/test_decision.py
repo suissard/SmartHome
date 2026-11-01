@@ -93,7 +93,7 @@ class TestDecisionModel(unittest.TestCase):
         conversation = Conversation(decider, SETTINGS, tools=registry(executed))
         text = conversation.ask("mets le volume à 40")
         self.assertEqual(executed, [("volume", {"args": "40"})])
-        self.assertEqual(text, "Compris : régler le volume sonore (40 %).")
+        self.assertEqual(text, "Commande régler le volume sonore initiée avec 40 %.")
         self.assertIn(NO_COMMAND, decider.asked[0]["command"]["criteria"])
         self.assertEqual(conversation.history[-1]["content"], text)
         self.assertTrue(conversation.last_tool_results[0].executed)
@@ -123,6 +123,36 @@ class TestDecisionModel(unittest.TestCase):
         self.assertEqual(conversation.ask("éteins"), "Commande non exécutée : éteindre l'ordinateur.")
         self.assertEqual(executed, [])
 
+    def test_confirmation_message_priority_and_variables(self):
+        tools = registry([])
+        tools.get("volume").decision_message = "Volume ${ARGS}."
+        decider = FakeDecider({"command": choice("volume"), "args": choice("up")})
+        self.assertEqual(Conversation(decider, SETTINGS, tools=tools).ask("plus fort"), "Volume plus fort.")
+
+        # Le message configuré dans .env l'emporte (clé insensible à la casse) ; variable par argument
+        overrides = Settings(**{**SETTINGS.model_dump(), "LLM_DECISION_MESSAGES":
+                                '{"VOLUME": "Ok ${TOOL} : ${ARGS} ${INCONNUE}", "lights": "${ROOM} ${LEVEL}"}'})
+        decider = FakeDecider({"command": choice("volume"), "args": choice("40")}, overrides)
+        self.assertEqual(Conversation(decider, overrides, tools=tools).ask("40"), "Ok volume : 40 % ${INCONNUE}")
+        decider = FakeDecider({"command": choice("lights"), "room": choice("salon"), "on": {"noul": 0.1},
+                               "level": {"score": 0.2}}, overrides)
+        self.assertEqual(Conversation(decider, overrides, tools=tools).ask("salon"), "salon 1")
+
+        # Sans argument : réponse type sans « avec », y compris quand ${OUTPUT} est vide (sortie « Succès. »)
+        decider = FakeDecider({"command": choice("shutdown")})
+        confirmed = Conversation(decider, SETTINGS, tools=tools, confirm=lambda d: True)
+        self.assertEqual(confirmed.ask("éteins"), "Commande éteindre l'ordinateur initiée.")
+        tools.get("shutdown").decision_message = "${OUTPUT}"
+        self.assertEqual(confirmed.ask("éteins"), "Commande éteindre l'ordinateur initiée.")
+
+    def test_tool_output_is_spoken(self):
+        tools = registry([])
+        tools.get("shutdown").handler = lambda a: "Succès. Uptime : 2 heures\nMémoire : 40 %"
+        tools.get("shutdown").decision_message = "${OUTPUT}"
+        decider = FakeDecider({"command": choice("shutdown")})
+        text = Conversation(decider, SETTINGS, tools=tools, confirm=lambda d: True).ask("état")
+        self.assertEqual(text, "Uptime : 2 heures. Mémoire : 40 %.")
+
     def test_provider_error_becomes_message(self):
         class Broken(FakeDecider):
             def decide(self, state, questions):
@@ -139,6 +169,7 @@ class TestDecisionModel(unittest.TestCase):
         volume = _action_tool(get_command_by_tag("VOLUME"), SETTINGS)
         self.assertIn("40", volume.decision_choices)
         self.assertEqual(tool_label(volume), "régler le volume sonore")
+        self.assertEqual(volume.decision_message, "Volume ${ARGS}.")
         timer = get_command_by_tag("TIMER")
         for value in timer.decision_choices():
             self.assertTrue(timer.build_args(value), value)  # chaque choix est une durée valide
@@ -174,7 +205,8 @@ class TestSettingsStore(unittest.TestCase):
     def test_saved_values_reload_identically(self):
         new, changed = settings_store.validate_changes(SETTINGS, {
             "OLLAMA_MODEL": "gemma4:12b", "LLM_THINK": True, "LLM_DECISION_MODELS": ["nimble", "tev1"],
-            "LLM_DECISION_DONE_TEMPLATE": 'C\'est "fait" : {command} # ok',
+            "LLM_DECISION_DONE_TEMPLATE": 'C\'est "fait" : ${COMMAND} # ok',
+            "LLM_DECISION_MESSAGES": {"volume": 'Volume "${ARGS}"'},
         })
         settings_store.save_to_env(new, changed, self.env)
         text = self.env.read_text(encoding="utf-8")
@@ -196,7 +228,7 @@ class TestSettingsStore(unittest.TestCase):
         self.assertIn("OLLAMA_MODEL=nimble", self.env.read_text(encoding="utf-8"))
         decider.model = core.settings.OLLAMA_MODEL  # un vrai fournisseur serait recréé avec le nouveau modèle
         self.assertEqual(session.conversation.max_messages, 2)
-        self.assertEqual(core.respond("s", text="monte le son").text, "Compris : régler le volume sonore (plus fort).")
+        self.assertEqual(core.respond("s", text="monte le son").text, "Commande régler le volume sonore initiée avec plus fort.")
         self.assertTrue(core.model_info()["decision"])
 
 

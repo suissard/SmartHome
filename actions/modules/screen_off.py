@@ -48,6 +48,7 @@ class ScreenOffAction(BaseAction):
     def __init__(self):
         super().__init__(
             tag="SCREEN_OFF",
+            done_message="J'éteins les écrans.",
             description="Mettre en veille / éteindre les écrans.",
             script_code=_SCREEN_OFF_SCRIPT,
             has_args=False,

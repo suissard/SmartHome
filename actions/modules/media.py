@@ -102,6 +102,7 @@ class MediaPlayPauseAction(BaseAction):
     def __init__(self):
         super().__init__(
             tag="MEDIA_PLAY_PAUSE",
+            done_message="Lecture en pause ou relancée.",
             description="Mettre en pause ou relancer la lecture multimédia (musique/vidéo).",
             script_code=_MEDIA_SCRIPT,
             has_args=False,
@@ -117,6 +118,7 @@ class MediaNextAction(BaseAction):
     def __init__(self):
         super().__init__(
             tag="MEDIA_NEXT",
+            done_message="Piste suivante.",
             description="Passer à la piste / musique suivante.",
             script_code=_MEDIA_SCRIPT,
             has_args=False,
@@ -132,6 +134,7 @@ class MediaPrevAction(BaseAction):
     def __init__(self):
         super().__init__(
             tag="MEDIA_PREV",
+            done_message="Piste précédente.",
             description="Revenir à la piste / musique précédente.",
             script_code=_MEDIA_SCRIPT,
             has_args=False,

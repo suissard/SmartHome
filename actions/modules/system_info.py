@@ -34,6 +34,7 @@ class SystemInfoAction(BaseAction):
     def __init__(self):
         super().__init__(
             tag="SYSTEM_INFO",
+            done_message="${OUTPUT}",
             description="Lire l'état de l'ordinateur : batterie, charge CPU, mémoire, disque, température, temps d'allumage.",
             script_code=_SYSTEM_INFO_SCRIPT,
             example_prompt="Quel est l'état de mon ordinateur ?",
