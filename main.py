@@ -47,6 +47,9 @@ def _print_event(event):
     if event.session_id == LOCAL_SESSION:
         if event.type == "token":
             print(event.data["text"], end="", flush=True)
+        elif event.type == "transcript":
+            # Mode direct avec un modèle sans entrée audio : transcription de repli faite par le cœur
+            print(f"\r👤 : « {event.data['text']} »\n🤖 : ", end="", flush=True)
         return
     tag = f"🌍 [{event.session_id}]"
     if event.type == "transcript":
@@ -154,6 +157,12 @@ def main():
 
     llm_info = LLM_PROVIDERS.get(settings.LLM_PROVIDER).describe(settings)
     stt_info = transcriber.stt.describe(settings)
+    if transcriber.stt.passthrough:
+        if core.audio_to_llm():
+            stt_info += f" — {core.llm.model} comprend l'audio ✅"
+        else:
+            stt_info += f" — {core.llm.model} ne comprend pas l'audio : transcription par {settings.STT_FALLBACK_PROVIDER}"
+            core.fallback_stt  # chargé dès maintenant plutôt qu'à la première demande
     tts_info = tts.engine.describe(settings)
     actions_info = f"Activées ({len(get_all_commands())} commandes prêtes)" if ACTIONS_ENABLED else "Désactivées"
     tools = conversation.tools.all()
@@ -207,7 +216,8 @@ def main():
 
                         if user_input:
                             if isinstance(user_input, bytes):
-                                print(f"👤 : 🎙️ [Audio envoyé au LLM] ({elapsed_t:.2f} s)")
+                                where = "envoyé au LLM" if core.audio_to_llm() else "à transcrire"
+                                print(f"👤 : 🎙️ [Audio {where}] ({elapsed_t:.2f} s)")
                             else:
                                 print(f"👤 : « {user_input} » ({elapsed_t:.2f} s)")
                             print("🤖 : ", end="", flush=True)

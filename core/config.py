@@ -70,6 +70,8 @@ class Settings(BaseModel):
     # 🌐 Fournisseurs (les noms valides sont ceux des registres de fournisseurs)
     LLM_PROVIDER: str = "ollama"
     STT_PROVIDER: str = "whisper"
+    # Transcription utilisée en mode direct quand le modèle actif ne comprend pas l'audio
+    STT_FALLBACK_PROVIDER: str = "whisper"
     TTS_PROVIDER: str = "piper"
 
     # ☁️ OpenRouter / Cloud
@@ -130,6 +132,13 @@ class Settings(BaseModel):
     # 🧠 LLM
     OLLAMA_MODEL: str = "qwen2.5:7b"
     OLLAMA_HOST: str = "http://localhost:11434"
+    # Modèles audio d'Ollama (STT_PROVIDER=ollama / TTS_PROVIDER=ollama) : capacités « audio » et « speech »
+    OLLAMA_STT_MODEL: str = "lfm3-audio"
+    OLLAMA_TTS_MODEL: str = "lfm3-audio"
+    # Voix : female / male, suivi éventuellement d'une langue (female-french, male-french...) ; vide = voix du modèle
+    OLLAMA_TTS_VOICE: str = "female-french"
+    # Délai maximal d'une transcription ou d'une synthèse Ollama (secondes)
+    OLLAMA_AUDIO_TIMEOUT: float = Field(30.0, gt=0.0)
     LLM_SYSTEM_PROMPT: str = (
         "Tu es un assistant vocal domotique. Réponds en français de manière claire, concise et directe "
         "(1 à 2 phrases max). N'utilise pas de markdown ou d'emoji."
@@ -141,6 +150,8 @@ class Settings(BaseModel):
     LLM_TOOL_CALLING: Literal["auto", "native", "tags"] = "auto"
     # Nombre maximal d'allers-retours outil -> LLM pour une même demande
     LLM_MAX_TOOL_ROUNDS: int = Field(4, ge=1)
+    # Entrée audio du LLM (STT_PROVIDER=direct) : "auto" (capacités annoncées par le modèle), "on" (toujours), "off" (jamais)
+    LLM_AUDIO_INPUT: Literal["auto", "on", "off"] = "auto"
 
     # 🎯 Modèles de décision (Ollama /v1/systemone : nimble, tev1...) : ils choisissent une commande sans rédiger de réponse
     # Modèles traités comme modèles de décision (nom sans le tag ":latest" accepté)
@@ -251,7 +262,7 @@ class Settings(BaseModel):
     GATEWAY_MAX_MESSAGE_BYTES: int = Field(10 * 1024 * 1024, gt=0)
 
     @field_validator(
-        "LLM_PROVIDER", "TTS_PROVIDER", "MCP_TRANSPORT", "LLM_TOOL_CALLING", "BARGE_IN_MODE",
+        "LLM_PROVIDER", "TTS_PROVIDER", "MCP_TRANSPORT", "LLM_TOOL_CALLING", "LLM_AUDIO_INPUT", "BARGE_IN_MODE",
         "FEEDBACK_WAKEWORD_TYPE", "FEEDBACK_RESPONSE_END_TYPE", "FEEDBACK_TIMEOUT_TYPE",
         mode="before",
     )
@@ -259,7 +270,7 @@ class Settings(BaseModel):
     def _lowercase(cls, value):
         return value.strip().lower() if isinstance(value, str) else value
 
-    @field_validator("STT_PROVIDER", mode="before")
+    @field_validator("STT_PROVIDER", "STT_FALLBACK_PROVIDER", mode="before")
     @classmethod
     def _normalize_stt(cls, value):
         value = value.strip().lower() if isinstance(value, str) else value
@@ -347,6 +358,7 @@ def set_settings(new_settings: Settings):
 # ==========================================
 LLM_PROVIDER = settings.LLM_PROVIDER
 STT_PROVIDER = settings.STT_PROVIDER
+STT_FALLBACK_PROVIDER = settings.STT_FALLBACK_PROVIDER
 TTS_PROVIDER = settings.TTS_PROVIDER
 
 OPENROUTER_API_KEY = settings.OPENROUTER_API_KEY
@@ -377,12 +389,17 @@ FOLLOW_UP_TIMEOUT = ACTIVE_STANDBY_TIMEOUT = settings.FOLLOW_UP_TIMEOUT
 
 OLLAMA_MODEL = settings.OLLAMA_MODEL
 OLLAMA_HOST = settings.OLLAMA_HOST
+OLLAMA_STT_MODEL = settings.OLLAMA_STT_MODEL
+OLLAMA_TTS_MODEL = settings.OLLAMA_TTS_MODEL
+OLLAMA_TTS_VOICE = settings.OLLAMA_TTS_VOICE
+OLLAMA_AUDIO_TIMEOUT = settings.OLLAMA_AUDIO_TIMEOUT
 LLM_SYSTEM_PROMPT = settings.LLM_SYSTEM_PROMPT
 LLM_STREAM = settings.LLM_STREAM
 LLM_THINK = settings.LLM_THINK
 LLM_HISTORY_MESSAGES = settings.LLM_HISTORY_MESSAGES
 LLM_TOOL_CALLING = settings.LLM_TOOL_CALLING
 LLM_MAX_TOOL_ROUNDS = settings.LLM_MAX_TOOL_ROUNDS
+LLM_AUDIO_INPUT = settings.LLM_AUDIO_INPUT
 
 TTS_VOICE = settings.TTS_VOICE
 TTS_MODEL_PATH, TTS_CONFIG_PATH = resolve_piper_voice(settings)

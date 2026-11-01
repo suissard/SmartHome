@@ -100,6 +100,32 @@ class TestAssistantCore(unittest.TestCase):
         self.assertEqual(core.get_session("a").conversation.history[0]["content"], "Bonjour")
         self.assertEqual(len(core.get_session("b").conversation.history), 2)
 
+    def test_direct_audio_goes_to_audio_model_else_fallback_transcribes(self):
+        received = []
+
+        class AudioLLM(RuleLLM):
+            def chat(self, messages, *, audio_wav=None, **kwargs):
+                received.append(audio_wav)
+                return LLMResponse(text="Compris.")
+
+        class DirectSTT:
+            passthrough = True
+
+        llm = AudioLLM()
+        core = AssistantCore(SETTINGS, stt=DirectSTT(), tts=TextToSpeech(SETTINGS, provider=FakeTTS(SETTINGS)),
+                             tools=ToolRegistry(SETTINGS), llm=llm)
+        core._fallback_stt = FakeSTT()
+
+        llm._audio_input[llm.model] = True
+        reply = core.respond("s", audio_wav=b"RIFF")
+        self.assertEqual((received[-1], reply.transcript), (b"RIFF", ""))
+        self.assertTrue(core.model_info()["audio_input"])
+
+        llm._audio_input[llm.model] = False
+        reply = core.respond("s", audio_wav=b"RIFF")
+        self.assertEqual((received[-1], reply.transcript), (None, "transcription factice"))
+        self.assertFalse(core.model_info()["audio_input"])
+
     def test_audio_is_transcribed_and_events_emitted(self):
         core = make_core([])
         events = []

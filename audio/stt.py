@@ -13,7 +13,7 @@ if str(_ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(_ROOT_DIR))
 
 from core.config import Settings
-from core.providers import ProviderRegistry, require_openrouter_key
+from core.providers import ProviderRegistry, check_ollama_capability, ollama_host, require_openrouter_key
 from core.sentences import matches_phrase, normalize_utterance
 
 
@@ -105,6 +105,32 @@ class OpenRouterSTT(STTProvider):
         return self._discard_hallucination((getattr(transcription, "text", "") or "").strip())
 
 
+@STT_PROVIDERS.register("ollama")
+class OllamaSTT(STTProvider):
+    """Transcription locale par un modèle audio d'Ollama (ex: lfm3-audio) via /v1/audio/transcriptions."""
+
+    def __init__(self, settings: Settings):
+        super().__init__(settings)
+        check_ollama_capability(settings, settings.OLLAMA_STT_MODEL, "audio", "l'audio en entrée")
+        self.url = f"{ollama_host(settings)}/v1/audio/transcriptions"
+        print(f"STT Ollama prêt ({settings.OLLAMA_STT_MODEL}) ✅")
+
+    @classmethod
+    def describe(cls, settings: Settings) -> str:
+        return f"Ollama ({settings.OLLAMA_STT_MODEL} @ {settings.OLLAMA_HOST})"
+
+    def transcribe(self, wav_bytes: bytes) -> str:
+        import httpx
+        data = {"model": self.settings.OLLAMA_STT_MODEL}
+        if self.language:
+            data["language"] = self.language
+        response = httpx.post(self.url, data=data, files={"file": ("audio.wav", wav_bytes, "audio/wav")},
+                              timeout=self.settings.OLLAMA_AUDIO_TIMEOUT)
+        if response.status_code != 200:
+            raise RuntimeError(f"transcription refusée par Ollama ({response.status_code}) : {response.text}")
+        return self._discard_hallucination((response.json().get("text") or "").strip())
+
+
 @STT_PROVIDERS.register("direct", "none", "bypass")
 class DirectSTT(STTProvider):
     """Bypass STT : l'enregistrement est envoyé directement au LLM multimodal."""
@@ -117,21 +143,23 @@ class DirectSTT(STTProvider):
 
     @classmethod
     def describe(cls, settings: Settings) -> str:
-        return "Direct Audio (Bypass STT ⏩ Multimodal LLM)"
+        return f"Direct Audio (Bypass STT ⏩ Multimodal LLM, sinon {settings.STT_FALLBACK_PROVIDER})"
 
     def transcribe(self, wav_bytes: bytes) -> str:
         raise RuntimeError("Le mode STT direct ne transcrit pas : l'audio est transmis au LLM.")
 
 
 def create_stt(settings: Settings) -> STTProvider:
-    """Crée le fournisseur STT configuré, avec repli sur Whisper si le LLM ne sait pas recevoir d'audio."""
-    from llm.providers import LLM_PROVIDERS
+    """Crée le fournisseur STT configuré. En mode direct, le choix audio / transcription se fait à chaque demande
+    selon le modèle actif (`AssistantCore.respond`, repli sur `STT_FALLBACK_PROVIDER`)."""
+    return STT_PROVIDERS.create(settings.STT_PROVIDER, settings)
 
-    name = settings.STT_PROVIDER
-    if STT_PROVIDERS.get(name).passthrough and not LLM_PROVIDERS.get(settings.LLM_PROVIDER).supports_audio:
-        print(f"⚠️ STT_PROVIDER=direct incompatible avec LLM_PROVIDER={settings.LLM_PROVIDER} (pas d'entrée audio) : repli sur Whisper local.")
-        name = "whisper"
-    return STT_PROVIDERS.create(name, settings)
+
+def create_fallback_stt(settings: Settings) -> STTProvider:
+    """Transcription utilisée en mode direct quand le modèle ne comprend pas l'audio."""
+    if STT_PROVIDERS.get(settings.STT_FALLBACK_PROVIDER).passthrough:
+        raise ValueError("STT_FALLBACK_PROVIDER doit transcrire (whisper, openrouter...), pas « direct ».")
+    return STT_PROVIDERS.create(settings.STT_FALLBACK_PROVIDER, settings)
 
 
 if __name__ == "__main__":

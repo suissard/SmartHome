@@ -477,7 +477,8 @@ function renderModelPicker(error = "") {
     const caps = info?.capabilities || [];
     const size = info?.size ? ` · ${(info.size / 1e9).toFixed(1)} Go` : "";
     const kind = caps.includes("decision") ? " · décision" : caps.includes("tools") ? " · outils" : "";
-    return new Option(`${name}${kind}${size}`, name);
+    const audio = caps.includes("audio") ? " · audio" : "";
+    return new Option(`${name}${kind}${audio}${size}`, name);
   }));
   ui.modelSelect.value = names.includes(selected) ? selected : current;
   syncDecisionToggle(false);
@@ -494,6 +495,11 @@ function syncDecisionToggle(fromUser) {
   const hints = [];
   if (caps.includes("decision")) hints.push("Ollama le décrit comme un modèle de décision.");
   else if (caps.length && !caps.includes("tools")) hints.push("Ce modèle ne gère pas les outils : les actions passeront par les tags [ACTION].");
+  if (settingValue("STT_PROVIDER") === "direct" && caps.length && !caps.includes("decision")) {
+    hints.push(caps.includes("audio")
+      ? "Il comprend l'audio : la voix lui sera envoyée directement."
+      : `Il ne comprend pas l'audio : la voix sera transcrite (${settingValue("STT_FALLBACK_PROVIDER") || "whisper"}).`);
+  }
   setMessage(ui.modelMsg, hints.join(" "));
 }
 

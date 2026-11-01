@@ -38,6 +38,7 @@ EDITABLE_GROUPS: list[tuple[str, list[tuple[str, str, bool]]]] = [
         ("LLM_HISTORY_MESSAGES", "Messages gardés en mémoire", LIVE),
         ("LLM_TOOL_CALLING", "Appel d'outils", LIVE),
         ("LLM_MAX_TOOL_ROUNDS", "Allers-retours d'outils max.", LIVE),
+        ("LLM_AUDIO_INPUT", "Envoyer l'audio au modèle (mode direct)", LIVE),
     ]),
     ("Modèle de décision", [
         ("LLM_DECISION_PROMPT", "Question de choix de la commande", LIVE),
@@ -57,12 +58,16 @@ EDITABLE_GROUPS: list[tuple[str, list[tuple[str, str, bool]]]] = [
     ("Voix", [
         ("TTS_PROVIDER", "Fournisseur", RESTART),
         ("TTS_VOICE", "Voix Piper", RESTART),
+        ("OLLAMA_TTS_MODEL", "Modèle vocal Ollama", RESTART),
+        ("OLLAMA_TTS_VOICE", "Voix Ollama", RESTART),
         ("TTS_SPEECH_SPEED", "Vitesse", RESTART),
         ("TTS_STREAMING", "Parler phrase par phrase", LIVE),
         ("TTS_STREAM_MIN_CHARS", "Longueur minimale d'un morceau", LIVE),
     ]),
     ("Écoute", [
         ("STT_PROVIDER", "Transcription", RESTART),
+        ("STT_FALLBACK_PROVIDER", "Transcription de repli (mode direct)", LIVE),
+        ("OLLAMA_STT_MODEL", "Modèle de transcription Ollama", RESTART),
         ("WHISPER_MODEL", "Modèle Whisper", RESTART),
         ("WHISPER_BEAM_SIZE", "Beam size Whisper", RESTART),
         ("VOICE_THRESHOLD", "Seuil de voix", RESTART),
@@ -157,6 +162,8 @@ def _field_spec(name: str) -> dict:
     # Choix connus pour certains champs texte
     if name in ("LLM_PROVIDER", "STT_PROVIDER", "TTS_PROVIDER"):
         spec = {"kind": "select", "options": _provider_names(name.split("_")[0])}
+    elif name == "STT_FALLBACK_PROVIDER":
+        spec = {"kind": "select", "options": [n for n in _provider_names("STT") if n != "direct"]}
     elif name == "TTS_VOICE":
         voices = sorted(p.stem for p in (BASE_DIR / "voices").glob("*.onnx"))
         spec = {"kind": "select", "options": voices} if voices else spec

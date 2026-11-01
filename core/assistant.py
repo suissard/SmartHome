@@ -88,6 +88,7 @@ class AssistantCore:
         self._llm = llm
         self._stt = stt
         self._tts = tts
+        self._fallback_stt = None
         self._tools = tools
         # Composants fournis par l'appelant (tests, main.py) : jamais recréés, seulement mis à jour
         self._injected = {"llm": llm is not None, "tools": tools is not None}
@@ -109,6 +110,22 @@ class AssistantCore:
             from audio.stt import create_stt
             self._stt = create_stt(self.settings)
         return self._stt
+
+    @property
+    def fallback_stt(self):
+        """Transcription de repli du mode direct (modèle sans entrée audio), chargée au premier besoin."""
+        if self._fallback_stt is None:
+            from audio.stt import create_fallback_stt
+            self._fallback_stt = create_fallback_stt(self.settings)
+        return self._fallback_stt
+
+    def audio_to_llm(self) -> bool:
+        """True si un enregistrement doit être envoyé tel quel au modèle actif (mode direct et modèle audio)."""
+        from audio.stt import STT_PROVIDERS
+        # La classe suffit pour savoir si le mode est direct : inutile de charger Whisper pour le savoir
+        passthrough = self._stt.passthrough if self._stt is not None else STT_PROVIDERS.get(self.settings.STT_PROVIDER).passthrough
+        llm = self.llm
+        return passthrough and not llm.is_decision_model() and llm.accepts_audio()
 
     @property
     def tts(self):
@@ -156,6 +173,8 @@ class AssistantCore:
                 self._llm.settings = settings
             else:
                 self._llm = None
+        if "STT_FALLBACK_PROVIDER" in changed:
+            self._fallback_stt = None
         if any(name.startswith("ACTIONS_") for name in changed):
             if self._injected["tools"]:
                 self._tools.settings = settings
@@ -173,7 +192,8 @@ class AssistantCore:
     def model_info(self) -> dict:
         """Modèle actif, pour l'affichage côté client."""
         llm = self.llm
-        return {"provider": self.settings.LLM_PROVIDER, "model": llm.model, "decision": llm.is_decision_model()}
+        return {"provider": self.settings.LLM_PROVIDER, "model": llm.model, "decision": llm.is_decision_model(),
+                "audio_input": self.audio_to_llm()}
 
     # ---- Sessions ----
     def open_session(
@@ -245,11 +265,12 @@ class AssistantCore:
             llm_audio = None
 
             if audio_wav is not None:
-                if self.stt.passthrough:
+                if self.audio_to_llm():
                     llm_audio = audio_wav
                 else:
                     try:
-                        reply.transcript = self.stt.transcribe(audio_wav)
+                        stt = self.fallback_stt if self.stt.passthrough else self.stt
+                        reply.transcript = stt.transcribe(audio_wav)
                     except Exception as e:
                         emit("error", sid, message=f"Erreur de transcription : {e}")
                         return reply
