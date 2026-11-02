@@ -87,6 +87,7 @@ EDITABLE_GROUPS: list[tuple[str, list[tuple[str, str, bool]]]] = [
         ("FEEDBACK_SOUND_VOLUME", "Volume des sons", RESTART),
         ("DUCKING_ENABLED", "Baisser les autres sons", RESTART),
         ("DUCKING_VOLUME_PERCENT", "Volume des autres sons (%)", RESTART),
+        ("MEDIA_PAUSE_ENABLED", "Mettre les médias en pause pendant l'échange", RESTART),
     ]),
     ("Actions", [
         ("ACTIONS_ENABLED", "Actions système", LIVE),

@@ -112,6 +112,10 @@ Ce document est destiné aux agents IA (et aux développeurs) qui lisent, mainti
 - **Technologie** : `pactl` JSON (compatible PipeWire & PulseAudio).
 - **Rôle** : Réduit le volume de toutes les applications tierces (musique, vidéos, jeux, etc.) à un niveau paramétrable (ex: 20%) dès que l'assistant écoute ou parle, et rétablit les volumes initiaux à la mise en veille. Filtre le PID de l'assistant pour ne pas altérer la voix de sortie.
 
+### 2.8 bis [audio/media_pause.py](file:///home/suissard/PROGRAMMATIONS/SmartHome/audio/media_pause.py) — Pause des Médias
+- **Technologie** : `playerctl` (MPRIS). `MEDIA_PAUSE_ENABLED` (réglable dans l'interface web, au redémarrage).
+- **Rôle** : au mot-clé, `MediaPauser.pause()` met en pause les seuls lecteurs en état `Playing` et les mémorise ; à la mise en veille, `resume()` relance ceux-là seulement (un média déjà en pause n'est jamais relancé).
+
 ### 2.9 [core/config.py](file:///home/suissard/PROGRAMMATIONS/SmartHome/core/config.py) & [core/providers.py](file:///home/suissard/PROGRAMMATIONS/SmartHome/core/providers.py) — Configuration & Registre de Fournisseurs
 - **Technologie** : modèle `pydantic` `Settings` (validé au démarrage, erreurs lisibles) + `python-dotenv`. Priorité : variables d'environnement > `.env` (ou fichier désigné par `SMARTHOME_ENV_FILE`) > valeurs par défaut. Le nouveau code reçoit `get_settings()` par injection ; les constantes de module restent exportées pour compatibilité.
 - **Registre** : `ProviderRegistry` associe un nom (et ses alias) à une classe instanciée avec `Settings`. Chaque fournisseur expose `describe(settings)` (résumé sans instanciation), utilisé par `main.py` et le serveur MCP.

@@ -236,6 +236,9 @@ class Settings(BaseModel):
     DUCKING_VOLUME_PERCENT: int = Field(20, ge=0, le=100)
     DUCKING_RESTORE_ON_EXIT: EnvBool = True
 
+    # ⏸️ Pause des médias pendant l'échange (reprise ensuite, sauf si déjà en pause)
+    MEDIA_PAUSE_ENABLED: EnvBool = False
+
     # 🔌 Serveur MCP & Hub client
     MCP_TRANSPORT: Literal["stdio", "sse", "streamable-http"] = "stdio"
     MCP_HOST: str = "127.0.0.1"
@@ -442,6 +445,7 @@ ACTIONS_TIMER_MAX_SECONDS = settings.ACTIONS_TIMER_MAX_SECONDS
 DUCKING_ENABLED = settings.DUCKING_ENABLED
 DUCKING_VOLUME_PERCENT = settings.DUCKING_VOLUME_PERCENT
 DUCKING_RESTORE_ON_EXIT = settings.DUCKING_RESTORE_ON_EXIT
+MEDIA_PAUSE_ENABLED = settings.MEDIA_PAUSE_ENABLED
 
 MCP_TRANSPORT = settings.MCP_TRANSPORT
 MCP_HOST = settings.MCP_HOST
