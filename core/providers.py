@@ -57,6 +57,37 @@ class ProviderRegistry(Generic[T]):
         return self.get(name)(settings or get_settings())
 
 
+def ollama_host(settings: Settings) -> str:
+    return (settings.OLLAMA_HOST or "http://localhost:11434").rstrip("/")
+
+
+def ollama_capabilities(settings: Settings, model: str) -> list[str]:
+    """Capacités annoncées par Ollama pour un modèle (completion, tools, vision, audio, speech, thinking...).
+    Lève si le serveur est injoignable ou le modèle absent."""
+    import httpx
+    response = httpx.post(f"{ollama_host(settings)}/api/show", json={"model": model}, timeout=10)
+    response.raise_for_status()
+    return response.json().get("capabilities") or []
+
+
+def check_ollama_capability(settings: Settings, model: str, capability: str, usage: str):
+    """Fournisseurs audio Ollama : refuse un modèle absent ou sans la capacité requise. Un serveur injoignable
+    n'est pas bloquant (il peut démarrer après SmartHome) : l'erreur surviendra à la première demande."""
+    import httpx
+    try:
+        capabilities = ollama_capabilities(settings, model)
+    except httpx.HTTPStatusError as e:
+        raise RuntimeError(f"Modèle Ollama « {model} » introuvable (ollama pull {model}) : {e.response.text}") from e
+    except httpx.HTTPError as e:
+        print(f"⚠️ Ollama injoignable ({ollama_host(settings)}) : capacités de {model} non vérifiées ({e}).")
+        return
+    if capability not in capabilities:
+        raise RuntimeError(
+            f"Le modèle Ollama « {model} » ne gère pas {usage} (capacités : {', '.join(capabilities) or 'aucune'}). "
+            f"Exemple de modèle compatible : lfm3-audio."
+        )
+
+
 def require_openrouter_key(settings: Settings):
     """Lève une erreur explicite si la clé OpenRouter est absente (partagé par les fournisseurs OpenRouter)."""
     if not settings.OPENROUTER_API_KEY:

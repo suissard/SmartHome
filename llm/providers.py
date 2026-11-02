@@ -16,7 +16,7 @@ if str(_ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(_ROOT_DIR))
 
 from core.config import Settings
-from core.providers import ProviderRegistry, require_openrouter_key
+from core.providers import ProviderRegistry, ollama_capabilities, ollama_host, require_openrouter_key
 from core.tools import ToolCall, ToolResult, parse_arguments
 
 TokenCallback = Callable[[str], None]
@@ -41,12 +41,12 @@ class LLMProvider:
     """Interface d'un fournisseur LLM."""
 
     provider_name: str = ""
-    # True si le fournisseur accepte un enregistrement audio en entrée (mode STT direct)
-    supports_audio: bool = False
 
     def __init__(self, settings: Settings):
         self.settings = settings
         self.model = ""
+        # Entrée audio détectée par modèle (nom -> bool), interrogée une seule fois
+        self._audio_input: dict[str, bool] = {}
 
     @classmethod
     def describe(cls, settings: Settings) -> str:
@@ -64,6 +64,26 @@ class LLMProvider:
     def list_models(self) -> list[dict]:
         """Modèles disponibles : [{"name", "capabilities", "size"}] (vide si le fournisseur ne sait pas les lister)."""
         return []
+
+    def accepts_audio(self, model: Optional[str] = None) -> bool:
+        """True si le modèle (actif par défaut) comprend un enregistrement audio (mode STT direct).
+        `LLM_AUDIO_INPUT` force la réponse ("on" / "off") ; "auto" interroge les capacités du modèle."""
+        mode = self.settings.LLM_AUDIO_INPUT
+        if mode != "auto":
+            return mode == "on"
+        name = model or self.model
+        if name not in self._audio_input:
+            try:
+                self._audio_input[name] = self._detect_audio_input(name)
+            except Exception as e:
+                # Non mémorisé : nouvelle tentative à la prochaine demande
+                print(f"\n⚠️ [LLM] Capacités de {name} inconnues ({e}) : l'audio sera transcrit.")
+                return False
+        return self._audio_input[name]
+
+    def _detect_audio_input(self, model: str) -> bool:
+        """Interroge le fournisseur : le modèle accepte-t-il l'audio en entrée ? Peut lever."""
+        return False
 
     def chat(
         self,
@@ -109,7 +129,8 @@ def _in_decision_list(model: str, settings: Settings) -> bool:
 
 @LLM_PROVIDERS.register("ollama")
 class OllamaLLM(LLMProvider):
-    """LLM local via Ollama. L'API chat d'Ollama n'accepte pas d'audio."""
+    """LLM local via Ollama. Les modèles qui annoncent la capacité « audio » (ex: gemma4, lfm3-audio) reçoivent
+    l'enregistrement dans le champ `images` du message, comme une image."""
 
     def __init__(self, settings: Settings):
         super().__init__(settings)
@@ -124,7 +145,7 @@ class OllamaLLM(LLMProvider):
 
     @property
     def host(self) -> str:
-        return (self.settings.OLLAMA_HOST or "http://localhost:11434").rstrip("/")
+        return ollama_host(self.settings)
 
     def is_decision_model(self, model=None) -> bool:
         return _in_decision_list(model or self.model, self.settings)
@@ -144,6 +165,10 @@ class OllamaLLM(LLMProvider):
             raise RuntimeError(f"décision refusée par Ollama ({response.status_code}) : {detail}")
         return response.json()["answers"]
 
+    def capabilities(self, model: str) -> list[str]:
+        """Capacités annoncées par Ollama (completion, tools, vision, audio, thinking...). Lève si injoignable."""
+        return ollama_capabilities(self.settings, model)
+
     def list_models(self) -> list[dict]:
         import httpx
         tags = httpx.get(f"{self.host}/api/tags", timeout=10).json().get("models", [])
@@ -151,18 +176,21 @@ class OllamaLLM(LLMProvider):
         for tag in tags:
             name = tag.get("name") or tag.get("model")
             try:
-                info = httpx.post(f"{self.host}/api/show", json={"model": name}, timeout=10).json()
-                capabilities = info.get("capabilities") or []
+                capabilities = self.capabilities(name)
             except Exception:
                 capabilities = []
             models.append({"name": name, "capabilities": capabilities, "size": tag.get("size", 0)})
         return sorted(models, key=lambda m: m["name"])
 
+    def _detect_audio_input(self, model: str) -> bool:
+        return "audio" in self.capabilities(model)
+
     def chat(self, messages, *, tools=None, audio_wav=None, model=None, stream=False, think=False, on_token=None) -> LLMResponse:
         if audio_wav:
-            raise RuntimeError(
-                "Ollama ne prend pas en charge l'audio direct. Utilisez STT_PROVIDER=whisper ou LLM_PROVIDER=openrouter."
-            )
+            # Le dernier tour utilisateur porte l'enregistrement (Ollama refuse si le modèle n'a pas la capacité audio)
+            messages = list(messages)
+            idx = max(i for i, m in enumerate(messages) if m["role"] == "user")
+            messages[idx] = {**messages[idx], "images": [audio_wav]}
         kwargs = {"model": model or self.model, "messages": messages, "stream": stream}
         if tools:
             kwargs["tools"] = tools
@@ -209,17 +237,28 @@ class OllamaLLM(LLMProvider):
 class OpenRouterLLM(LLMProvider):
     """LLM cloud via l'API compatible OpenAI d'OpenRouter (supporte l'audio pour les modèles multimodaux)."""
 
-    supports_audio = True
-
     def __init__(self, settings: Settings):
         super().__init__(settings)
         from openai import OpenAI
         self.client = OpenAI(base_url=settings.OPENROUTER_BASE_URL, api_key=settings.OPENROUTER_API_KEY or "missing-key")
         self.model = settings.OPENROUTER_MODEL
+        self._input_modalities: Optional[dict[str, list[str]]] = None
 
     @classmethod
     def describe(cls, settings: Settings) -> str:
         return f"OpenRouter ({settings.OPENROUTER_MODEL})"
+
+    def _detect_audio_input(self, model: str) -> bool:
+        if self._input_modalities is None:
+            import httpx
+            response = httpx.get(f"{self.settings.OPENROUTER_BASE_URL.rstrip('/')}/models", timeout=10)
+            response.raise_for_status()
+            self._input_modalities = {
+                m["id"]: (m.get("architecture") or {}).get("input_modalities") or [] for m in response.json().get("data", [])
+            }
+        # Modèle absent du catalogue (alias, modèle privé...) : on laisse l'API trancher
+        modalities = self._input_modalities.get(model)
+        return modalities is None or "audio" in modalities
 
     def chat(self, messages, *, tools=None, audio_wav=None, model=None, stream=False, think=False, on_token=None) -> LLMResponse:
         require_openrouter_key(self.settings)

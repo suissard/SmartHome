@@ -5,6 +5,7 @@ silences) et la lecture. `synthesize()` permet d'obtenir l'audio sans le jouer (
 """
 
 import io
+import struct
 import sys
 import threading
 import time
@@ -20,7 +21,7 @@ if str(_ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(_ROOT_DIR))
 
 from core.config import Settings, get_settings, TTS_MODEL_PATH, TTS_CONFIG_PATH
-from core.providers import ProviderRegistry, require_openrouter_key
+from core.providers import ProviderRegistry, check_ollama_capability, ollama_host, require_openrouter_key
 
 
 class TTSProvider:
@@ -104,6 +105,56 @@ class OpenRouterTTS(TTSProvider):
         audio_bytes = response.content if hasattr(response, "content") else response.read()
         audio, sample_rate = sf.read(io.BytesIO(audio_bytes), dtype="int16")
         return audio, sample_rate
+
+
+def decode_wav(data: bytes) -> tuple[np.ndarray, int]:
+    """Décode un WAV PCM 16 bits. Tolère les tailles « en flux » (0xFFFFFFFF) de l'en-tête produit par Ollama."""
+    if data[:4] != b"RIFF" or data[8:12] != b"WAVE":
+        raise ValueError("réponse audio inattendue (WAV attendu)")
+    pos, channels, rate = 12, 1, 0
+    while pos + 8 <= len(data):
+        chunk_id, size = data[pos:pos + 4], int.from_bytes(data[pos + 4:pos + 8], "little")
+        pos += 8
+        if chunk_id == b"fmt ":
+            fmt, channels, rate = struct.unpack_from("<HHI", data, pos)
+            bits = struct.unpack_from("<H", data, pos + 14)[0]
+            if fmt != 1 or bits != 16:
+                raise ValueError(f"WAV non pris en charge (format {fmt}, {bits} bits)")
+        elif chunk_id == b"data":
+            end = len(data) if size == 0xFFFFFFFF else min(len(data), pos + size)
+            pcm = data[pos:end]
+            audio = np.frombuffer(pcm[:len(pcm) // 2 * 2], dtype="<i2").astype(np.int16)
+            if channels > 1:
+                audio = audio[:len(audio) // channels * channels].reshape(-1, channels)
+            return audio, rate
+        pos += size + (size & 1)
+    raise ValueError("WAV sans données audio")
+
+
+@TTS_PROVIDERS.register("ollama")
+class OllamaTTS(TTSProvider):
+    """Synthèse locale par un modèle vocal d'Ollama (ex: lfm3-audio) via /v1/audio/speech (WAV 24 kHz)."""
+
+    def __init__(self, settings: Settings):
+        super().__init__(settings)
+        check_ollama_capability(settings, settings.OLLAMA_TTS_MODEL, "speech", "la synthèse vocale")
+        self.url = f"{ollama_host(settings)}/v1/audio/speech"
+        print(f"TTS Ollama prêt ({settings.OLLAMA_TTS_MODEL}, Voix: {settings.OLLAMA_TTS_VOICE}) ✅")
+
+    @classmethod
+    def describe(cls, settings: Settings) -> str:
+        return f"Ollama ({settings.OLLAMA_TTS_MODEL}, Voix: {settings.OLLAMA_TTS_VOICE})"
+
+    def synthesize(self, text: str) -> tuple[np.ndarray, int]:
+        import httpx
+        # Ollama n'accepte que la vitesse 1 : TTS_SPEECH_SPEED ne s'applique qu'à Piper
+        payload = {"model": self.settings.OLLAMA_TTS_MODEL, "input": text, "response_format": "wav"}
+        if self.settings.OLLAMA_TTS_VOICE:
+            payload["voice"] = self.settings.OLLAMA_TTS_VOICE
+        response = httpx.post(self.url, json=payload, timeout=self.settings.OLLAMA_AUDIO_TIMEOUT)
+        if response.status_code != 200:
+            raise RuntimeError(f"synthèse refusée par Ollama ({response.status_code}) : {response.text}")
+        return decode_wav(response.content)
 
 
 class TextToSpeech:

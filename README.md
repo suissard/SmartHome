@@ -99,38 +99,60 @@ SmartHome/
 
 > 📘 Pas à pas complet, du PC jusqu'à l'appli sur un téléphone Android : [docs/MISE_EN_SERVICE.md](docs/MISE_EN_SERVICE.md).
 
-### 1. Prérequis Système
+### Installation automatique (recommandée)
 
-- **Système d'exploitation** : Linux (testé sur Ubuntu / Debian) ou macOS / Windows avec support PortAudio.
-- **Python** : Version 3.10 ou supérieure.
-- **Bibliothèques audio système** (sous Ubuntu/Debian) :
-  ```bash
-  sudo apt update
-  sudo apt install -y python3-pyaudio portaudio19-dev libasound2-dev espeak-ng
-  ```
-- **Ollama** : Pour exécuter le modèle LLM en local.
-  - Installer Ollama : [ollama.com](https://ollama.com)
-  - Télécharger le modèle par défaut :
-    ```bash
-    ollama pull qwen2.5:7b
-    ```
+Un script installe tout : paquets système, environnement Python, dépendances, `.env`, modèles (openWakeWord, Whisper, Ollama) et, en option, le démarrage automatique. Il peut être relancé sans risque (le `.env` existant est conservé).
 
-### 2. Installation de l'environnement virtuel & Configuration
+**Linux / macOS** (Debian/Ubuntu, Fedora, Arch, openSUSE, Homebrew) :
 
 ```bash
-# Cloner le dépôt et se placer dans le dossier
-git clone <url-du-repo> SmartHome
-cd SmartHome
+git clone <url-du-repo> SmartHome && cd SmartHome
+./install.sh
+./start.sh
+```
 
-# Créer et activer l'environnement virtuel
+**Windows 10/11** (PowerShell ; Python et Ollama installés via `winget` si absents) :
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install.ps1
+.\start.ps1
+```
+
+**Serveur sans micro** (passerelle seule, écoute réseau, jeton `GATEWAY_AUTH_TOKEN` généré dans `.env`) :
+
+```bash
+./install.sh --server --service      # service systemd smarthome.service
+```
+
+| Option (`install.sh` / `install.ps1`) | Effet |
+| :--- | :--- |
+| `--server` / `-Server` | Passerelle seule (`python -m gateway`), `GATEWAY_HOST=0.0.0.0`, jeton généré |
+| `--service` / `-Service` | Démarrage automatique : service systemd (utilisateur en poste, système en serveur) ou tâche planifiée Windows |
+| `--host` / `-GatewayHost` | Adresse d'écoute de la passerelle en mode serveur |
+| `--python` / `-Python` | Interpréteur Python à utiliser (≥ 3.10) |
+| `--no-system-deps` / `-NoSystemDeps` | Ne rien installer au niveau système |
+| `--no-ollama` / `-NoOllama` | Ni Ollama ni modèle LLM (ex : `LLM_PROVIDER=openrouter`) |
+| `--no-models` / `-NoModels` | Aucun téléchargement de modèle |
+| `-y` / `-Yes` | Répondre oui à tout (installation non interactive) |
+
+Les modèles Ollama téléchargés sont ceux du `.env` (`OLLAMA_MODEL`, et `OLLAMA_STT_MODEL` / `OLLAMA_TTS_MODEL` si ces fournisseurs sont choisis) : modifiez-le avant de relancer le script pour en changer.
+
+> ⚠️ Sous Windows, l'assistant, la voix et la passerelle fonctionnent, mais les actions système (volume, verrouillage, applications…) et le ducking reposent sur des scripts bash et `pactl` propres à Linux.
+
+### Installation manuelle
+
+- **Python** 3.10 ou supérieur, et sous Ubuntu/Debian :
+  ```bash
+  sudo apt update
+  sudo apt install -y python3-venv python3-dev portaudio19-dev libasound2-dev libsndfile1
+  ```
+- **Ollama** ([ollama.com](https://ollama.com)) puis le modèle du `.env` : `ollama pull gemma4:12b`
+
+```bash
 python3 -m venv .venv
 source .venv/bin/activate
-
-# Installer les dépendances Python
 pip install --upgrade pip
 pip install -r requirements.txt
-
-# Initialiser votre fichier de configuration d'environnement
 cp .env.example .env
 ```
 

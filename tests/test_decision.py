@@ -242,7 +242,7 @@ class TestSettingsOverWebSocket(unittest.TestCase):
             client = TestClient(create_app(core, SETTINGS))
             with client.websocket_connect("/ws") as ws:
                 ready = ws.receive_json()
-                self.assertEqual(ready["llm"], {"provider": "ollama", "model": "nimble", "decision": True})
+                self.assertEqual(ready["llm"], {"provider": "ollama", "model": "nimble", "decision": True, "audio_input": False})
 
                 ws.send_json({"type": "list_models"})
                 self.assertEqual(ws.receive_json()["models"][0]["name"], "nimble:latest")

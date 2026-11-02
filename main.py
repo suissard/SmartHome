@@ -18,6 +18,7 @@ from audio.transcribe import VoiceTranscriber
 from audio.tts import TextToSpeech
 from audio.feedback import FeedbackManager
 from audio.ducking import AudioDucker
+from audio.media_pause import MediaPauser
 from audio.confirm import VoiceConfirmer
 from audio.speech import SpeechPipeline
 from audio.barge_in import BargeInDetector
@@ -47,6 +48,9 @@ def _print_event(event):
     if event.session_id == LOCAL_SESSION:
         if event.type == "token":
             print(event.data["text"], end="", flush=True)
+        elif event.type == "transcript":
+            # Mode direct avec un modèle sans entrée audio : transcription de repli faite par le cœur
+            print(f"\r👤 : « {event.data['text']} »\n🤖 : ", end="", flush=True)
         return
     tag = f"🌍 [{event.session_id}]"
     if event.type == "transcript":
@@ -111,6 +115,7 @@ def main():
     tts = TextToSpeech()
     feedback = FeedbackManager(tts=tts)
     ducker = AudioDucker()
+    media_pauser = MediaPauser()
     mcp_hub = get_mcp_hub() if MCP_CLIENT_ENABLED else None
 
     # Connexion aux serveurs MCP configurés
@@ -154,6 +159,12 @@ def main():
 
     llm_info = LLM_PROVIDERS.get(settings.LLM_PROVIDER).describe(settings)
     stt_info = transcriber.stt.describe(settings)
+    if transcriber.stt.passthrough:
+        if core.audio_to_llm():
+            stt_info += f" — {core.llm.model} comprend l'audio ✅"
+        else:
+            stt_info += f" — {core.llm.model} ne comprend pas l'audio : transcription par {settings.STT_FALLBACK_PROVIDER}"
+            core.fallback_stt  # chargé dès maintenant plutôt qu'à la première demande
     tts_info = tts.engine.describe(settings)
     actions_info = f"Activées ({len(get_all_commands())} commandes prêtes)" if ACTIONS_ENABLED else "Désactivées"
     tools = conversation.tools.all()
@@ -192,6 +203,7 @@ def main():
             if detected:
                 print(f"\n🎯 Mot-clé détecté ({detector.model_name}, score {score:.2f})")
                 # 1. Atténuation immédiate des autres sources audio (musique, vidéos, etc.)
+                media_pauser.pause()
                 ducker.duck()
 
                 try:
@@ -207,7 +219,8 @@ def main():
 
                         if user_input:
                             if isinstance(user_input, bytes):
-                                print(f"👤 : 🎙️ [Audio envoyé au LLM] ({elapsed_t:.2f} s)")
+                                where = "envoyé au LLM" if core.audio_to_llm() else "à transcrire"
+                                print(f"👤 : 🎙️ [Audio {where}] ({elapsed_t:.2f} s)")
                             else:
                                 print(f"👤 : « {user_input} » ({elapsed_t:.2f} s)")
                             print("🤖 : ", end="", flush=True)
@@ -245,6 +258,7 @@ def main():
                 finally:
                     # 2. Restauration systématique du son et retour en veille
                     ducker.unduck()
+                    media_pauser.resume()
                     flush_stream(stream)
                     detector.oww.reset()
                     print("\n🟢 Veille...\n")
@@ -257,6 +271,7 @@ def main():
         if mcp_hub and MCP_CLIENT_ENABLED:
             mcp_hub.disconnect_all()
         ducker.unduck()
+        media_pauser.resume()
         stream.stop_stream()
         stream.close()
         p.terminate()
