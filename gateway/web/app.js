@@ -7,6 +7,7 @@ const $ = (id) => document.getElementById(id);
 const ui = {
   log: $("log"), empty: $("empty"), status: $("status"), liveAnnouncer: $("live-announcer"),
   mic: $("mic"), textForm: $("text-form"), text: $("text"), send: document.querySelector(".send"),
+  bargeInBar: $("barge-in-bar"), stopSpeechBtn: $("stop-speech-btn"),
   setup: $("setup"), setupForm: $("setup-form"), token: $("token"), setupError: $("setup-error"),
   settings: $("settings"), speak: $("speak"), autostop: $("autostop"), sessionId: $("session-id"),
   confirm: $("confirm"), confirmQuestion: $("confirm-question"), confirmBar: $("confirm-bar"),
@@ -42,6 +43,8 @@ const state = {
   playing: new Set(),      // sources audio programmées (voix de l'assistant)
   playHead: 0,             // instant de fin de la dernière phrase programmée
   decodeChain: Promise.resolve(),
+  audioPending: 0,         // morceaux audio en cours de décodage
+  speakingBubble: null,    // bulle bot actuellement vocalisée
   audioGeneration: 0,      // incrémenté à chaque arrêt : les phrases encore en décodage sont ignorées
   llm: null,               // modèle actif : {provider, model, decision}
   settings: null,          // groupes de paramètres du serveur (message "settings")
@@ -84,12 +87,48 @@ function setStatus(stateName, label) {
   ui.status.textContent = label;
 }
 
+function isSpeaking() {
+  return state.playing.size > 0 || state.audioPending > 0;
+}
+
+function updateSpeakingState() {
+  const speaking = isSpeaking();
+  if (ui.bargeInBar) ui.bargeInBar.hidden = !speaking;
+  if (speaking) {
+    if (!state.busy) setStatus("speaking", "L'assistant parle…");
+    const targetBubble = state.speakingBubble || ui.log.querySelector(".msg.bot:last-of-type");
+    if (targetBubble && !targetBubble.querySelector(".sound-wave")) {
+      targetBubble.classList.add("speaking");
+      const wave = document.createElement("span");
+      wave.className = "sound-wave";
+      wave.setAttribute("aria-hidden", "true");
+      wave.innerHTML = "<span></span><span></span><span></span><span></span>";
+      targetBubble.append(wave);
+    }
+  } else {
+    document.querySelectorAll(".msg.bot.speaking").forEach((b) => {
+      b.classList.remove("speaking");
+      b.querySelector(".sound-wave")?.remove();
+    });
+    state.speakingBubble = null;
+    refreshControls();
+  }
+}
+
 function refreshControls() {
   const enabled = state.ready;
   ui.text.disabled = !enabled;
   ui.send.disabled = !enabled;
   ui.mic.disabled = !enabled;
-  if (enabled) setStatus(state.busy ? "busy" : "online", state.busy ? "Réflexion…" : "Connecté");
+  if (enabled) {
+    if (state.busy) {
+      setStatus("busy", "Réflexion…");
+    } else if (isSpeaking()) {
+      setStatus("speaking", "L'assistant parle…");
+    } else {
+      setStatus("online", "Connecté");
+    }
+  }
 }
 
 // ---- Connexion ----
@@ -253,6 +292,8 @@ function finishBotBubble(text) {
   const target = bubble || addBubble("bot", "");
   target.classList.remove("pending");
   target.textContent = text;
+  state.speakingBubble = target;
+  if (isSpeaking()) updateSpeakingState();
   scrollDown();
   announce(text);
 }
@@ -363,6 +404,8 @@ function enqueueAudio(base64) {
   const ctx = state.audioCtx;
   if (!ctx) return;
   const generation = state.audioGeneration;
+  state.audioPending += 1;
+  updateSpeakingState();
   state.decodeChain = state.decodeChain.then(async () => {
     try {
       const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
@@ -375,21 +418,30 @@ function enqueueAudio(base64) {
       source.start(startAt);
       state.playHead = startAt + buffer.duration;
       state.playing.add(source);
-      source.onended = () => state.playing.delete(source);
+      source.onended = () => {
+        state.playing.delete(source);
+        updateSpeakingState();
+      };
+      updateSpeakingState();
     } catch (err) {
       console.warn("Lecture audio impossible", err);
+    } finally {
+      state.audioPending = Math.max(0, state.audioPending - 1);
+      updateSpeakingState();
     }
   });
 }
 
 function stopPlayback() {
   state.audioGeneration += 1;
-  const wasPlaying = state.playing.size > 0;
+  const wasPlaying = state.playing.size > 0 || state.audioPending > 0;
   for (const source of state.playing) {
     try { source.stop(); } catch { /* déjà terminée */ }
   }
   state.playing.clear();
+  state.audioPending = 0;
   state.playHead = 0;
+  updateSpeakingState();
   return wasPlaying;
 }
 
@@ -731,6 +783,8 @@ ui.advancedForm.addEventListener("submit", (e) => {
   setMessage(ui.advancedMsg, "Enregistrement…");
   send({ type: "update_settings", values });
 });
+
+ui.stopSpeechBtn?.addEventListener("click", () => interruptAssistant());
 
 if ("serviceWorker" in navigator && window.isSecureContext) {
   navigator.serviceWorker.register("sw.js").catch(() => { /* PWA non installable, l'appli fonctionne quand même */ });

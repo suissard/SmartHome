@@ -94,7 +94,17 @@ svg { width: 24px; height: 24px; fill: currentColor; }
 }
 .status[data-state="online"]::before { background: var(--ok); }
 .status[data-state="busy"]::before { background: var(--warn); }
+.status[data-state="speaking"]::before {
+  background: var(--accent);
+  box-shadow: 0 0 6px var(--accent);
+  animation: pulse-speaking 1.2s infinite ease-in-out;
+}
 .status[data-state="offline"]::before { background: var(--danger); }
+
+@keyframes pulse-speaking {
+  0%, 100% { opacity: 0.6; transform: scale(0.9); }
+  50% { opacity: 1; transform: scale(1.2); }
+}
 
 :focus-visible {
   outline: 2px solid var(--accent);
@@ -191,8 +201,72 @@ summary:focus-visible {
 .msg.bot { align-self: flex-start; border-bottom-left-radius: 6px; }
 .msg.bot.pending::after { content: "▍"; animation: blink 1s steps(2) infinite; color: var(--muted); }
 .msg.bot.cut::after { content: " …"; color: var(--muted); }
+.msg.bot.speaking { border-color: var(--accent); }
 .msg.error { align-self: center; background: none; border-style: dashed; color: var(--danger); font-size: 14px; }
 .msg .voice { opacity: 0.8; font-style: italic; }
+
+.sound-wave {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 14px;
+  margin-left: 8px;
+  vertical-align: middle;
+}
+.sound-wave span {
+  display: inline-block;
+  width: 3px;
+  height: 100%;
+  background: var(--accent);
+  border-radius: 999px;
+  animation: wave 0.8s ease-in-out infinite alternate;
+}
+.sound-wave span:nth-child(2) { animation-delay: 0.2s; height: 65%; }
+.sound-wave span:nth-child(3) { animation-delay: 0.4s; height: 100%; }
+.sound-wave span:nth-child(4) { animation-delay: 0.15s; height: 50%; }
+
+@keyframes wave {
+  0% { transform: scaleY(0.25); }
+  100% { transform: scaleY(1); }
+}
+
+/* ---- Barre d'interruption voix (Barge-in tactile) ---- */
+.barge-in-bar {
+  display: flex;
+  justify-content: center;
+  padding: 6px 16px 0;
+  background: transparent;
+  pointer-events: none;
+}
+.stop-speech-btn {
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  background: var(--surface);
+  color: var(--danger);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  box-shadow: var(--shadow);
+  transition: transform 150ms ease, background 150ms ease, border-color 150ms ease;
+  min-height: 44px;
+  touch-action: manipulation;
+}
+.stop-speech-btn:hover {
+  background: var(--surface-2);
+  border-color: var(--danger);
+}
+.stop-speech-btn:active {
+  transform: scale(0.97);
+}
+.stop-speech-btn svg {
+  width: 16px; height: 16px; fill: currentColor;
+}
 
 .tool {
   align-self: flex-start;
