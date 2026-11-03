@@ -5,14 +5,15 @@ import { Recorder, toBase64 } from "./recorder.js";
 
 const $ = (id) => document.getElementById(id);
 const ui = {
-  log: $("log"), empty: $("empty"), status: $("status"),
+  log: $("log"), empty: $("empty"), status: $("status"), liveAnnouncer: $("live-announcer"), toast: $("toast"),
+  scrollBottomBtn: $("scroll-bottom-btn"), newChatBtn: $("new-chat-btn"), resetConfirm: $("reset-confirm"),
   mic: $("mic"), textForm: $("text-form"), text: $("text"), send: document.querySelector(".send"),
   setup: $("setup"), setupForm: $("setup-form"), token: $("token"), setupError: $("setup-error"),
   settings: $("settings"), speak: $("speak"), autostop: $("autostop"), sessionId: $("session-id"),
-  confirm: $("confirm"), confirmQuestion: $("confirm-question"), confirmBar: $("confirm-bar"),
+  confirm: $("confirm"), confirmQuestion: $("confirm-question"), confirmBar: $("confirm-bar"), confirmTimerText: $("confirm-timer-text"),
   modelBadge: $("model-badge"), modelCurrent: $("model-current"), modelOllama: $("model-ollama"),
   modelSelect: $("model-select"), modelDecision: $("model-decision"), modelMsg: $("model-msg"),
-  advanced: $("advanced"), advancedForm: $("advanced-form"), advancedFields: $("advanced-fields"), advancedMsg: $("advanced-msg"),
+  advanced: $("advanced"), advancedForm: $("advanced-form"), advancedFields: $("advanced-fields"), advancedMsg: $("advanced-msg"), advancedBack: $("advanced-back"),
 };
 
 // ---- Préférences locales (le stockage peut être indisponible : navigation privée...) ----
@@ -42,6 +43,8 @@ const state = {
   playing: new Set(),      // sources audio programmées (voix de l'assistant)
   playHead: 0,             // instant de fin de la dernière phrase programmée
   decodeChain: Promise.resolve(),
+  audioPending: 0,         // morceaux audio en cours de décodage
+  speakingBubble: null,    // bulle bot actuellement vocalisée
   audioGeneration: 0,      // incrémenté à chaque arrêt : les phrases encore en décodage sont ignorées
   llm: null,               // modèle actif : {provider, model, decision}
   settings: null,          // groupes de paramètres du serveur (message "settings")
@@ -49,28 +52,123 @@ const state = {
 };
 
 // ---- Fil de conversation ----
+function isNearBottom(threshold = 60) {
+  return ui.log.scrollHeight - ui.log.scrollTop - ui.log.clientHeight <= threshold;
+}
+
+function scrollDown(force = false) {
+  if (force || isNearBottom()) {
+    ui.log.scrollTop = ui.log.scrollHeight;
+    if (ui.scrollBottomBtn) ui.scrollBottomBtn.hidden = true;
+  } else if (ui.scrollBottomBtn) {
+    ui.scrollBottomBtn.hidden = false;
+  }
+}
+
 function addBubble(kind, text) {
   ui.empty.hidden = true;
   const el = document.createElement("div");
   el.className = `msg ${kind}`;
   el.textContent = text;
   ui.log.append(el);
-  scrollDown();
+  scrollDown(true);
   return el;
+}
+
+function escapeHtml(str) {
+  return String(str).replace(/[&<>"']/g, (s) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[s]));
+}
+
+function formatActionSignature(name, args = {}) {
+  const entries = Object.entries(args || {});
+  if (!entries.length) return `${name}()`;
+  const formatted = entries
+    .map(([k, v]) => `${k}=${typeof v === "string" ? `"${v}"` : JSON.stringify(v)}`)
+    .join(", ");
+  return `${name}(${formatted})`;
+}
+
+function formatActionLabel(name, args = {}, executed = true) {
+  let label = "";
+  switch (name) {
+    case "volume":
+      label = args.level !== undefined ? `Volume réglé à ${args.level} %` : "Réglage du volume";
+      break;
+    case "mute":
+      label = args.action === "unmute" ? "Son réactivé" : "Son coupé";
+      break;
+    case "media":
+      label = args.action === "play" ? "Lecture reprise" :
+              args.action === "pause" ? "Musique en pause" :
+              args.action === "next" ? "Piste suivante" :
+              args.action === "previous" ? "Piste précédente" :
+              (args.action ? `Média : ${args.action}` : "Contrôle des médias");
+      break;
+    case "notify":
+      label = args.message ? `Notification : ${args.message}` : "Notification envoyée";
+      break;
+    case "open_app":
+      label = `Application ouverte : ${args.app || "inconnue"}`;
+      break;
+    case "close_app":
+      label = `Application fermée : ${args.app || "inconnue"}`;
+      break;
+    case "shutdown":
+      label = "Extinction de l'ordinateur";
+      break;
+    case "reboot":
+      label = "Redémarrage de l'ordinateur";
+      break;
+    case "lock":
+      label = "Session verrouillée";
+      break;
+    case "screen_off":
+      label = "Écran éteint";
+      break;
+    case "brightness":
+      label = args.level !== undefined ? `Luminosité fixée à ${args.level} %` : "Réglage de la luminosité";
+      break;
+    case "screenshot":
+      label = "Capture d'écran enregistrée";
+      break;
+    case "system_info":
+      label = "État du système vérifié";
+      break;
+    case "sleep":
+      label = "Assistant mis en veille";
+      break;
+    case "timer":
+      label = args.seconds ? `Minuteur : ${args.seconds} s` : "Minuteur programmé";
+      break;
+    case "audio_output":
+      label = args.sink ? `Sortie audio : ${args.sink}` : "Sortie audio modifiée";
+      break;
+    default: {
+      const clean = name.replace(/_/g, " ");
+      label = `Action : ${clean}`;
+      break;
+    }
+  }
+  return executed ? label : `${label} — non exécutée`;
 }
 
 function addToolChip(event) {
   const el = document.createElement("div");
   el.className = `tool ${event.executed ? "ok" : "refused"}`;
-  const args = Object.values(event.arguments || {}).join(", ");
-  el.textContent = `${event.executed ? "✓" : "✕"} ${event.name}${args ? ` (${args})` : ""}${event.executed ? "" : " — non exécuté"}`;
-  el.title = event.output || "";
+  const label = formatActionLabel(event.name, event.arguments, event.executed);
+  const signature = formatActionSignature(event.name, event.arguments);
+  const icon = event.executed ? "✓" : "✕";
+
+  // Texte visible : strictement le libellé en français naturel, sans signature technique
+  el.innerHTML = `<span class="tool-icon" aria-hidden="true">${icon}</span> <span class="tool-text">${escapeHtml(label)}</span>`;
+
+  // Détail technique : accessible uniquement au survol (title) et aux lecteurs d'écran (aria-label)
+  const detail = event.output ? `${signature} → ${event.output}` : signature;
+  el.title = detail;
+  el.setAttribute("aria-label", `${label} (${signature})${event.output ? `. Résultat : ${event.output}` : ""}`);
+
   ui.log.append(el);
   scrollDown();
-}
-
-function scrollDown() {
-  ui.log.scrollTop = ui.log.scrollHeight;
 }
 
 function setStatus(stateName, label) {
@@ -78,12 +176,59 @@ function setStatus(stateName, label) {
   ui.status.textContent = label;
 }
 
+function isSpeaking() {
+  return state.playing.size > 0 || state.audioPending > 0;
+}
+
+function updateSpeakingState() {
+  const speaking = isSpeaking();
+  if (ui.mic && !state.recorder) {
+    ui.mic.classList.toggle("stop-mode", speaking);
+    if (speaking) {
+      ui.mic.dataset.state = "stop";
+      ui.mic.setAttribute("aria-label", "Interrompre la voix de l'assistant");
+      ui.mic.setAttribute("title", "Interrompre la voix de l'assistant");
+    } else {
+      ui.mic.dataset.state = "idle";
+      ui.mic.setAttribute("aria-label", "Parler");
+      ui.mic.removeAttribute("title");
+    }
+  }
+  if (speaking) {
+    if (!state.busy) setStatus("speaking", "L'assistant parle…");
+    const targetBubble = state.speakingBubble || ui.log.querySelector(".msg.bot:last-of-type");
+    if (targetBubble && !targetBubble.querySelector(".sound-wave")) {
+      targetBubble.classList.add("speaking");
+      const wave = document.createElement("span");
+      wave.className = "sound-wave";
+      wave.setAttribute("aria-hidden", "true");
+      wave.innerHTML = "<span></span><span></span><span></span><span></span>";
+      targetBubble.append(wave);
+    }
+  } else {
+    document.querySelectorAll(".msg.bot.speaking").forEach((b) => {
+      b.classList.remove("speaking");
+      b.querySelector(".sound-wave")?.remove();
+    });
+    state.speakingBubble = null;
+    refreshControls();
+  }
+}
+
 function refreshControls() {
   const enabled = state.ready;
   ui.text.disabled = !enabled;
   ui.send.disabled = !enabled;
   ui.mic.disabled = !enabled;
-  if (enabled) setStatus(state.busy ? "busy" : "online", state.busy ? "Réflexion…" : "Connecté");
+  if (enabled) {
+    if (state.busy) {
+      setStatus("busy", "Réflexion…");
+    } else if (isSpeaking()) {
+      setStatus("speaking", "L'assistant parle…");
+    } else {
+      setStatus("online", "Connecté");
+    }
+  }
 }
 
 // ---- Connexion ----
@@ -187,6 +332,7 @@ function handleEvent(event) {
         if (!state.botBubble.textContent.trim()) state.botBubble.remove();
       }
       state.botBubble = null;
+      stopPlayback();
       break;
     case "error":
       // Avant "ready", l'erreur concerne l'authentification : elle est traitée à la fermeture (code 4401)
@@ -227,6 +373,14 @@ function handleEvent(event) {
   }
 }
 
+function announce(text) {
+  if (!ui.liveAnnouncer || !text) return;
+  ui.liveAnnouncer.textContent = "";
+  setTimeout(() => {
+    if (ui.liveAnnouncer) ui.liveAnnouncer.textContent = text;
+  }, 50);
+}
+
 function finishBotBubble(text) {
   // Le texte final est épuré (tags d'actions retirés) : il remplace le flux brut
   const bubble = state.botBubble;
@@ -239,7 +393,10 @@ function finishBotBubble(text) {
   const target = bubble || addBubble("bot", "");
   target.classList.remove("pending");
   target.textContent = text;
+  state.speakingBubble = target;
+  if (isSpeaking()) updateSpeakingState();
   scrollDown();
+  announce(text);
 }
 
 // ---- Demandes ----
@@ -273,6 +430,13 @@ ui.textForm.addEventListener("submit", (e) => {
   sendText(text);
 });
 
+ui.log.addEventListener("click", (e) => {
+  const chip = e.target.closest(".hint-chip");
+  if (!chip || !state.ready) return;
+  unlockAudio();
+  sendText(chip.textContent.trim());
+});
+
 // ---- Micro ----
 ui.mic.addEventListener("click", async () => {
   unlockAudio();
@@ -280,7 +444,10 @@ ui.mic.addEventListener("click", async () => {
     stopRecording();
     return;
   }
-  interruptAssistant();
+  if (isSpeaking()) {
+    interruptAssistant();
+    return;
+  }
   const cfg = state.audioConfig || {};
   const recorder = new Recorder({
     targetRate: cfg.sample_rate || 16000,
@@ -298,20 +465,47 @@ ui.mic.addEventListener("click", async () => {
     return;
   }
   state.recorder = recorder;
+  ui.mic.classList.remove("stop-mode");
   ui.mic.dataset.state = "recording";
   ui.mic.setAttribute("aria-label", "Arrêter l'écoute");
+  ui.mic.removeAttribute("title");
+  ui.mic.setAttribute("aria-pressed", "true");
   setStatus("busy", "J'écoute…");
 });
+
+let toastTimer = null;
+function showToast(message, kind = "warn", duration = 4000) {
+  if (!ui.toast) return;
+  clearTimeout(toastTimer);
+  ui.toast.textContent = message;
+  ui.toast.className = `toast ${kind}`;
+  ui.toast.hidden = false;
+  toastTimer = setTimeout(() => {
+    if (ui.toast) ui.toast.hidden = true;
+  }, duration);
+}
 
 function stopRecording() {
   const recorder = state.recorder;
   if (!recorder) return;
   state.recorder = null;
-  ui.mic.dataset.state = "idle";
-  ui.mic.setAttribute("aria-label", "Parler");
+  const speaking = isSpeaking();
+  ui.mic.classList.toggle("stop-mode", speaking);
+  ui.mic.dataset.state = speaking ? "stop" : "idle";
+  ui.mic.setAttribute("aria-label", speaking ? "Interrompre la voix de l'assistant" : "Parler");
+  if (speaking) {
+    ui.mic.setAttribute("title", "Interrompre la voix de l'assistant");
+  } else {
+    ui.mic.removeAttribute("title");
+  }
+  ui.mic.setAttribute("aria-pressed", "false");
   const { wav, hadSpeech } = recorder.stop();
   refreshControls();
-  if (hadSpeech) sendAudio(wav);
+  if (hadSpeech) {
+    sendAudio(wav);
+  } else {
+    showToast("Voix non détectée — parlez plus fort ou approchez-vous du micro.");
+  }
 }
 
 function micErrorMessage(err) {
@@ -339,6 +533,8 @@ function enqueueAudio(base64) {
   const ctx = state.audioCtx;
   if (!ctx) return;
   const generation = state.audioGeneration;
+  state.audioPending += 1;
+  updateSpeakingState();
   state.decodeChain = state.decodeChain.then(async () => {
     try {
       const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
@@ -351,41 +547,100 @@ function enqueueAudio(base64) {
       source.start(startAt);
       state.playHead = startAt + buffer.duration;
       state.playing.add(source);
-      source.onended = () => state.playing.delete(source);
+      source.onended = () => {
+        state.playing.delete(source);
+        updateSpeakingState();
+      };
+      updateSpeakingState();
     } catch (err) {
       console.warn("Lecture audio impossible", err);
+    } finally {
+      state.audioPending = Math.max(0, state.audioPending - 1);
+      updateSpeakingState();
     }
   });
 }
 
 function stopPlayback() {
   state.audioGeneration += 1;
-  const wasPlaying = state.playing.size > 0;
+  const wasPlaying = state.playing.size > 0 || state.audioPending > 0;
   for (const source of state.playing) {
     try { source.stop(); } catch { /* déjà terminée */ }
   }
   state.playing.clear();
+  state.audioPending = 0;
   state.playHead = 0;
+  updateSpeakingState();
   return wasPlaying;
 }
 
 // ---- Confirmation ----
 let confirmTimer = null;
+let confirmElapsed = 0;
+let confirmPaused = false;
+let confirmTotalMs = 20000;
+let confirmLastTick = 0;
+
+function updateConfirmDisplay() {
+  const remainingMs = Math.max(0, confirmTotalMs - confirmElapsed);
+  const leftFrac = remainingMs / confirmTotalMs;
+  ui.confirmBar.style.transform = `scaleX(${leftFrac})`;
+  const seconds = Math.ceil(remainingMs / 1000);
+  if (ui.confirmTimerText) {
+    if (confirmPaused) {
+      ui.confirmTimerText.textContent = `Décompte en pause (${seconds} s restantes)`;
+    } else {
+      ui.confirmTimerText.textContent = `Annulation automatique dans ${seconds} s`;
+    }
+  }
+  if (remainingMs <= 0) {
+    ui.confirm.close("no");
+  }
+}
 
 function askConfirmation(event) {
   ui.confirmQuestion.textContent = event.question;
   ui.confirm.dataset.requestId = event.id;
-  const duration = state.confirmTimeout * 1000;
-  const started = performance.now();
+  confirmTotalMs = (state.confirmTimeout || 20) * 1000;
+  confirmElapsed = 0;
+  confirmPaused = false;
+  confirmLastTick = performance.now();
   clearInterval(confirmTimer);
+  updateConfirmDisplay();
   confirmTimer = setInterval(() => {
-    const left = 1 - (performance.now() - started) / duration;
-    ui.confirmBar.style.transform = `scaleX(${Math.max(0, left)})`;
-    if (left <= 0) ui.confirm.close("no");
+    if (!confirmPaused) {
+      const now = performance.now();
+      confirmElapsed += (now - confirmLastTick);
+      confirmLastTick = now;
+    } else {
+      confirmLastTick = performance.now();
+    }
+    updateConfirmDisplay();
   }, 100);
   if (!ui.confirm.open) ui.confirm.showModal();
   $("confirm-no").focus();
 }
+
+ui.confirm.addEventListener("mouseenter", () => {
+  confirmPaused = true;
+  updateConfirmDisplay();
+});
+ui.confirm.addEventListener("mouseleave", () => {
+  confirmPaused = false;
+  confirmLastTick = performance.now();
+  updateConfirmDisplay();
+});
+ui.confirm.addEventListener("focusin", () => {
+  confirmPaused = true;
+  updateConfirmDisplay();
+});
+ui.confirm.addEventListener("focusout", (e) => {
+  if (!ui.confirm.contains(e.relatedTarget)) {
+    confirmPaused = false;
+    confirmLastTick = performance.now();
+    updateConfirmDisplay();
+  }
+});
 
 ui.confirm.addEventListener("close", () => {
   clearInterval(confirmTimer);
@@ -410,13 +665,49 @@ ui.setupForm.addEventListener("submit", () => {
   connect();
 });
 
+ui.log.addEventListener("scroll", () => {
+  if (isNearBottom() && ui.scrollBottomBtn) {
+    ui.scrollBottomBtn.hidden = true;
+  }
+});
+
+ui.scrollBottomBtn?.addEventListener("click", () => {
+  scrollDown(true);
+  if (ui.scrollBottomBtn) ui.scrollBottomBtn.hidden = true;
+});
+
+function promptResetConversation() {
+  const hasMessages = ui.log.querySelectorAll(".msg, .tool").length > 0;
+  if (!hasMessages) {
+    send({ type: "reset" });
+    return;
+  }
+  if (ui.resetConfirm) {
+    ui.resetConfirm.showModal();
+  } else if (confirm("Effacer la conversation en cours ?")) {
+    send({ type: "reset" });
+  }
+}
+
+ui.resetConfirm?.addEventListener("close", () => {
+  if (ui.resetConfirm.returnValue === "confirm") {
+    send({ type: "reset" });
+    showToast("Conversation effacée", "ok");
+  }
+});
+
+ui.newChatBtn?.addEventListener("click", promptResetConversation);
+
 $("settings-btn").addEventListener("click", () => {
   ui.settings.showModal();
   ui.modelMsg.textContent = "";
   send({ type: "get_settings" });
   send({ type: "list_models" });
 });
-$("reset-btn").addEventListener("click", () => { send({ type: "reset" }); ui.settings.close(); });
+$("reset-btn").addEventListener("click", () => {
+  ui.settings.close();
+  promptResetConversation();
+});
 $("logout-btn").addEventListener("click", () => {
   store.set("token", null);
   store.set("session", null);
@@ -592,9 +883,51 @@ function renderField(field) {
       if (field.max !== undefined && field.max !== null) input.max = field.max;
       input.value = field.value ?? "";
     } else if (field.kind === "json") {
-      input = document.createElement("textarea");
-      input.spellcheck = false;
-      input.value = Object.keys(field.value || {}).length ? JSON.stringify(field.value, null, 2) : "{}";
+      input = document.createElement("div");
+      input.className = "kv-editor";
+      const rows = document.createElement("div");
+      rows.className = "kv-rows";
+      const obj = (typeof field.value === "object" && field.value !== null) ? field.value : {};
+
+      const addRow = (k = "", v = "") => {
+        const row = document.createElement("div");
+        row.className = "kv-row";
+        const kInput = document.createElement("input");
+        kInput.type = "text";
+        kInput.placeholder = "Commande (ex: volume)";
+        kInput.value = k;
+        const vInput = document.createElement("input");
+        vInput.type = "text";
+        vInput.placeholder = "Message de confirmation";
+        vInput.value = v;
+        const delBtn = document.createElement("button");
+        delBtn.type = "button";
+        delBtn.className = "kv-del";
+        delBtn.innerHTML = "×";
+        delBtn.setAttribute("aria-label", "Supprimer cette commande");
+        delBtn.addEventListener("click", () => {
+          row.remove();
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+        });
+        const triggerChange = () => input.dispatchEvent(new Event("input", { bubbles: true }));
+        kInput.addEventListener("input", triggerChange);
+        vInput.addEventListener("input", triggerChange);
+        row.append(kInput, vInput, delBtn);
+        rows.append(row);
+      };
+
+      for (const [k, v] of Object.entries(obj)) {
+        addRow(k, v);
+      }
+      const addBtn = document.createElement("button");
+      addBtn.type = "button";
+      addBtn.className = "kv-add";
+      addBtn.textContent = "+ Ajouter une commande";
+      addBtn.addEventListener("click", () => {
+        addRow("", "");
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      input.append(rows, addBtn);
     } else if (field.multiline) {
       input = document.createElement("textarea");
       input.value = field.kind === "list" ? field.value.join(", ") : field.value;
@@ -667,11 +1000,14 @@ function readField(field, input) {
     value = Number(input.value);
   } else if (field.kind === "list") value = input.value.split(",").map((v) => v.trim()).filter(Boolean);
   else if (field.kind === "json") {
-    try {
-      value = JSON.parse(input.value.trim() || "{}");
-    } catch {
-      throw new Error(`${field.label} : JSON invalide (ex: {"volume": "Volume \${ARGS}."}).`);
+    const result = {};
+    for (const row of input.querySelectorAll(".kv-row")) {
+      const inputs = row.querySelectorAll("input");
+      const k = inputs[0]?.value.trim();
+      const v = inputs[1]?.value.trim();
+      if (k) result[k] = v;
     }
+    value = result;
   }
   else value = input.value;
   return JSON.stringify(value) === JSON.stringify(field.value) ? undefined : value;
@@ -683,9 +1019,20 @@ $("advanced-btn").addEventListener("click", () => {
   delete ui.advancedForm.dataset.dirty;
   renderAdvanced();
   ui.advanced.showModal();
+  $("advanced-back")?.focus();
   send({ type: "get_settings" });
 });
-$("advanced-close").addEventListener("click", () => ui.advanced.close());
+
+$("advanced-back")?.addEventListener("click", () => {
+  ui.advanced.close();
+  ui.settings.showModal();
+  $("advanced-btn")?.focus();
+});
+
+$("advanced-close").addEventListener("click", () => {
+  ui.advanced.close();
+  $("settings-btn")?.focus();
+});
 
 ui.advancedForm.addEventListener("submit", (e) => {
   e.preventDefault();
@@ -709,7 +1056,9 @@ ui.advancedForm.addEventListener("submit", (e) => {
 });
 
 if ("serviceWorker" in navigator && window.isSecureContext) {
-  navigator.serviceWorker.register("sw.js").catch(() => { /* PWA non installable, l'appli fonctionne quand même */ });
+  navigator.serviceWorker.register("sw.js").then((reg) => {
+    reg.update();
+  }).catch(() => { /* PWA non installable, l'appli fonctionne quand même */ });
 }
 
 connect();

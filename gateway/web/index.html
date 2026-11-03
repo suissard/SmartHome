@@ -21,22 +21,36 @@
     </div>
     <span id="model-badge" class="model-badge" hidden></span>
     <span id="status" class="status" data-state="offline">Hors ligne</span>
+    <button id="new-chat-btn" class="icon-btn" type="button" aria-label="Nouvelle conversation" title="Nouvelle conversation">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path fill-rule="evenodd" d="M22 4c0-1.1-.9-2-2-2H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h14l4 4V4zm-5 7h-4v4h-2v-4H7V9h4V5h2v4h4v2z"/></svg>
+    </button>
     <button id="settings-btn" class="icon-btn" type="button" aria-label="Réglages">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Zm8.6-2.3-1.9-.4a7 7 0 0 0-.6-1.5l1.1-1.6-1.6-1.6-1.6 1.1c-.5-.3-1-.5-1.5-.6l-.4-1.9h-2.2l-.4 1.9c-.5.1-1 .3-1.5.6L6.4 8.1 4.8 9.7l1.1 1.6c-.3.5-.5 1-.6 1.5l-1.9.4v2.2l1.9.4c.1.5.3 1 .6 1.5l-1.1 1.6 1.6 1.6 1.6-1.1c.5.3 1 .5 1.5.6l.4 1.9h2.2l.4-1.9c.5-.1 1-.3 1.5-.6l1.6 1.1 1.6-1.6-1.1-1.6c.3-.5.5-1 .6-1.5l1.9-.4v-2.2Z"/></svg>
     </button>
   </header>
 
-  <main id="log" class="log" aria-live="polite">
+  <main id="log" class="log">
     <div id="empty" class="empty">
       <p class="empty-title">Bonjour 👋</p>
       <p>Touchez le micro et parlez, ou écrivez votre demande.</p>
-      <p class="hint">« Mets le volume à 30 % » · « Ouvre Firefox » · « Mets la musique en pause »</p>
+      <div class="hint-chips" role="group" aria-label="Exemples de demandes">
+        <button type="button" class="hint-chip">Mets le volume à 30 %</button>
+        <button type="button" class="hint-chip">Ouvre Firefox</button>
+        <button type="button" class="hint-chip">Mets la musique en pause</button>
+      </div>
     </div>
+    <button id="scroll-bottom-btn" class="scroll-bottom-btn" type="button" aria-label="Faire défiler vers les nouveaux messages" hidden>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 16 6-6h-4V4h-4v6H6z"/><path d="M4 18h16v2H4z"/></svg>
+      <span>Nouveaux messages</span>
+    </button>
   </main>
+  <div id="live-announcer" class="sr-only" aria-live="polite" aria-atomic="true"></div>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
   <footer class="composer">
-    <button id="mic" class="mic" type="button" aria-label="Parler" data-state="idle" disabled>
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.9V21h2v-3.1A7 7 0 0 0 19 11h-2Z"/></svg>
+    <button id="mic" class="mic" type="button" aria-label="Parler" aria-pressed="false" data-state="idle" disabled>
+      <svg class="icon-mic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.9V21h2v-3.1A7 7 0 0 0 19 11h-2Z"/></svg>
+      <svg class="icon-stop" viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
       <span class="mic-level" aria-hidden="true"></span>
     </button>
     <form id="text-form" class="text-form" autocomplete="off">
@@ -48,9 +62,9 @@
   </footer>
 
   <!-- Connexion : saisie du jeton de la passerelle -->
-  <dialog id="setup" class="sheet">
+  <dialog id="setup" class="sheet" aria-labelledby="setup-title">
     <form method="dialog" id="setup-form">
-      <h2>Connexion</h2>
+      <h2 id="setup-title">Connexion</h2>
       <p>Saisissez le jeton de la passerelle (<code>GATEWAY_AUTH_TOKEN</code> dans le fichier <code>.env</code>). Il reste enregistré sur cet appareil.</p>
       <label for="token">Jeton</label>
       <input id="token" type="password" autocomplete="current-password" spellcheck="false" placeholder="Laisser vide en local sans jeton">
@@ -62,9 +76,9 @@
   </dialog>
 
   <!-- Réglages -->
-  <dialog id="settings" class="sheet">
+  <dialog id="settings" class="sheet" aria-labelledby="settings-title">
     <form method="dialog">
-      <h2>Réglages</h2>
+      <h2 id="settings-title">Réglages</h2>
       <label class="toggle">
         <input id="speak" type="checkbox">
         <span>Réponse vocale sur cet appareil</span>
@@ -107,9 +121,15 @@
   </dialog>
 
   <!-- Paramètres du serveur, générés d'après la description envoyée par la passerelle -->
-  <dialog id="advanced" class="sheet wide">
+  <dialog id="advanced" class="sheet wide" aria-labelledby="advanced-title">
     <form id="advanced-form">
-      <h2>Paramètres avancés</h2>
+      <div class="sheet-header">
+        <button type="button" id="advanced-back" class="back-btn" aria-label="Retour aux réglages">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
+          <span>Réglages</span>
+        </button>
+        <h2 id="advanced-title">Paramètres avancés</h2>
+      </div>
       <p>Enregistrés dans le fichier <code>.env</code> de l'ordinateur. Les réglages marqués « au redémarrage » s'appliquent au prochain lancement de SmartHome.</p>
       <div id="advanced-fields"><p class="meta">Chargement…</p></div>
       <p id="advanced-msg" class="meta" role="status"></p>
@@ -121,14 +141,26 @@
   </dialog>
 
   <!-- Confirmation d'une action dangereuse -->
-  <dialog id="confirm" class="sheet confirm">
+  <dialog id="confirm" class="sheet confirm" aria-labelledby="confirm-title">
     <form method="dialog">
-      <h2>Confirmation</h2>
+      <h2 id="confirm-title">Confirmation</h2>
       <p id="confirm-question"></p>
       <div class="countdown"><span id="confirm-bar"></span></div>
+      <p id="confirm-timer-text" class="confirm-timer" role="timer" aria-live="off"></p>
       <div class="actions">
         <button type="submit" value="no" id="confirm-no">Non</button>
         <button type="submit" value="yes" class="danger">Oui, confirmer</button>
+      </div>
+    </form>
+  </dialog>
+  <!-- Confirmation effacement conversation -->
+  <dialog id="reset-confirm" class="sheet confirm" aria-labelledby="reset-confirm-title">
+    <form method="dialog">
+      <h2 id="reset-confirm-title">Nouvelle conversation</h2>
+      <p>Voulez-vous effacer l'historique des échanges ?</p>
+      <div class="actions">
+        <button type="submit" value="cancel">Annuler</button>
+        <button type="submit" value="confirm" class="danger">Effacer</button>
       </div>
     </form>
   </dialog>
