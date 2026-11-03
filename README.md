@@ -205,10 +205,14 @@ Cinq profils prêts à l'emploi dans `profiles/` ; ils surchargent `.env` (les s
 | `cloud` | Gemini 2.5 Flash (audio direct) | Gemini 2.5 Flash | Voxtral (OpenRouter) |
 
 ```bash
-./start.sh                      # menu de choix (Entrée = mix)
+./start.sh                      # menu aux flèches, placé sur le dernier profil choisi (Entrée pour valider)
+./start.sh --setup              # configuration pas à pas : quelques questions, crée le profil perso
+./start.sh --no-menu            # pas de menu : reprend le dernier profil choisi (mix la première fois)
 ./start.sh --profile cloud      # ou SMARTHOME_PROFILE=cloud, ou python main.py --profile cloud
 python -m core.profiles         # liste les profils
 ```
+
+Le menu propose aussi **Configurer pas à pas** (sélectionné au premier lancement) : l'assistant détecte Ollama et ses modèles, demande votre clé OpenRouter (enregistrée dans `.env`, saisie masquée), puis ce qui doit réfléchir, écouter et parler. Il prévient si un deuxième modèle Ollama serait chargé, et crée `profiles/perso.env` (non versionné). ← revient à la question précédente.
 
 Priorité : variables d'environnement > profil > `.env` > défauts. Un réglage du profil modifié dans l'interface web est gardé dans `profiles/<nom>.local.env` (non versionné), les autres dans `.env`.
 Au mot-clé, la pause des médias (`MEDIA_PAUSE_ENABLED`, activée par défaut) remplace le ducking : le volume des autres applications n'est plus touché.

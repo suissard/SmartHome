@@ -3,6 +3,8 @@
 #   ./start.sh                Assistant vocal (micro + haut-parleur)
 #   ./start.sh --server       Passerelle seule, sans micro (python -m gateway)
 #   ./start.sh --profile cloud  Profil de configuration (profiles/*.env) ; sans option, menu si terminal interactif
+#   ./start.sh --no-menu      Pas de menu : reprend le dernier profil choisi
+#   ./start.sh --setup        Configuration pas à pas (crée le profil perso)
 #   ./start.sh --reset-sound  Rétablit le son système après un arrêt brutal
 set -euo pipefail
 
@@ -11,18 +13,22 @@ cd "$ROOT_DIR"
 PY="$ROOT_DIR/.venv/bin/python"
 [[ -x "$PY" ]] || { echo "❌ Environnement absent : lancez d'abord ./install.sh" >&2; exit 1; }
 
-# Profil : --profile <nom> > SMARTHOME_PROFILE > menu (terminal interactif) > défaut (mix)
+# Profil : --profile <nom> > SMARTHOME_PROFILE > menu (terminal interactif) > dernier choix > défaut (mix)
 args=()
+menu=true
+setup=False
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --profile) export SMARTHOME_PROFILE="${2:?--profile demande un nom}"; shift 2 ;;
         --profile=*) export SMARTHOME_PROFILE="${1#*=}"; shift ;;
+        --no-menu) menu=false; shift ;;
+        --setup) setup=True; shift ;;
         *) args+=("$1"); shift ;;
     esac
 done
 set -- "${args[@]+"${args[@]}"}"
-if [[ -z "${SMARTHOME_PROFILE:-}" && -t 0 && "${1:-}" != "--reset-sound" ]]; then
-    SMARTHOME_PROFILE="$("$PY" -m core.profiles choose)"
+if [[ "$setup" == True ]] || [[ "$menu" == true && -z "${SMARTHOME_PROFILE:-}" && -t 0 && "${1:-}" != "--reset-sound" ]]; then
+    SMARTHOME_PROFILE="$("$PY" -c "from core.profiles import choose_profile; print(choose_profile(setup=$setup))")"
     export SMARTHOME_PROFILE
 fi
 

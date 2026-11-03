@@ -9,7 +9,8 @@ Un réglage du profil modifié depuis l'interface web va dans `profiles/<nom>.lo
 qui complète le profil sans modifier le fichier livré.
 
 Choix du profil : `python main.py --profile local-lfm`, variable `SMARTHOME_PROFILE`, ou menu
-au démarrage de `./start.sh`. Sans choix, le profil par défaut (`mix`) s'applique.
+au démarrage de `./start.sh` (`--no-menu` pour le passer, `--setup` pour l'assistant pas à pas de core/wizard.py). Sans choix, le dernier profil choisi
+dans le menu s'applique (`profiles/.last`, non versionné), sinon le profil par défaut (`mix`).
 """
 
 import os
@@ -19,9 +20,12 @@ from typing import Optional
 
 from dotenv import dotenv_values
 
+from core.menu import Option, answered, choose
+
 PROFILES_DIR = Path(__file__).resolve().parent.parent / "profiles"
 DEFAULT_PROFILE = "mix"
 PROFILE_ENV_VAR = "SMARTHOME_PROFILE"
+LAST_PROFILE_FILE = ".last"
 
 
 def list_profiles() -> list[str]:
@@ -45,8 +49,21 @@ def describe_profile(name: str) -> str:
     return ""
 
 
+def last_profile() -> str:
+    """Dernier profil choisi dans le menu (profil par défaut s'il n'y en a pas ou s'il n'existe plus)."""
+    try:
+        name = (PROFILES_DIR / LAST_PROFILE_FILE).read_text(encoding="utf-8").strip()
+    except OSError:
+        return DEFAULT_PROFILE
+    return name if name in list_profiles() else DEFAULT_PROFILE
+
+
+def remember_profile(name: str):
+    (PROFILES_DIR / LAST_PROFILE_FILE).write_text(f"{name}\n", encoding="utf-8")
+
+
 def active_profile() -> str:
-    return (os.environ.get(PROFILE_ENV_VAR) or "").strip() or DEFAULT_PROFILE
+    return (os.environ.get(PROFILE_ENV_VAR) or "").strip() or last_profile()
 
 
 def local_overrides_path(name: Optional[str] = None) -> Path:
@@ -80,29 +97,35 @@ def pop_profile_argument(argv: list[str]) -> Optional[str]:
     return None
 
 
-def choose_profile() -> str:
-    """Menu interactif (sur stderr) ; Entrée = profil par défaut. Retourne le nom choisi."""
-    names = list_profiles()
-    print("\nChoisissez un profil :", file=sys.stderr)
-    for i, name in enumerate(names, 1):
-        mark = " (défaut)" if name == DEFAULT_PROFILE else ""
-        print(f"  {i}. {name}{mark} — {describe_profile(name)}", file=sys.stderr)
+def choose_profile(setup: bool = False) -> str:
+    """Menu de démarrage, positionné sur le dernier profil (sur l'assistant de configuration au premier lancement).
+    Mémorise et retourne le nom du profil. `setup` ouvre directement l'assistant."""
     while True:
-        answer = input(f"Numéro ou nom [{DEFAULT_PROFILE}] : ").strip()
-        if not answer:
-            return DEFAULT_PROFILE
-        if answer.isdigit() and 1 <= int(answer) <= len(names):
-            return names[int(answer) - 1]
-        if answer in names:
-            return answer
-        print("Choix invalide.", file=sys.stderr)
+        name = _run_setup() if setup else _pick_from_menu()
+        setup = False  # assistant annulé : retour au menu
+        if name:
+            remember_profile(name)
+            answered("Profil", name)
+            return name
+
+
+def _pick_from_menu() -> Optional[str]:
+    names, last = list_profiles(), last_profile()
+    first_launch = not (PROFILES_DIR / LAST_PROFILE_FILE).exists()
+    options = [Option("Configurer pas à pas", None, "Quelques questions pour créer votre configuration")]
+    for name in names:
+        options.append(Option(name, name, describe_profile(name).split(" : ", 1)[-1],
+                              "" if first_launch or name != last else "dernier choix"))
+    picked = choose("SmartHome · choix du profil", options, 0 if first_launch else names.index(last) + 1)
+    return picked.value or _run_setup()
+
+
+def _run_setup() -> Optional[str]:
+    from core.wizard import run_wizard
+    return run_wizard()
 
 
 if __name__ == "__main__":
-    # `python -m core.profiles` liste les profils ; `choose` affiche le nom choisi (utilisé par start.sh)
-    if len(sys.argv) > 1 and sys.argv[1] == "choose":
-        print(choose_profile())
-    else:
-        print(f"🧪 [DEBUG] Profils disponibles (actif : {active_profile()}) :")
-        for n in list_profiles():
-            print(f"  • {n:<14} {describe_profile(n)}")
+    print(f"🧪 [DEBUG] Profils disponibles (actif : {active_profile()}) :")
+    for n in list_profiles():
+        print(f"  • {n:<14} {describe_profile(n)}")
