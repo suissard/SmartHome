@@ -76,12 +76,63 @@ function addBubble(kind, text) {
   return el;
 }
 
+function escapeHtml(str) {
+  return String(str).replace(/[&<>"']/g, (s) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[s]));
+}
+
+function formatActionLabel(name, args = {}, executed = true) {
+  if (!executed) return `Commande ${name} non exécutée`;
+  switch (name) {
+    case "volume":
+      return args.level !== undefined ? `Volume réglé à ${args.level} %` : "Réglage du volume";
+    case "mute":
+      return args.action === "unmute" ? "Son réactivé" : "Son coupé";
+    case "media":
+      return args.action === "play" ? "Lecture reprise" :
+             args.action === "pause" ? "Musique en pause" :
+             args.action === "next" ? "Piste suivante" :
+             args.action === "previous" ? "Piste précédente" : `Média : ${args.action}`;
+    case "open_app":
+      return `Application ouverte : ${args.app || "inconnue"}`;
+    case "close_app":
+      return `Application fermée : ${args.app || "inconnue"}`;
+    case "shutdown":
+      return "Extinction de l'ordinateur";
+    case "reboot":
+      return "Redémarrage de l'ordinateur";
+    case "lock":
+      return "Session verrouillée";
+    case "screen_off":
+      return "Écran éteint";
+    case "brightness":
+      return args.level !== undefined ? `Luminosité fixée à ${args.level} %` : "Réglage de la luminosité";
+    case "screenshot":
+      return "Capture d'écran enregistrée";
+    case "system_info":
+      return "État du système vérifié";
+    case "sleep":
+      return "Assistant mis en veille";
+    case "timer":
+      return args.seconds ? `Minuteur : ${args.seconds} s` : "Minuteur programmé";
+    case "audio_output":
+      return args.sink ? `Sortie audio : ${args.sink}` : "Sortie audio modifiée";
+    default: {
+      const argStr = Object.entries(args).map(([k, v]) => `${k}=${v}`).join(", ");
+      return `${name}${argStr ? ` (${argStr})` : ""}`;
+    }
+  }
+}
+
 function addToolChip(event) {
   const el = document.createElement("div");
   el.className = `tool ${event.executed ? "ok" : "refused"}`;
-  const args = Object.values(event.arguments || {}).join(", ");
-  el.textContent = `${event.executed ? "✓" : "✕"} ${event.name}${args ? ` (${args})` : ""}${event.executed ? "" : " — non exécuté"}`;
-  el.title = event.output || "";
+  const label = formatActionLabel(event.name, event.arguments, event.executed);
+  const icon = event.executed ? "✓" : "✕";
+  el.innerHTML = `<span class="tool-icon" aria-hidden="true">${icon}</span> <span class="tool-text">${escapeHtml(label)}</span>`;
+  if (event.output) {
+    el.title = event.output;
+    el.setAttribute("aria-label", `${label}. Résultat : ${event.output}`);
+  }
   ui.log.append(el);
   scrollDown();
 }
@@ -774,9 +825,51 @@ function renderField(field) {
       if (field.max !== undefined && field.max !== null) input.max = field.max;
       input.value = field.value ?? "";
     } else if (field.kind === "json") {
-      input = document.createElement("textarea");
-      input.spellcheck = false;
-      input.value = Object.keys(field.value || {}).length ? JSON.stringify(field.value, null, 2) : "{}";
+      input = document.createElement("div");
+      input.className = "kv-editor";
+      const rows = document.createElement("div");
+      rows.className = "kv-rows";
+      const obj = (typeof field.value === "object" && field.value !== null) ? field.value : {};
+
+      const addRow = (k = "", v = "") => {
+        const row = document.createElement("div");
+        row.className = "kv-row";
+        const kInput = document.createElement("input");
+        kInput.type = "text";
+        kInput.placeholder = "Commande (ex: volume)";
+        kInput.value = k;
+        const vInput = document.createElement("input");
+        vInput.type = "text";
+        vInput.placeholder = "Message de confirmation";
+        vInput.value = v;
+        const delBtn = document.createElement("button");
+        delBtn.type = "button";
+        delBtn.className = "kv-del";
+        delBtn.innerHTML = "×";
+        delBtn.setAttribute("aria-label", "Supprimer cette commande");
+        delBtn.addEventListener("click", () => {
+          row.remove();
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+        });
+        const triggerChange = () => input.dispatchEvent(new Event("input", { bubbles: true }));
+        kInput.addEventListener("input", triggerChange);
+        vInput.addEventListener("input", triggerChange);
+        row.append(kInput, vInput, delBtn);
+        rows.append(row);
+      };
+
+      for (const [k, v] of Object.entries(obj)) {
+        addRow(k, v);
+      }
+      const addBtn = document.createElement("button");
+      addBtn.type = "button";
+      addBtn.className = "kv-add";
+      addBtn.textContent = "+ Ajouter une commande";
+      addBtn.addEventListener("click", () => {
+        addRow("", "");
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      input.append(rows, addBtn);
     } else if (field.multiline) {
       input = document.createElement("textarea");
       input.value = field.kind === "list" ? field.value.join(", ") : field.value;
@@ -849,11 +942,14 @@ function readField(field, input) {
     value = Number(input.value);
   } else if (field.kind === "list") value = input.value.split(",").map((v) => v.trim()).filter(Boolean);
   else if (field.kind === "json") {
-    try {
-      value = JSON.parse(input.value.trim() || "{}");
-    } catch {
-      throw new Error(`${field.label} : JSON invalide (ex: {"volume": "Volume \${ARGS}."}).`);
+    const result = {};
+    for (const row of input.querySelectorAll(".kv-row")) {
+      const inputs = row.querySelectorAll("input");
+      const k = inputs[0]?.value.trim();
+      const v = inputs[1]?.value.trim();
+      if (k) result[k] = v;
     }
+    value = result;
   }
   else value = input.value;
   return JSON.stringify(value) === JSON.stringify(field.value) ? undefined : value;
