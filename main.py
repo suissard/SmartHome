@@ -1,5 +1,10 @@
 import sys
 import threading
+
+from core.profiles import active_profile, describe_profile, pop_profile_argument
+
+pop_profile_argument(sys.argv)  # --profile <nom> doit être connu avant le chargement de core.config
+
 import numpy as np
 import pyaudio
 from core.config import (
@@ -26,6 +31,7 @@ from llm.providers import LLM_PROVIDERS
 from actions import get_all_commands
 from core.assistant import AssistantCore, Reply
 from core.mcp_hub import get_mcp_hub
+from core.restart import restart_if_requested
 from core.security import require_token_for_host
 
 LOCAL_SESSION = "local"
@@ -114,8 +120,9 @@ def main():
     transcriber = VoiceTranscriber()
     tts = TextToSpeech()
     feedback = FeedbackManager(tts=tts)
-    ducker = AudioDucker()
     media_pauser = MediaPauser()
+    # La pause des médias suffit : baisser le son en plus est redondant et laisse des volumes bridés
+    ducker = AudioDucker(enabled=get_settings().DUCKING_ENABLED and not media_pauser.enabled)
     mcp_hub = get_mcp_hub() if MCP_CLIENT_ENABLED else None
 
     # Connexion aux serveurs MCP configurés
@@ -175,6 +182,7 @@ def main():
     )
 
     print(f"\n🟢 Démarrage de SmartHome")
+    print(f"  • Profil        : {active_profile()} — {describe_profile(active_profile())}")
     print(f"  • Cerveau LLM   : {llm_info} (Mémoire: {LLM_HISTORY_MESSAGES} msgs)")
     print(f"  • Écoute STT    : {stt_info}")
     print(f"  • Voix TTS      : {tts_info}{' (streaming par phrase)' if settings.TTS_STREAMING else ''}")
@@ -257,7 +265,8 @@ def main():
                     print(f"\n⚠️ [ERREUR] Échange interrompu : {e}")
                 finally:
                     # 2. Restauration systématique du son et retour en veille
-                    ducker.unduck()
+                    if ducker.enabled:
+                        ducker.unduck()
                     media_pauser.resume()
                     flush_stream(stream)
                     detector.oww.reset()
@@ -270,7 +279,8 @@ def main():
             gateway.should_exit = True
         if mcp_hub and MCP_CLIENT_ENABLED:
             mcp_hub.disconnect_all()
-        ducker.unduck()
+        if ducker.enabled:
+            ducker.unduck()
         media_pauser.resume()
         stream.stop_stream()
         stream.close()
@@ -278,6 +288,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+    restart_if_requested()
 
 
 

@@ -192,6 +192,27 @@ Chaque fichier peut être exécuté de manière autonome pour tester et régler 
 
 ---
 
+## 🎛️ Profils de configuration
+
+Cinq profils prêts à l'emploi dans `profiles/` ; ils surchargent `.env` (les secrets comme `OPENROUTER_API_KEY` y restent).
+
+| Profil | Écoute (STT) | Cerveau (LLM) | Voix (TTS) |
+|---|---|---|---|
+| `mix` (défaut) | lfm3-audio (Ollama) | DeepSeek V4 Flash (OpenRouter) | lfm3-audio (Ollama) |
+| `local-gemma` | gemma4:12b (audio direct) | gemma4:12b | Piper |
+| `local-lfm` | lfm3-audio (audio direct) | lfm3-audio | lfm3-audio |
+| `local-decision` | Whisper | nimble (modèle de décision) | Piper |
+| `cloud` | Gemini 2.5 Flash (audio direct) | Gemini 2.5 Flash | Voxtral (OpenRouter) |
+
+```bash
+./start.sh                      # menu de choix (Entrée = mix)
+./start.sh --profile cloud      # ou SMARTHOME_PROFILE=cloud, ou python main.py --profile cloud
+python -m core.profiles         # liste les profils
+```
+
+Priorité : variables d'environnement > profil > `.env` > défauts. Un réglage du profil modifié dans l'interface web est gardé dans `profiles/<nom>.local.env` (non versionné), les autres dans `.env`.
+Au mot-clé, la pause des médias (`MEDIA_PAUSE_ENABLED`, activée par défaut) remplace le ducking : le volume des autres applications n'est plus touché.
+
 ## ⚙️ Configuration & Personnalisation (.env)
 
 Toutes les variables sont désormais centralisées dans le fichier `.env` (géré par [config.py](file:///home/suissard/PROGRAMMATIONS/SmartHome/config.py)).
@@ -279,7 +300,7 @@ Le micro d'un navigateur exige le HTTPS : `tailscale serve` le fournit (certific
 Sans jeton configuré, la passerelle refuse toute requête relayée par un proxy : `tailscale serve` ne peut donc pas ouvrir l'accès à tout le tailnet par erreur.
 
 ### Choisir le modèle et régler l'assistant depuis l'interface
-Dans **Réglages** : liste des modèles Ollama installés (avec leurs capacités), case **Modèle de décision**, puis **Paramètres avancés…** pour le prompt, l'historique, la voix, l'écoute, les retours sonores et les actions. Les valeurs sont enregistrées dans `.env` ; celles marquées « au redémarrage » s'appliquent au prochain lancement. Les secrets (clés, jetons) et l'adresse réseau ne sont jamais exposés.
+Dans **Réglages** (engrenage) : liste des modèles Ollama installés (avec leurs capacités), case **Modèle de décision** pour les modèles concernés, **Redémarrer SmartHome**, puis **Paramètres avancés…** pour le prompt, l'historique, la voix, l'écoute, les retours sonores et les actions. Seuls les réglages utiles à la configuration choisie sont affichés (pas de Whisper avec une transcription Ollama, pas de réponses types avec un modèle de langage). Les valeurs marquées « au redémarrage » s'appliquent au prochain lancement. Les secrets (clés, jetons) et l'adresse réseau ne sont jamais exposés.
 
 **Modèles de décision** (ex: `ollama pull nimble`) : ils ne rédigent pas de réponse, ils choisissent la commande et ses arguments parmi des choix fermés (~0,5 s par commande). L'assistant prononce alors le message de confirmation de la commande (« Volume 30 %. », « J'ouvre le navigateur web. », l'état de la machine pour `system_info`…), ou « Je n'ai pas compris la commande. ». Chaque action déclare son message (`done_message`) ; il se remplace dans `LLM_DECISION_MESSAGES` (JSON, ex: `{"volume": "C'est parti, volume ${ARGS}."}`, modifiable dans les paramètres avancés). Variables : `${COMMAND}`, `${ARGS}`, `${OUTPUT}`, `${TOOL}`. Sans message, réponse type : « Commande ${COMMAND} initiée avec ${ARGS}. ». Seules les commandes dont les arguments ont des valeurs fermées leur sont proposées (une notification au texte libre, par exemple, ne l'est pas). Test en console : `python llm/decision.py`.
 

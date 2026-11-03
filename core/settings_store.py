@@ -23,6 +23,7 @@ if str(_ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(_ROOT_DIR))
 
 from core.config import BASE_DIR, ENV_FILE, Settings
+from core.profiles import local_overrides_path, profile_values
 
 LIVE, RESTART = True, False
 
@@ -60,6 +61,8 @@ EDITABLE_GROUPS: list[tuple[str, list[tuple[str, str, bool]]]] = [
         ("TTS_VOICE", "Voix Piper", RESTART),
         ("OLLAMA_TTS_MODEL", "Modèle vocal Ollama", RESTART),
         ("OLLAMA_TTS_VOICE", "Voix Ollama", RESTART),
+        ("OPENROUTER_TTS_MODEL", "Modèle vocal OpenRouter", RESTART),
+        ("OPENROUTER_TTS_VOICE", "Voix OpenRouter", RESTART),
         ("TTS_SPEECH_SPEED", "Vitesse", RESTART),
         ("TTS_STREAMING", "Parler phrase par phrase", LIVE),
         ("TTS_STREAM_MIN_CHARS", "Longueur minimale d'un morceau", LIVE),
@@ -68,6 +71,7 @@ EDITABLE_GROUPS: list[tuple[str, list[tuple[str, str, bool]]]] = [
         ("STT_PROVIDER", "Transcription", RESTART),
         ("STT_FALLBACK_PROVIDER", "Transcription de repli (mode direct)", LIVE),
         ("OLLAMA_STT_MODEL", "Modèle de transcription Ollama", RESTART),
+        ("OPENROUTER_STT_MODEL", "Modèle de transcription OpenRouter", RESTART),
         ("WHISPER_MODEL", "Modèle Whisper", RESTART),
         ("WHISPER_BEAM_SIZE", "Beam size Whisper", RESTART),
         ("VOICE_THRESHOLD", "Seuil de voix", RESTART),
@@ -96,6 +100,56 @@ EDITABLE_GROUPS: list[tuple[str, list[tuple[str, str, bool]]]] = [
         ("ACTIONS_OPEN_ALLOWED_APPS", "Applications autorisées", RESTART),
     ]),
 ]
+
+# Champs affichés seulement si le réglage correspond : liste d'alternatives {variable: valeurs admises}.
+# LLM_MODE est calculé par l'interface : "decision" si le modèle Ollama actif est un modèle de décision, sinon "language".
+_DIRECT_STT = ["direct", "none", "bypass"]
+_LANGUAGE_MODEL = [{"LLM_MODE": ["language"]}]
+_DECISION_MODEL = [{"LLM_MODE": ["decision"]}]
+
+
+def _stt_engine(name: str) -> list[dict]:
+    """Moteur de transcription utilisé, directement ou en repli du mode direct."""
+    return [{"STT_PROVIDER": [name]}, {"STT_PROVIDER": _DIRECT_STT, "STT_FALLBACK_PROVIDER": [name]}]
+
+
+VISIBLE_WHEN: dict[str, list[dict]] = {
+    "OLLAMA_MODEL": [{"LLM_PROVIDER": ["ollama"]}],
+    "OPENROUTER_MODEL": [{"LLM_PROVIDER": ["openrouter"]}],
+    "LLM_SYSTEM_PROMPT": _LANGUAGE_MODEL,
+    "LLM_THINK": _LANGUAGE_MODEL,
+    "LLM_TOOL_CALLING": _LANGUAGE_MODEL,
+    "LLM_MAX_TOOL_ROUNDS": _LANGUAGE_MODEL,
+    "LLM_AUDIO_INPUT": [{"STT_PROVIDER": _DIRECT_STT, "LLM_MODE": ["language"]}],
+    "LLM_DECISION_MODELS": _DECISION_MODEL,
+    "LLM_DECISION_PROMPT": _DECISION_MODEL,
+    "LLM_DECISION_MIN_CONFIDENCE": _DECISION_MODEL,
+    "LLM_DECISION_MESSAGES": _DECISION_MODEL,
+    "LLM_DECISION_DONE_TEMPLATE": _DECISION_MODEL,
+    "LLM_DECISION_DONE_NO_ARGS_TEMPLATE": _DECISION_MODEL,
+    "LLM_DECISION_REFUSED_TEMPLATE": _DECISION_MODEL,
+    "LLM_DECISION_UNKNOWN_TEXT": _DECISION_MODEL,
+    "LLM_DECISION_TIMEOUT": _DECISION_MODEL,
+    "TTS_VOICE": [{"TTS_PROVIDER": ["piper"]}],
+    "OLLAMA_TTS_MODEL": [{"TTS_PROVIDER": ["ollama"]}],
+    "OLLAMA_TTS_VOICE": [{"TTS_PROVIDER": ["ollama"]}],
+    "OPENROUTER_TTS_MODEL": [{"TTS_PROVIDER": ["openrouter"]}],
+    "OPENROUTER_TTS_VOICE": [{"TTS_PROVIDER": ["openrouter"]}],
+    "TTS_SPEECH_SPEED": [{"TTS_PROVIDER": ["piper", "openrouter"]}],  # Ollama : vitesse 1 seulement
+    "TTS_STREAM_MIN_CHARS": [{"TTS_STREAMING": [True]}],
+    "STT_FALLBACK_PROVIDER": [{"STT_PROVIDER": _DIRECT_STT}],
+    "OLLAMA_STT_MODEL": _stt_engine("ollama"),
+    "OPENROUTER_STT_MODEL": _stt_engine("openrouter"),
+    "WHISPER_MODEL": _stt_engine("whisper"),
+    "WHISPER_BEAM_SIZE": _stt_engine("whisper"),
+    "VAD_SPEECH_THRESHOLD": [{"VAD_ENGINE": ["silero"]}],
+    "FEEDBACK_WAKEWORD_TEXT": [{"FEEDBACK_WAKEWORD_TYPE": ["phrase"]}],
+    "FEEDBACK_TIMEOUT_TEXT": [{"FEEDBACK_TIMEOUT_TYPE": ["phrase"]}],
+    # La pause des médias remplace le ducking (voir main.py)
+    "DUCKING_ENABLED": [{"MEDIA_PAUSE_ENABLED": [False]}],
+    "DUCKING_VOLUME_PERCENT": [{"MEDIA_PAUSE_ENABLED": [False], "DUCKING_ENABLED": [True]}],
+    "ACTIONS_CONFIRM_TIMEOUT": [{"ACTIONS_CONFIRM_DANGEROUS": [True]}],
+}
 
 EDITABLE: dict[str, tuple[str, bool]] = {name: (label, live) for _, fields in EDITABLE_GROUPS for name, label, live in fields}
 # Textes longs : zone de saisie multiligne
@@ -186,7 +240,8 @@ def describe(settings: Settings) -> list[dict]:
     groups = []
     for title, fields in EDITABLE_GROUPS:
         groups.append({"title": title, "fields": [
-            {"name": name, "label": label, "live": live, "help": helps.get(name, ""), "value": values[name], **_field_spec(name)}
+            {"name": name, "label": label, "live": live, "help": helps.get(name, ""), "value": values[name],
+             "when": VISIBLE_WHEN.get(name), **_field_spec(name)}
             for name, label, live in fields
         ]})
     return groups
@@ -241,6 +296,18 @@ def save_to_env(settings: Settings, names: list[str], env_file: Path = ENV_FILE)
         else:
             lines[index] = entry
     env_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def save_changes(settings: Settings, names: list[str], env_file: Path = ENV_FILE):
+    """Enregistre les champs modifiés. Ceux que définit le profil actif vont dans sa surcharge locale :
+    écrits dans .env, ils seraient masqués par le profil au redémarrage."""
+    from_profile = profile_values() if env_file == ENV_FILE else {}
+    in_profile = [name for name in names if name in from_profile]
+    if in_profile:
+        save_to_env(settings, in_profile, local_overrides_path())
+    others = [name for name in names if name not in from_profile]
+    if others:
+        save_to_env(settings, others, env_file)
 
 
 def overridden_by_environment(names: list[str]) -> list[str]:

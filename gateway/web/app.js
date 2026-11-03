@@ -9,6 +9,7 @@ const ui = {
   scrollBottomBtn: $("scroll-bottom-btn"), newChatBtn: $("new-chat-btn"), resetConfirm: $("reset-confirm"),
   mic: $("mic"), textForm: $("text-form"), text: $("text"), send: document.querySelector(".send"),
   setup: $("setup"), setupForm: $("setup-form"), token: $("token"), setupError: $("setup-error"),
+  restartConfirm: $("restart-confirm"),
   settings: $("settings"), speak: $("speak"), autostop: $("autostop"), sessionId: $("session-id"),
   confirm: $("confirm"), confirmQuestion: $("confirm-question"), confirmBar: $("confirm-bar"), confirmTimerText: $("confirm-timer-text"),
   modelBadge: $("model-badge"), modelCurrent: $("model-current"), modelOllama: $("model-ollama"),
@@ -47,6 +48,7 @@ const state = {
   speakingBubble: null,    // bulle bot actuellement vocalisée
   audioGeneration: 0,      // incrémenté à chaque arrêt : les phrases encore en décodage sont ignorées
   llm: null,               // modèle actif : {provider, model, decision}
+  restarting: false,       // redémarrage demandé : reconnexion en cours
   settings: null,          // groupes de paramètres du serveur (message "settings")
   models: [],              // modèles du fournisseur : [{name, capabilities, size}]
 };
@@ -263,9 +265,10 @@ function connect() {
       addBubble("error", "Accès distant refusé : la passerelle n'a pas de jeton (GATEWAY_AUTH_TOKEN). Configurez-en un sur l'ordinateur.");
       return;
     }
-    setStatus("offline", "Hors ligne");
+    setStatus("offline", state.restarting ? "Redémarrage…" : "Hors ligne");
     setTimeout(connect, state.reconnectDelay);
-    state.reconnectDelay = Math.min(state.reconnectDelay * 2, 15000);
+    // Pendant un redémarrage, on retente à rythme constant pour revenir dès que le serveur répond
+    if (!state.restarting) state.reconnectDelay = Math.min(state.reconnectDelay * 2, 15000);
   });
 }
 
@@ -285,6 +288,16 @@ function handleEvent(event) {
       ui.sessionId.textContent = event.session;
       showModel(event.llm);
       refreshControls();
+      if (state.restarting) {
+        state.restarting = false;
+        showToast("SmartHome a redémarré", "ok");
+      }
+      break;
+    case "restarting":
+      state.restarting = true;
+      state.reconnectDelay = 1000;
+      for (const dialog of [ui.settings, ui.advanced]) if (dialog.open) dialog.close();
+      showToast("Redémarrage de SmartHome…", "ok");
       break;
     case "transcript":
       if (state.pendingUser) {
@@ -708,6 +721,12 @@ $("reset-btn").addEventListener("click", () => {
   ui.settings.close();
   promptResetConversation();
 });
+$("restart-btn").addEventListener("click", () => ui.restartConfirm.showModal());
+$("advanced-restart").addEventListener("click", () => ui.restartConfirm.showModal());
+ui.restartConfirm.addEventListener("close", () => {
+  if (ui.restartConfirm.returnValue === "confirm") send({ type: "restart" });
+  ui.restartConfirm.returnValue = "";
+});
 $("logout-btn").addEventListener("click", () => {
   store.set("token", null);
   store.set("session", null);
@@ -747,8 +766,7 @@ function showModel(llm) {
 
 const baseName = (model) => model.split(":")[0].toLowerCase();
 
-function isDecisionModel(model) {
-  const list = settingValue("LLM_DECISION_MODELS") || [];
+function isDecisionModel(model, list = settingValue("LLM_DECISION_MODELS") || []) {
   return list.includes(model.toLowerCase()) || list.includes(baseName(model));
 }
 
@@ -782,6 +800,8 @@ function syncDecisionToggle(fromUser) {
   const caps = state.models.find((m) => m.name === name)?.capabilities || [];
   // Un modèle déclaré « decision » par Ollama est proposé coché s'il n'est pas encore connu
   ui.modelDecision.checked = isDecisionModel(name) || (fromUser && caps.includes("decision"));
+  // Sans intérêt pour un modèle de langage : la case n'apparaît que pour les modèles de décision
+  ui.modelDecision.closest("label").hidden = !isDecisionModel(name) && !caps.includes("decision");
   if (!fromUser) return;
   const hints = [];
   if (caps.includes("decision")) hints.push("Ollama le décrit comme un modèle de décision.");
@@ -819,6 +839,7 @@ function onSettingsSaved(event) {
   const label = (name) => fieldByName(name)?.label || name;
   const parts = ["Enregistré."];
   if (event.restart.length) parts.push(`Au prochain démarrage : ${event.restart.map(label).join(", ")}.`);
+  $("advanced-restart").hidden = !event.restart.length;
   if (event.overridden.length) parts.push(`Attention, une variable d'environnement reste prioritaire : ${event.overridden.join(", ")}.`);
   setMessage(target, parts.join(" "), "ok");
   delete ui.advancedForm.dataset.dirty;
@@ -846,11 +867,37 @@ function renderAdvanced() {
     details.append(summary, ...group.fields.map(renderField));
     return details;
   }));
+  applyVisibility();
+}
+
+// Valeur en cours de saisie dans le formulaire (sinon valeur enregistrée)
+function formValue(name) {
+  if (name === "LLM_MODE") {
+    const list = String(formValue("LLM_DECISION_MODELS")).toLowerCase().split(",").map((m) => m.trim());
+    return formValue("LLM_PROVIDER") === "ollama" && isDecisionModel(formValue("OLLAMA_MODEL"), list) ? "decision" : "language";
+  }
+  const input = ui.advancedFields.querySelector(`[data-name="${name}"]`);
+  if (!input) return settingValue(name);
+  return input.type === "checkbox" ? input.checked : input.value;
+}
+
+// N'affiche que les champs utiles à la configuration saisie (règles : VISIBLE_WHEN de core/settings_store.py)
+function applyVisibility() {
+  for (const group of ui.advancedFields.querySelectorAll("details.group")) {
+    const fields = [...group.querySelectorAll(":scope > .field")];
+    for (const wrap of fields) {
+      const when = wrap.dataset.when && JSON.parse(wrap.dataset.when);
+      wrap.hidden = Boolean(when) && !when.some((rule) =>
+        Object.entries(rule).every(([name, allowed]) => allowed.includes(formValue(name))));
+    }
+    group.hidden = fields.every((wrap) => wrap.hidden);
+  }
 }
 
 function renderField(field) {
   const wrap = document.createElement("div");
   wrap.className = "field";
+  if (field.when) wrap.dataset.when = JSON.stringify(field.when);
   const id = `setting-${field.name}`;
   let input;
   if (field.kind === "bool") {
@@ -950,6 +997,7 @@ function renderField(field) {
     try { changed = readField(field, input) !== undefined; } catch { /* JSON en cours de saisie */ }
     wrap.classList.toggle("changed", changed);
     ui.advancedForm.dataset.dirty = "1";
+    applyVisibility();
   });
   if (field.help) {
     const help = document.createElement("p");
@@ -1016,6 +1064,7 @@ function readField(field, input) {
 $("advanced-btn").addEventListener("click", () => {
   ui.settings.close();
   setMessage(ui.advancedMsg, "");
+  $("advanced-restart").hidden = true;
   delete ui.advancedForm.dataset.dirty;
   renderAdvanced();
   ui.advanced.showModal();

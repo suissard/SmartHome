@@ -7,6 +7,7 @@ et de leurs messages WebSocket, avec un modèle de décision factice : aucun mod
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from starlette.testclient import TestClient
@@ -260,6 +261,13 @@ class TestSettingsOverWebSocket(unittest.TestCase):
 
                 ws.send_json({"type": "update_settings", "values": {"MCP_AUTH_TOKEN": "pirate"}})
                 self.assertEqual(ws.receive_json()["type"], "settings_error")
+
+                with patch("gateway.app.RESTART_DELAY_SECONDS", 0), patch("core.restart.request_restart") as request_restart:
+                    ws.send_json({"type": "restart"})
+                    self.assertEqual(ws.receive_json()["type"], "restarting")
+                    ws.send_json({"type": "ping"})
+                    self.assertEqual(ws.receive_json()["type"], "pong")
+                request_restart.assert_called_once()
 
 
 if __name__ == "__main__":

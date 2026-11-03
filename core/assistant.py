@@ -154,7 +154,7 @@ class AssistantCore:
         from core import settings_store
         new, changed = settings_store.validate_changes(self.settings, changes)
         if changed:
-            settings_store.save_to_env(new, changed, self.env_file)
+            settings_store.save_changes(new, changed, self.env_file)
             self.apply_settings(new, changed)
             print(f"⚙️ [CONFIG] Paramètres modifiés : {', '.join(changed)}")
         return {

@@ -12,6 +12,7 @@ if str(_ROOT_DIR) not in sys.path:
 
 from core.assistant import AssistantCore
 from core.config import get_settings
+from core.restart import restart_if_requested
 from core.security import require_token_for_host
 from gateway.app import build_server
 from llm.providers import LLM_PROVIDERS
@@ -36,9 +37,12 @@ def main():
     print(f"  • Écoute      : ws://{s.GATEWAY_HOST}:{s.GATEWAY_PORT}/ws — {auth}\n")
     try:
         build_server(core, s).run()
+    except KeyboardInterrupt:
+        pass
     finally:
         if hub:
             hub.disconnect_all()
+    restart_if_requested()
 
 
 if __name__ == "__main__":
