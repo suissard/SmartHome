@@ -11,10 +11,10 @@ const ui = {
   bargeInBar: $("barge-in-bar"), stopSpeechBtn: $("stop-speech-btn"),
   setup: $("setup"), setupForm: $("setup-form"), token: $("token"), setupError: $("setup-error"),
   settings: $("settings"), speak: $("speak"), autostop: $("autostop"), sessionId: $("session-id"),
-  confirm: $("confirm"), confirmQuestion: $("confirm-question"), confirmBar: $("confirm-bar"),
+  confirm: $("confirm"), confirmQuestion: $("confirm-question"), confirmBar: $("confirm-bar"), confirmTimerText: $("confirm-timer-text"),
   modelBadge: $("model-badge"), modelCurrent: $("model-current"), modelOllama: $("model-ollama"),
   modelSelect: $("model-select"), modelDecision: $("model-decision"), modelMsg: $("model-msg"),
-  advanced: $("advanced"), advancedForm: $("advanced-form"), advancedFields: $("advanced-fields"), advancedMsg: $("advanced-msg"),
+  advanced: $("advanced"), advancedForm: $("advanced-form"), advancedFields: $("advanced-fields"), advancedMsg: $("advanced-msg"), advancedBack: $("advanced-back"),
 };
 
 // ---- Préférences locales (le stockage peut être indisponible : navigation privée...) ----
@@ -467,21 +467,71 @@ function stopPlayback() {
 
 // ---- Confirmation ----
 let confirmTimer = null;
+let confirmElapsed = 0;
+let confirmPaused = false;
+let confirmTotalMs = 20000;
+let confirmLastTick = 0;
+
+function updateConfirmDisplay() {
+  const remainingMs = Math.max(0, confirmTotalMs - confirmElapsed);
+  const leftFrac = remainingMs / confirmTotalMs;
+  ui.confirmBar.style.transform = `scaleX(${leftFrac})`;
+  const seconds = Math.ceil(remainingMs / 1000);
+  if (ui.confirmTimerText) {
+    if (confirmPaused) {
+      ui.confirmTimerText.textContent = `Décompte en pause (${seconds} s restantes)`;
+    } else {
+      ui.confirmTimerText.textContent = `Annulation automatique dans ${seconds} s`;
+    }
+  }
+  if (remainingMs <= 0) {
+    ui.confirm.close("no");
+  }
+}
 
 function askConfirmation(event) {
   ui.confirmQuestion.textContent = event.question;
   ui.confirm.dataset.requestId = event.id;
-  const duration = state.confirmTimeout * 1000;
-  const started = performance.now();
+  confirmTotalMs = (state.confirmTimeout || 20) * 1000;
+  confirmElapsed = 0;
+  confirmPaused = false;
+  confirmLastTick = performance.now();
   clearInterval(confirmTimer);
+  updateConfirmDisplay();
   confirmTimer = setInterval(() => {
-    const left = 1 - (performance.now() - started) / duration;
-    ui.confirmBar.style.transform = `scaleX(${Math.max(0, left)})`;
-    if (left <= 0) ui.confirm.close("no");
+    if (!confirmPaused) {
+      const now = performance.now();
+      confirmElapsed += (now - confirmLastTick);
+      confirmLastTick = now;
+    } else {
+      confirmLastTick = performance.now();
+    }
+    updateConfirmDisplay();
   }, 100);
   if (!ui.confirm.open) ui.confirm.showModal();
   $("confirm-no").focus();
 }
+
+ui.confirm.addEventListener("mouseenter", () => {
+  confirmPaused = true;
+  updateConfirmDisplay();
+});
+ui.confirm.addEventListener("mouseleave", () => {
+  confirmPaused = false;
+  confirmLastTick = performance.now();
+  updateConfirmDisplay();
+});
+ui.confirm.addEventListener("focusin", () => {
+  confirmPaused = true;
+  updateConfirmDisplay();
+});
+ui.confirm.addEventListener("focusout", (e) => {
+  if (!ui.confirm.contains(e.relatedTarget)) {
+    confirmPaused = false;
+    confirmLastTick = performance.now();
+    updateConfirmDisplay();
+  }
+});
 
 ui.confirm.addEventListener("close", () => {
   clearInterval(confirmTimer);
@@ -815,9 +865,20 @@ $("advanced-btn").addEventListener("click", () => {
   delete ui.advancedForm.dataset.dirty;
   renderAdvanced();
   ui.advanced.showModal();
+  $("advanced-back")?.focus();
   send({ type: "get_settings" });
 });
-$("advanced-close").addEventListener("click", () => ui.advanced.close());
+
+$("advanced-back")?.addEventListener("click", () => {
+  ui.advanced.close();
+  ui.settings.showModal();
+  $("advanced-btn")?.focus();
+});
+
+$("advanced-close").addEventListener("click", () => {
+  ui.advanced.close();
+  $("settings-btn")?.focus();
+});
 
 ui.advancedForm.addEventListener("submit", (e) => {
   e.preventDefault();

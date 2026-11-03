@@ -129,7 +129,13 @@
   <!-- Paramètres du serveur, générés d'après la description envoyée par la passerelle -->
   <dialog id="advanced" class="sheet wide" aria-labelledby="advanced-title">
     <form id="advanced-form">
-      <h2 id="advanced-title">Paramètres avancés</h2>
+      <div class="sheet-header">
+        <button type="button" id="advanced-back" class="back-btn" aria-label="Retour aux réglages">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
+          <span>Réglages</span>
+        </button>
+        <h2 id="advanced-title">Paramètres avancés</h2>
+      </div>
       <p>Enregistrés dans le fichier <code>.env</code> de l'ordinateur. Les réglages marqués « au redémarrage » s'appliquent au prochain lancement de SmartHome.</p>
       <div id="advanced-fields"><p class="meta">Chargement…</p></div>
       <p id="advanced-msg" class="meta" role="status"></p>
@@ -146,6 +152,7 @@
       <h2 id="confirm-title">Confirmation</h2>
       <p id="confirm-question"></p>
       <div class="countdown"><span id="confirm-bar"></span></div>
+      <p id="confirm-timer-text" class="confirm-timer" role="timer" aria-live="off"></p>
       <div class="actions">
         <button type="submit" value="no" id="confirm-no">Non</button>
         <button type="submit" value="yes" class="danger">Oui, confirmer</button>

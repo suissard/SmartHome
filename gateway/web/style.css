@@ -463,9 +463,6 @@ summary:focus-visible {
   transition: transform 80ms linear;
 }
 .mic:not([data-state="recording"]) .mic-level { display: none; }
-  display: grid; place-items: center;
-}
-.send:disabled { opacity: 0.45; cursor: default; }
 
 /* ---- Fenêtres ---- */
 .sheet {
@@ -511,9 +508,49 @@ summary:focus-visible {
 .actions button.primary { background: var(--accent); color: var(--accent-text); border-color: transparent; }
 .actions button.danger { background: var(--danger); color: #fff; border-color: transparent; }
 
+.sheet-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.sheet-header h2 {
+  margin: 0;
+}
+.back-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--surface-2);
+  color: var(--muted);
+  border: 1px solid var(--border);
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-family: inherit;
+  font-weight: 550;
+  cursor: pointer;
+  min-height: 36px;
+  transition: color 150ms ease, background 150ms ease;
+}
+.back-btn:hover {
+  color: var(--text);
+  background: var(--surface);
+  border-color: var(--accent);
+}
+.back-btn svg {
+  width: 16px; height: 16px; fill: currentColor;
+}
+
 .confirm p#confirm-question { color: var(--text); font-size: 17px; }
-.countdown { height: 4px; border-radius: 4px; background: var(--surface-2); overflow: hidden; }
+.countdown { height: 4px; border-radius: 4px; background: var(--surface-2); overflow: hidden; margin-bottom: 6px; }
 .countdown span { display: block; height: 100%; width: 100%; background: var(--warn); transform-origin: left; }
+.confirm-timer {
+  font-size: 12.5px;
+  color: var(--muted);
+  text-align: center;
+  margin: 4px 0 12px;
+}
 
 /* ---- Modèle & paramètres ---- */
 .model-badge {
