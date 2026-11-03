@@ -1,3 +1,10 @@
+/* Le HTML s'appuie sur l'attribut `hidden` pour masquer les éléments d'état
+   (barre barge-in, toast, indicateurs). Sans cette règle, un `display:flex`
+   plus spécifique annule `hidden` et l'élément reste visible. */
+[hidden] {
+  display: none !important;
+}
+
 :root {
   --bg: #f8f9fa;
   --surface: #ffffff;
