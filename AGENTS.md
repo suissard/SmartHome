@@ -207,6 +207,9 @@ Chaque module Python (`config.py`, `wakeword.py`, `transcribe.py`, `stt.py`, `ll
 - **Aucune variable de paramétrage ne doit être écrite en dur** directement dans les fonctions ou classes.
 - Déclarez toujours les nouvelles variables dans `.env.example`, `.env` et comme champ typé (avec valeur par défaut et contraintes) du modèle `Settings` de `config.py`.
 
+### 6. Accès Git
+- La connexion à GitHub se fait **uniquement en SSH** : `origin` est `git@github.com:suissard/SmartHome.git`. Ne jamais utiliser l'URL HTTPS ni un jeton.
+
 
 ---
 
