@@ -1056,7 +1056,9 @@ ui.advancedForm.addEventListener("submit", (e) => {
 });
 
 if ("serviceWorker" in navigator && window.isSecureContext) {
-  navigator.serviceWorker.register("sw.js").catch(() => { /* PWA non installable, l'appli fonctionne quand même */ });
+  navigator.serviceWorker.register("sw.js").then((reg) => {
+    reg.update();
+  }).catch(() => { /* PWA non installable, l'appli fonctionne quand même */ });
 }
 
 connect();
