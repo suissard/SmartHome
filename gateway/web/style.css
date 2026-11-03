@@ -39,7 +39,10 @@
 
 * { box-sizing: border-box; }
 
-html, body { height: 100%; }
+html, body {
+  min-height: 100dvh;
+  height: 100dvh;
+}
 
 body {
   margin: 0;
@@ -69,7 +72,7 @@ svg { width: 24px; height: 24px; fill: currentColor; }
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: calc(10px + env(safe-area-inset-top)) 16px 10px;
+  padding: calc(10px + env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) 10px max(16px, env(safe-area-inset-left));
   background: var(--surface);
   border-bottom: 1px solid var(--border);
 }
@@ -352,16 +355,61 @@ summary:focus-visible {
 .composer {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
+  gap: 12px;
+  padding: 12px max(16px, env(safe-area-inset-right)) calc(12px + env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
   background: var(--surface);
   border-top: 1px solid var(--border);
+  max-width: 760px;
+  width: 100%;
+  margin: 0 auto;
 }
 
+.text-form {
+  order: 1;
+  flex: 1;
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+  align-items: center;
+}
+.text-form input {
+  flex: 1; min-width: 0;
+  padding: 12px 16px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 15px;
+  transition: border-color 150ms ease, background-color 150ms ease;
+}
+.text-form input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.send {
+  flex: none;
+  width: 44px; height: 44px;
+  border-radius: 50%;
+  border: 0;
+  background: var(--surface-2);
+  color: var(--accent);
+  cursor: pointer;
+  display: grid; place-items: center;
+  transition: background-color 150ms ease, transform 100ms ease;
+  touch-action: manipulation;
+}
+.send:hover:not(:disabled) {
+  background: var(--border);
+}
+.send:active:not(:disabled) {
+  transform: scale(0.95);
+}
+.send:disabled { opacity: 0.4; cursor: default; }
+
 .mic {
+  order: 2;
   flex: none;
   position: relative;
-  width: 64px; height: 64px;
+  width: 58px; height: 58px;
   border-radius: 50%;
   border: 0;
   background: var(--accent);
@@ -371,11 +419,41 @@ summary:focus-visible {
   place-items: center;
   box-shadow: var(--shadow);
   touch-action: manipulation;
+  transition: transform 150ms ease, background-color 150ms ease, box-shadow 150ms ease;
 }
-.mic svg { width: 30px; height: 30px; position: relative; z-index: 1; }
+.mic::before {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+  background: var(--accent);
+  opacity: 0.2;
+  z-index: 0;
+  transition: opacity 200ms ease, transform 200ms ease;
+}
+.mic:hover:not(:disabled)::before {
+  opacity: 0.35;
+  transform: scale(1.05);
+}
+.mic:active:not(:disabled) {
+  transform: scale(0.95);
+}
+.mic svg { width: 28px; height: 28px; position: relative; z-index: 1; }
 .mic:disabled { opacity: 0.45; cursor: default; }
 .mic[data-state="recording"] { background: var(--danger); }
+.mic[data-state="recording"]::before {
+  background: var(--danger);
+  opacity: 0.35;
+  animation: pulse-recording 1.2s infinite ease-in-out;
+}
 .mic[data-state="busy"] { background: var(--warn); }
+.mic[data-state="busy"]::before { background: var(--warn); }
+
+@keyframes pulse-recording {
+  0%, 100% { transform: scale(1); opacity: 0.25; }
+  50% { transform: scale(1.16); opacity: 0.5; }
+}
+
 .mic-level {
   position: absolute; inset: 0;
   border-radius: 50%;
@@ -385,26 +463,6 @@ summary:focus-visible {
   transition: transform 80ms linear;
 }
 .mic:not([data-state="recording"]) .mic-level { display: none; }
-
-.text-form { flex: 1; display: flex; gap: 8px; min-width: 0; }
-.text-form input {
-  flex: 1; min-width: 0;
-  padding: 12px 14px;
-  border-radius: 999px;
-  border: 1px solid var(--border);
-  background: var(--surface-2);
-  color: var(--text);
-  font: inherit;
-}
-.text-form input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
-.send {
-  flex: none;
-  width: 46px; height: 46px;
-  border-radius: 50%;
-  border: 0;
-  background: var(--surface-2);
-  color: var(--accent);
-  cursor: pointer;
   display: grid; place-items: center;
 }
 .send:disabled { opacity: 0.45; cursor: default; }
