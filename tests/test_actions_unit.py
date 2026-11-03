@@ -7,7 +7,9 @@ le prompt dynamique et l'exécution sécurisée (Mocks / Dry-Run).
 Garantit qu'aucune extinction ou redémarrage réel n'est jamais déclenché.
 """
 
+import os
 import sys
+import tempfile
 import unittest
 import subprocess
 from pathlib import Path
@@ -214,6 +216,42 @@ class TestSafeDirectExecution(unittest.TestCase):
         action = get_command_by_tag("OPEN")
         code, _, _ = action.execute_sync("application_inexistante_test_xyz")
         self.assertNotEqual(code, 0, "OPEN aurait dû échouer pour une application inexistante")
+
+
+
+class BrightnessTest(unittest.TestCase):
+    """Le script ne doit jamais viser autre chose qu'un écran (brightnessctl sans --class prend une LED sur un PC fixe)."""
+
+    def _run(self, qdbus: str, args: str = "down"):
+        with tempfile.TemporaryDirectory() as tmp:
+            calls = Path(tmp) / "calls"
+            for name, body in (("qdbus6", qdbus), ("brightnessctl", 'echo "brightnessctl $*" >> "$CALLS"')):
+                stub = Path(tmp) / name
+                stub.write_text(f"#!/bin/bash\necho \"{name} $*\" >> \"$CALLS\"\n{body}\n", encoding="utf-8")
+                stub.chmod(0o755)
+            with patch.dict(os.environ, {"PATH": f"{tmp}:{os.environ['PATH']}", "CALLS": str(calls)}):
+                code, out, err = get_command_by_tag("BRIGHTNESS").execute_sync(args)
+            return code, out, err, calls.read_text(encoding="utf-8") if calls.exists() else ""
+
+    def test_plasma_screen_is_adjusted_from_its_current_value(self):
+        code, out, _, calls = self._run('''case "$3" in
+    *.DisplaysDBusNames) echo display7 ;;
+    *.MaxBrightness) echo 10000 ;;
+    *.Display.Brightness) echo 8000 ;;
+esac''')
+        self.assertEqual(code, 0)
+        self.assertIn("/org/kde/ScreenBrightness/display7 org.kde.ScreenBrightness.Display.SetBrightness 7000 0", calls)
+        self.assertIn("70%", out)
+        self.assertNotIn("brightnessctl", calls)
+
+    def test_brightnessctl_never_targets_a_default_device(self):
+        code, _, err, calls = self._run("exit 1")
+        for line in calls.splitlines():
+            if line.startswith("brightnessctl"):
+                self.assertIn("--class=backlight", line)
+        if not any(Path("/sys/class/backlight").glob("*")):
+            self.assertNotEqual(code, 0)
+            self.assertIn("moniteur", err)
 
 
 if __name__ == "__main__":

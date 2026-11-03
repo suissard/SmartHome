@@ -15,38 +15,65 @@ if [ -z "$TARGET" ]; then
     exit 1
 fi
 
-# 1. brightnessctl
-if command -v brightnessctl >/dev/null 2>&1; then
+# Nouvelle valeur d'après la valeur actuelle ($1) et le maximum ($2)
+next_value() {
+    local NEW
     case "$TARGET" in
-        up)   brightnessctl -q set "${STEP}%+" ;;
-        down) brightnessctl -q set "${STEP}%-" ;;
-        *)    brightnessctl -q set "${TARGET}%" ;;
+        up)   NEW=$(( $1 + $2 * STEP / 100 )) ;;
+        down) NEW=$(( $1 - $2 * STEP / 100 )) ;;
+        *)    NEW=$(( $2 * TARGET / 100 )) ;;
+    esac
+    [ "$NEW" -lt 0 ] && NEW=0
+    [ "$NEW" -gt "$2" ] && NEW=$2
+    echo "$NEW"
+}
+
+QDBUS=$(command -v qdbus6 || command -v qdbus || true)
+
+# 1. KDE Plasma 6 : tous les écrans, y compris les moniteurs externes (DDC/CI ou atténuation logicielle)
+if [ -n "$QDBUS" ]; then
+    SVC=org.kde.ScreenBrightness
+    DONE=""
+    for DISPLAY_NAME in $("$QDBUS" $SVC /org/kde/ScreenBrightness $SVC.DisplaysDBusNames 2>/dev/null); do
+        OBJ=/org/kde/ScreenBrightness/$DISPLAY_NAME
+        MAX=$("$QDBUS" $SVC "$OBJ" $SVC.Display.MaxBrightness 2>/dev/null)
+        CUR=$("$QDBUS" $SVC "$OBJ" $SVC.Display.Brightness 2>/dev/null)
+        if [[ "$MAX" =~ ^[0-9]+$ && "$CUR" =~ ^[0-9]+$ && "$MAX" -gt 0 ]]; then
+            NEW=$(next_value "$CUR" "$MAX")
+            "$QDBUS" $SVC "$OBJ" $SVC.Display.SetBrightness "$NEW" 0 >/dev/null 2>&1 && DONE=$(( NEW * 100 / MAX ))
+        fi
+    done
+    if [ -n "$DONE" ]; then
+        echo "Luminosité réglée à ${DONE}%"
+        exit 0
+    fi
+fi
+
+# 2. brightnessctl, seulement sur un rétroéclairage : sans --class, il prendrait une LED (réseau, clavier) sur un PC fixe
+if command -v brightnessctl >/dev/null 2>&1 && [ -n "$(ls -A /sys/class/backlight 2>/dev/null)" ]; then
+    case "$TARGET" in
+        up)   brightnessctl -q --class=backlight set "${STEP}%+" ;;
+        down) brightnessctl -q --class=backlight set "${STEP}%-" ;;
+        *)    brightnessctl -q --class=backlight set "${TARGET}%" ;;
     esac
     exit $?
 fi
 
-# 2. KDE Plasma (PowerDevil via D-Bus)
-QDBUS=$(command -v qdbus6 || command -v qdbus || true)
+# 3. KDE Plasma 5 (PowerDevil via D-Bus)
 if [ -n "$QDBUS" ]; then
     SVC=org.kde.Solid.PowerManagement
     OBJ=/org/kde/Solid/PowerManagement/Actions/BrightnessControl
     MAX=$("$QDBUS" $SVC $OBJ org.kde.Solid.PowerManagement.Actions.BrightnessControl.brightnessMax 2>/dev/null)
     CUR=$("$QDBUS" $SVC $OBJ org.kde.Solid.PowerManagement.Actions.BrightnessControl.brightness 2>/dev/null)
-    if [[ "$MAX" =~ ^[0-9]+$ && "$CUR" =~ ^[0-9]+$ ]]; then
-        case "$TARGET" in
-            up)   NEW=$(( CUR + MAX * STEP / 100 )) ;;
-            down) NEW=$(( CUR - MAX * STEP / 100 )) ;;
-            *)    NEW=$(( MAX * TARGET / 100 )) ;;
-        esac
-        [ "$NEW" -lt 0 ] && NEW=0
-        [ "$NEW" -gt "$MAX" ] && NEW=$MAX
+    if [[ "$MAX" =~ ^[0-9]+$ && "$CUR" =~ ^[0-9]+$ && "$MAX" -gt 0 ]]; then
+        NEW=$(next_value "$CUR" "$MAX")
         "$QDBUS" $SVC $OBJ org.kde.Solid.PowerManagement.Actions.BrightnessControl.setBrightness "$NEW" >/dev/null 2>&1
         echo "Luminosité réglée à $(( NEW * 100 / MAX ))%"
         exit 0
     fi
 fi
 
-echo "Erreur : aucun contrôle de luminosité disponible (installer brightnessctl)." >&2
+echo "Cet écran ne permet pas de régler la luminosité depuis l'ordinateur : à régler sur le moniteur. Inutile de changer de droits." >&2
 exit 1
 """
 

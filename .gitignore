@@ -6,6 +6,8 @@ venv/
 # Variables d'environnement secrètes / locales
 .env
 profiles/*.local.env
+profiles/.last
+profiles/perso.env
 
 # Fichiers de cache Python
 __pycache__/

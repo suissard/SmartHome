@@ -123,7 +123,8 @@ Ce document est destiné aux agents IA (et aux développeurs) qui lisent, mainti
 
 ### 2.9 ter-a [core/profiles.py](file:///home/suissard/PROGRAMMATIONS/SmartHome/core/profiles.py) — Profils de Configuration
 - `profiles/<nom>.env` (`mix` par défaut, `local-gemma`, `local-lfm`, `local-decision`, `cloud`) ne contient que les réglages d'architecture (fournisseurs, modèles). Priorité : variables d'environnement > profil > `.env` > défauts ; le profil ne s'applique qu'au vrai `.env` (pas aux fichiers passés à `load_settings` dans les tests).
-- Choix : `--profile <nom>` (retiré de `sys.argv` avant l'import de `core.config`), `SMARTHOME_PROFILE`, ou menu de `start.sh` (`python -m core.profiles choose`). Un nouveau profil = un nouveau fichier ; la première ligne `# Titre : description` sert au menu.
+- Choix : `--profile <nom>` (retiré de `sys.argv` avant l'import de `core.config`), `SMARTHOME_PROFILE`, ou menu aux flèches de `start.sh` (`choose_profile()`, affiché sur stderr car stdout est capturé ; `--no-menu` le passe). Sans choix : dernier profil du menu (`profiles/.last`, non versionné), sinon `mix`.
+- **Assistant** ([core/wizard.py](file:///home/suissard/PROGRAMMATIONS/SmartHome/core/wizard.py), `./start.sh --setup` ou entrée du menu) : une méthode `step_*` par question, sur les menus de [core/menu.py](file:///home/suissard/PROGRAMMATIONS/SmartHome/core/menu.py) (`GoBack` = question précédente). Il ne propose que ce qui est disponible (capacités Ollama, clé OpenRouter), crée `profiles/perso.env` (non versionné) et n'écrit la clé que dans `.env`. Un nouveau profil = un nouveau fichier ; la première ligne `# Titre : description` sert au menu.
 - Un champ défini par le profil et modifié depuis l'interface est écrit dans `profiles/<nom>.local.env` (`settings_store.save_changes`, non versionné, relu par `profile_values()`), les autres dans `.env`.
 - Quand `MEDIA_PAUSE_ENABLED` (défaut `true`) est actif, `main.py` désactive le ducking : la pause suffit.
 
@@ -187,7 +188,7 @@ stateDiagram-v2
 Lors de toute intervention sur ce codebase, veillez à respecter les règles suivantes :
 
 ### 1. Préservation des Points d'Entrée de Test Autonomes
-Chaque module Python (`config.py`, `wakeword.py`, `transcribe.py`, `stt.py`, `llm.py`, `providers.py`, `tts.py`, `speech.py`, `barge_in.py`, `vad.py`, `sentences.py`, `feedback.py`, `ducking.py`, `confirm.py`, `tools.py`, `events.py`, `profiles.py`, `restart.py`, `assistant.py`, `decision.py`, `settings_store.py`, `test_sound.py`) **doit impérativement conserver son bloc `if __name__ == "__main__":`**. Ces blocs permettent un diagnostic isolé sans charger toute la pile applicative.
+Chaque module Python (`config.py`, `wakeword.py`, `transcribe.py`, `stt.py`, `llm.py`, `providers.py`, `tts.py`, `speech.py`, `barge_in.py`, `vad.py`, `sentences.py`, `feedback.py`, `ducking.py`, `confirm.py`, `tools.py`, `events.py`, `profiles.py`, `menu.py`, `wizard.py`, `restart.py`, `assistant.py`, `decision.py`, `settings_store.py`, `test_sound.py`) **doit impérativement conserver son bloc `if __name__ == "__main__":`**. Ces blocs permettent un diagnostic isolé sans charger toute la pile applicative.
 
 
 

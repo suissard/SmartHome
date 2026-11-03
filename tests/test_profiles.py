@@ -1,15 +1,19 @@
 """Tests des profils de configuration (profiles/*.env) et de la pause des médias sans ducking."""
 
+import io
 import os
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from core import profiles, settings_store
+from core.menu import Option, menu_lines
+from core.wizard import Wizard
 from core.config import Settings, load_settings
 
 
@@ -17,7 +21,7 @@ class ProfilesTest(unittest.TestCase):
     def test_default_profile_exists_and_comes_first(self):
         names = profiles.list_profiles()
         self.assertEqual(names[0], profiles.DEFAULT_PROFILE)
-        self.assertEqual(set(names), {"mix", "local-gemma", "local-lfm", "local-decision", "cloud"})
+        self.assertLessEqual({"mix", "local-gemma", "local-lfm", "local-decision", "cloud"}, set(names))
 
     def test_every_profile_is_valid_settings(self):
         for name in profiles.list_profiles():
@@ -41,6 +45,74 @@ class ProfilesTest(unittest.TestCase):
             self.assertEqual(os.environ[profiles.PROFILE_ENV_VAR], "cloud")
             os.environ.pop(profiles.PROFILE_ENV_VAR)
         self.assertEqual(argv, ["main.py", "--x"])
+
+    def test_menu_writes_only_the_chosen_name_on_stdout(self):
+        names = profiles.list_profiles()
+        stdout = io.StringIO()
+        with patch("builtins.input", return_value="3"), patch.object(profiles, "remember_profile") as remember, \
+                redirect_stdout(stdout), redirect_stderr(io.StringIO()):
+            print(profiles.choose_profile())
+        self.assertEqual(stdout.getvalue().strip(), names[1])
+        remember.assert_called_once_with(names[1])
+
+    def test_last_choice_is_used_without_menu(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(profiles, "PROFILES_DIR", Path(tmp)), \
+                patch.dict(os.environ, {profiles.PROFILE_ENV_VAR: ""}):
+            for name in ("mix", "cloud"):
+                (Path(tmp) / f"{name}.env").write_text("# Titre\n", encoding="utf-8")
+            self.assertEqual(profiles.active_profile(), "mix")
+            profiles.remember_profile("cloud")
+            self.assertEqual(profiles.active_profile(), "cloud")
+            (Path(tmp) / "cloud.env").unlink()
+            self.assertEqual(profiles.active_profile(), "mix")
+
+    def test_menu_lines_fit_the_terminal(self):
+        with patch.dict(os.environ, {"NO_COLOR": "1"}):
+            options = [Option("cloud", detail="x" * 80, tag="dernier choix"), Option("mix")]
+            lines = menu_lines("Titre", options, 0, 40, can_go_back=True)
+        self.assertTrue(all(len(line) <= 40 for line in lines))
+        self.assertIn("❯ cloud · dernier choix", "\n".join(lines))
+
+    def _wizard(self, models, **fields):
+        settings = Settings(OPENROUTER_API_KEY="", **fields)
+        w = Wizard(settings)
+        w.models = models
+        return w
+
+    def test_wizard_only_offers_what_is_available(self):
+        models = [{"name": "gemma4:12b", "capabilities": ["completion", "audio"]},
+                  {"name": "lfm3-audio:latest", "capabilities": ["audio", "speech"]}]
+        w = self._wizard(models)
+        w.brain, w.brain_local, w.brain_audio = "gemma4:12b", True, True
+        seen = {}
+
+        def answer(step, text, options, index=0):
+            seen[step] = options
+            return options[-1]
+
+        with patch.object(Wizard, "ask", side_effect=answer), redirect_stderr(io.StringIO()):
+            w.step_listen()
+            w.step_voice()
+        listen = [o.label for o in seen["step_listen"]]
+        self.assertEqual(w.values["step_listen"], {"STT_PROVIDER": "ollama", "OLLAMA_STT_MODEL": "lfm3-audio:latest"})
+        self.assertNotIn("OpenRouter", listen)
+        self.assertIn("gemma4:12b écoute directement", listen)
+        self.assertTrue(seen["step_listen"][-1].tag.startswith("2e modèle"))
+
+    def test_wizard_saves_key_in_env_and_settings_in_profile(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(profiles, "PROFILES_DIR", Path(tmp)):
+            env = Path(tmp) / ".env"
+            w = self._wizard([])
+            w.new_key = "sk-secret"
+            w.values = {"step_brain": {"LLM_PROVIDER": "openrouter"}, "step_voice": {"TTS_PROVIDER": "piper"}}
+            w.summary = {"Réflexion": "m", "Écoute": "Whisper", "Voix": "Piper"}
+            with patch("core.wizard.save_to_env") as save:
+                self.assertEqual(w.save(), "perso")
+            self.assertEqual(save.call_args.args[0].OPENROUTER_API_KEY, "sk-secret")
+            profile = (Path(tmp) / "perso.env").read_text(encoding="utf-8")
+            self.assertNotIn("sk-secret", profile)
+            self.assertIn("LLM_PROVIDER=openrouter", profile)
+            self.assertEqual(profiles.describe_profile("perso").split(" : ")[0], "Perso")
 
     def test_unknown_profile_is_refused(self):
         with self.assertRaises(SystemExit):
