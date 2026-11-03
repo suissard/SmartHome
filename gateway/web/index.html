@@ -53,9 +53,9 @@
   </footer>
 
   <!-- Connexion : saisie du jeton de la passerelle -->
-  <dialog id="setup" class="sheet">
+  <dialog id="setup" class="sheet" aria-labelledby="setup-title">
     <form method="dialog" id="setup-form">
-      <h2>Connexion</h2>
+      <h2 id="setup-title">Connexion</h2>
       <p>Saisissez le jeton de la passerelle (<code>GATEWAY_AUTH_TOKEN</code> dans le fichier <code>.env</code>). Il reste enregistré sur cet appareil.</p>
       <label for="token">Jeton</label>
       <input id="token" type="password" autocomplete="current-password" spellcheck="false" placeholder="Laisser vide en local sans jeton">
@@ -67,9 +67,9 @@
   </dialog>
 
   <!-- Réglages -->
-  <dialog id="settings" class="sheet">
+  <dialog id="settings" class="sheet" aria-labelledby="settings-title">
     <form method="dialog">
-      <h2>Réglages</h2>
+      <h2 id="settings-title">Réglages</h2>
       <label class="toggle">
         <input id="speak" type="checkbox">
         <span>Réponse vocale sur cet appareil</span>
@@ -112,9 +112,9 @@
   </dialog>
 
   <!-- Paramètres du serveur, générés d'après la description envoyée par la passerelle -->
-  <dialog id="advanced" class="sheet wide">
+  <dialog id="advanced" class="sheet wide" aria-labelledby="advanced-title">
     <form id="advanced-form">
-      <h2>Paramètres avancés</h2>
+      <h2 id="advanced-title">Paramètres avancés</h2>
       <p>Enregistrés dans le fichier <code>.env</code> de l'ordinateur. Les réglages marqués « au redémarrage » s'appliquent au prochain lancement de SmartHome.</p>
       <div id="advanced-fields"><p class="meta">Chargement…</p></div>
       <p id="advanced-msg" class="meta" role="status"></p>
@@ -126,9 +126,9 @@
   </dialog>
 
   <!-- Confirmation d'une action dangereuse -->
-  <dialog id="confirm" class="sheet confirm">
+  <dialog id="confirm" class="sheet confirm" aria-labelledby="confirm-title">
     <form method="dialog">
-      <h2>Confirmation</h2>
+      <h2 id="confirm-title">Confirmation</h2>
       <p id="confirm-question"></p>
       <div class="countdown"><span id="confirm-bar"></span></div>
       <div class="actions">

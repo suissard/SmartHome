@@ -233,6 +233,14 @@ function handleEvent(event) {
   }
 }
 
+function announce(text) {
+  if (!ui.liveAnnouncer || !text) return;
+  ui.liveAnnouncer.textContent = "";
+  setTimeout(() => {
+    if (ui.liveAnnouncer) ui.liveAnnouncer.textContent = text;
+  }, 50);
+}
+
 function finishBotBubble(text) {
   // Le texte final est épuré (tags d'actions retirés) : il remplace le flux brut
   const bubble = state.botBubble;
@@ -246,6 +254,7 @@ function finishBotBubble(text) {
   target.classList.remove("pending");
   target.textContent = text;
   scrollDown();
+  announce(text);
 }
 
 // ---- Demandes ----
