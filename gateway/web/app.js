@@ -5,7 +5,7 @@ import { Recorder, toBase64 } from "./recorder.js";
 
 const $ = (id) => document.getElementById(id);
 const ui = {
-  log: $("log"), empty: $("empty"), status: $("status"), liveAnnouncer: $("live-announcer"),
+  log: $("log"), empty: $("empty"), status: $("status"), liveAnnouncer: $("live-announcer"), toast: $("toast"),
   mic: $("mic"), textForm: $("text-form"), text: $("text"), send: document.querySelector(".send"),
   bargeInBar: $("barge-in-bar"), stopSpeechBtn: $("stop-speech-btn"),
   setup: $("setup"), setupForm: $("setup-form"), token: $("token"), setupError: $("setup-error"),
@@ -367,6 +367,18 @@ ui.mic.addEventListener("click", async () => {
   setStatus("busy", "J'écoute…");
 });
 
+let toastTimer = null;
+function showToast(message, kind = "warn", duration = 4000) {
+  if (!ui.toast) return;
+  clearTimeout(toastTimer);
+  ui.toast.textContent = message;
+  ui.toast.className = `toast ${kind}`;
+  ui.toast.hidden = false;
+  toastTimer = setTimeout(() => {
+    if (ui.toast) ui.toast.hidden = true;
+  }, duration);
+}
+
 function stopRecording() {
   const recorder = state.recorder;
   if (!recorder) return;
@@ -376,7 +388,11 @@ function stopRecording() {
   ui.mic.setAttribute("aria-pressed", "false");
   const { wav, hadSpeech } = recorder.stop();
   refreshControls();
-  if (hadSpeech) sendAudio(wav);
+  if (hadSpeech) {
+    sendAudio(wav);
+  } else {
+    showToast("Voix non détectée — parlez plus fort ou approchez-vous du micro.");
+  }
 }
 
 function micErrorMessage(err) {
