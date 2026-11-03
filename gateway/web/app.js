@@ -79,59 +79,94 @@ function escapeHtml(str) {
   return String(str).replace(/[&<>"']/g, (s) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[s]));
 }
 
+function formatActionSignature(name, args = {}) {
+  const entries = Object.entries(args || {});
+  if (!entries.length) return `${name}()`;
+  const formatted = entries
+    .map(([k, v]) => `${k}=${typeof v === "string" ? `"${v}"` : JSON.stringify(v)}`)
+    .join(", ");
+  return `${name}(${formatted})`;
+}
+
 function formatActionLabel(name, args = {}, executed = true) {
-  if (!executed) return `Commande ${name} non exécutée`;
+  let label = "";
   switch (name) {
     case "volume":
-      return args.level !== undefined ? `Volume réglé à ${args.level} %` : "Réglage du volume";
+      label = args.level !== undefined ? `Volume réglé à ${args.level} %` : "Réglage du volume";
+      break;
     case "mute":
-      return args.action === "unmute" ? "Son réactivé" : "Son coupé";
+      label = args.action === "unmute" ? "Son réactivé" : "Son coupé";
+      break;
     case "media":
-      return args.action === "play" ? "Lecture reprise" :
-             args.action === "pause" ? "Musique en pause" :
-             args.action === "next" ? "Piste suivante" :
-             args.action === "previous" ? "Piste précédente" : `Média : ${args.action}`;
+      label = args.action === "play" ? "Lecture reprise" :
+              args.action === "pause" ? "Musique en pause" :
+              args.action === "next" ? "Piste suivante" :
+              args.action === "previous" ? "Piste précédente" :
+              (args.action ? `Média : ${args.action}` : "Contrôle des médias");
+      break;
+    case "notify":
+      label = args.message ? `Notification : ${args.message}` : "Notification envoyée";
+      break;
     case "open_app":
-      return `Application ouverte : ${args.app || "inconnue"}`;
+      label = `Application ouverte : ${args.app || "inconnue"}`;
+      break;
     case "close_app":
-      return `Application fermée : ${args.app || "inconnue"}`;
+      label = `Application fermée : ${args.app || "inconnue"}`;
+      break;
     case "shutdown":
-      return "Extinction de l'ordinateur";
+      label = "Extinction de l'ordinateur";
+      break;
     case "reboot":
-      return "Redémarrage de l'ordinateur";
+      label = "Redémarrage de l'ordinateur";
+      break;
     case "lock":
-      return "Session verrouillée";
+      label = "Session verrouillée";
+      break;
     case "screen_off":
-      return "Écran éteint";
+      label = "Écran éteint";
+      break;
     case "brightness":
-      return args.level !== undefined ? `Luminosité fixée à ${args.level} %` : "Réglage de la luminosité";
+      label = args.level !== undefined ? `Luminosité fixée à ${args.level} %` : "Réglage de la luminosité";
+      break;
     case "screenshot":
-      return "Capture d'écran enregistrée";
+      label = "Capture d'écran enregistrée";
+      break;
     case "system_info":
-      return "État du système vérifié";
+      label = "État du système vérifié";
+      break;
     case "sleep":
-      return "Assistant mis en veille";
+      label = "Assistant mis en veille";
+      break;
     case "timer":
-      return args.seconds ? `Minuteur : ${args.seconds} s` : "Minuteur programmé";
+      label = args.seconds ? `Minuteur : ${args.seconds} s` : "Minuteur programmé";
+      break;
     case "audio_output":
-      return args.sink ? `Sortie audio : ${args.sink}` : "Sortie audio modifiée";
+      label = args.sink ? `Sortie audio : ${args.sink}` : "Sortie audio modifiée";
+      break;
     default: {
-      const argStr = Object.entries(args).map(([k, v]) => `${k}=${v}`).join(", ");
-      return `${name}${argStr ? ` (${argStr})` : ""}`;
+      const clean = name.replace(/_/g, " ");
+      label = `Action : ${clean}`;
+      break;
     }
   }
+  return executed ? label : `${label} — non exécutée`;
 }
 
 function addToolChip(event) {
   const el = document.createElement("div");
   el.className = `tool ${event.executed ? "ok" : "refused"}`;
   const label = formatActionLabel(event.name, event.arguments, event.executed);
+  const signature = formatActionSignature(event.name, event.arguments);
   const icon = event.executed ? "✓" : "✕";
+
+  // Texte visible : strictement le libellé en français naturel, sans signature technique
   el.innerHTML = `<span class="tool-icon" aria-hidden="true">${icon}</span> <span class="tool-text">${escapeHtml(label)}</span>`;
-  if (event.output) {
-    el.title = event.output;
-    el.setAttribute("aria-label", `${label}. Résultat : ${event.output}`);
-  }
+
+  // Détail technique : accessible uniquement au survol (title) et aux lecteurs d'écran (aria-label)
+  const detail = event.output ? `${signature} → ${event.output}` : signature;
+  el.title = detail;
+  el.setAttribute("aria-label", `${label} (${signature})${event.output ? `. Résultat : ${event.output}` : ""}`);
+
   ui.log.append(el);
   scrollDown();
 }
