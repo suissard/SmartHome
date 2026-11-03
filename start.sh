@@ -8,6 +8,12 @@
 #   ./start.sh --reset-sound  Rétablit le son système après un arrêt brutal
 set -euo pipefail
 
+# En root, l'assistant ne joint pas le serveur audio de la session (PipeWire / PulseAudio) et ses actions visent le mauvais bureau
+if [[ "$EUID" -eq 0 ]]; then
+    echo "❌ Ne lancez pas SmartHome avec sudo : relancez ./start.sh sans sudo." >&2
+    exit 1
+fi
+
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT_DIR"
 PY="$ROOT_DIR/.venv/bin/python"

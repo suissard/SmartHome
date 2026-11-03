@@ -7,7 +7,6 @@ Tout est affiché sur stderr : stdout est réservé au résultat, capturé par s
 import getpass
 import os
 import re
-import shutil
 import sys
 from dataclasses import dataclass
 from typing import Any
@@ -71,7 +70,8 @@ def _arrow_menu(title: str, options: list[Option], index: int, can_go_back: bool
 
     def draw():
         nonlocal drawn
-        lines = menu_lines(title, options, index, shutil.get_terminal_size().columns, can_go_back)
+        # Mesurée sur stderr : stdout est capturé par start.sh, shutil.get_terminal_size() y verrait 80 colonnes
+        lines = menu_lines(title, options, index, os.get_terminal_size(sys.stderr.fileno()).columns, can_go_back)
         prefix = f"\x1b[{drawn}A\r\x1b[J" if drawn else ""
         sys.stderr.write(prefix + "\n".join(lines) + "\n")
         sys.stderr.flush()
