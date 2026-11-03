@@ -688,6 +688,7 @@ summary:focus-visible {
 .group summary { cursor: pointer; margin: 0; }
 .group[open] summary { margin-bottom: 10px; }
 .field { margin-bottom: 14px; }
+.field[hidden], details.group[hidden], label.toggle[hidden] { display: none; }
 .field .help { font-size: 13px; color: var(--muted); margin: 4px 0 0; }
 .field.changed label { color: var(--accent); }
 .tag {

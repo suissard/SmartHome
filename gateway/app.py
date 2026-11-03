@@ -11,14 +11,15 @@ Routes :
                         {"type": "confirm_response", "id", "accepted": bool} | {"type": "stop"} | {"type": "reset"}
                         | {"type": "ping"}
                         Paramètres (voir core/settings_store.py) : {"type": "get_settings"} | {"type": "list_models"}
-                        | {"type": "update_settings", "values": {VARIABLE: valeur}}
+                        | {"type": "update_settings", "values": {VARIABLE: valeur}} | {"type": "restart"}
     serveur -> client : {"type": "ready", "session", "tools", "audio", "confirm_timeout", "llm"} puis les événements du cœur
                         (transcript, token, tool, confirm_request, response, interrupted, error), la voix si speak :
                         {"type": "audio_chunk", "seq", "format": "wav", "data"} phrase par phrase (TTS_STREAMING)
                         ou {"type": "audio", ...} en un bloc, et {"type": "done"} à la fin de chaque demande.
                         Paramètres : {"type": "settings", "groups", "llm"} | {"type": "models", "models", "error"?}
                         | {"type": "settings_saved", "changed", "restart", "overridden", "llm"} | {"type": "settings_error", "message"}
-                        ; "settings_changed" est diffusé à tous les clients après une modification.
+                        ; "settings_changed" est diffusé à tous les clients après une modification,
+                        "restarting" juste avant un redémarrage demandé par un client.
 """
 
 import asyncio
@@ -44,7 +45,7 @@ from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from audio.speech import SpeechPipeline
 from core.assistant import AssistantCore, Reply, to_wav_bytes
-from core import settings_store
+from core import restart, settings_store
 from core.config import Settings
 from core.security import (
     BearerTokenMiddleware, LocalOnlyMiddleware, SecurityHeadersMiddleware, bearer_from_headers, token_matches,
@@ -56,6 +57,7 @@ WEB_DIR = Path(__file__).resolve().parent / "web"
 # Code de fermeture WebSocket pour un jeton refusé (plage 4000-4999 réservée aux applications)
 WS_UNAUTHORIZED = 4401
 AUTH_TIMEOUT_SECONDS = 10
+RESTART_DELAY_SECONDS = 0.3
 
 
 def _reply_to_dict(reply: Reply) -> dict:
@@ -131,7 +133,7 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
         unsubscribe = core.events.subscribe(lambda e: push(e.to_dict()), session_id=session.id)
         # Modifications de paramètres faites depuis un autre appareil : chaque client recharge son formulaire
         unsubscribe_settings = core.events.subscribe(
-            lambda e: push(e.to_dict()) if e.type == "settings_changed" else None
+            lambda e: push(e.to_dict()) if e.type in ("settings_changed", "restarting") else None
         )
 
         async def sender():
@@ -246,6 +248,10 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
                     task = asyncio.create_task(handle_settings(message))
                     tasks.add(task)
                     task.add_done_callback(tasks.discard)
+                elif kind == "restart":
+                    core.events.emit("restarting", None)
+                    # Laisse partir l'annonce aux clients avant l'arrêt
+                    asyncio.get_running_loop().call_later(RESTART_DELAY_SECONDS, restart.request_restart)
                 elif kind == "ping":
                     push({"type": "pong"})
                 elif kind == "auth":

@@ -1,8 +1,8 @@
 """
 Configuration typée et validée de SmartHome.
 
-Ordre de priorité des valeurs : variables d'environnement > fichier .env > valeurs par défaut.
-Le fichier lu peut être changé via SMARTHOME_ENV_FILE (ex: profils `.env.local`, `.env.cloud`).
+Ordre de priorité des valeurs : variables d'environnement > profil (`profiles/<nom>.env`, voir core/profiles.py)
+> fichier .env > valeurs par défaut. Le fichier lu peut être changé via SMARTHOME_ENV_FILE.
 
 Le nouveau code reçoit l'objet `Settings` (via `get_settings()`) ; les constantes de module
 (LLM_PROVIDER, AUDIO_RATE, ...) restent exportées pour compatibilité.
@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Annotated, Literal, Optional
 
 from dotenv import dotenv_values
+from core.profiles import profile_values
 from pydantic import AliasChoices, BaseModel, BeforeValidator, ConfigDict, Field, ValidationError, field_validator
 
 # Encodage UTF-8 pour la console Windows
@@ -237,7 +238,7 @@ class Settings(BaseModel):
     DUCKING_RESTORE_ON_EXIT: EnvBool = True
 
     # ⏸️ Pause des médias pendant l'échange (reprise ensuite, sauf si déjà en pause)
-    MEDIA_PAUSE_ENABLED: EnvBool = False
+    MEDIA_PAUSE_ENABLED: EnvBool = True
 
     # 🔌 Serveur MCP & Hub client
     MCP_TRANSPORT: Literal["stdio", "sse", "streamable-http"] = "stdio"
@@ -285,11 +286,14 @@ class Settings(BaseModel):
 _KNOWN_KEYS = set(Settings.model_fields) | {"ACTIVE_STANDBY_TIMEOUT"}
 
 
-def load_settings(env_file: Path = ENV_FILE) -> Settings:
-    """Charge et valide la configuration. Une valeur vide est considérée comme absente."""
+def load_settings(env_file: Path = ENV_FILE, profile: Optional[dict[str, str]] = None) -> Settings:
+    """Charge et valide la configuration. Une valeur vide est considérée comme absente.
+    Le profil actif ne s'applique qu'au `.env` réel, sauf si `profile` est fourni."""
+    if profile is None:
+        profile = profile_values() if env_file == ENV_FILE else {}
     raw: dict[str, str] = {}
     # interpolate=False : les gabarits de réponse utilisent ${COMMAND}, ${ARGS}... qui ne sont pas des variables .env
-    sources = [dotenv_values(env_file, interpolate=False) if env_file.exists() else {}, os.environ]
+    sources = [dotenv_values(env_file, interpolate=False) if env_file.exists() else {}, profile, os.environ]
     for source in sources:
         for key, value in source.items():
             if key in _KNOWN_KEYS and value is not None and value.strip():
