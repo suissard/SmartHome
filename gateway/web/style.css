@@ -151,6 +151,40 @@ summary:focus-visible {
   max-width: 760px;
   width: 100%;
   margin: 0 auto;
+  position: relative;
+}
+
+.scroll-bottom-btn {
+  position: sticky;
+  bottom: 8px;
+  align-self: center;
+  background: var(--surface);
+  color: var(--accent);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+  padding: 8px 16px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  z-index: 10;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: transform 150ms ease, background 150ms ease;
+  min-height: 40px;
+  touch-action: manipulation;
+}
+.scroll-bottom-btn svg {
+  width: 16px; height: 16px; fill: currentColor;
+}
+.scroll-bottom-btn:hover {
+  background: var(--surface-2);
+  transform: translateY(-2px);
+}
+.scroll-bottom-btn:active {
+  transform: translateY(0);
 }
 
 .empty { margin: auto; text-align: center; color: var(--muted); padding: 24px; }

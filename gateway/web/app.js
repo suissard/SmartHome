@@ -6,6 +6,7 @@ import { Recorder, toBase64 } from "./recorder.js";
 const $ = (id) => document.getElementById(id);
 const ui = {
   log: $("log"), empty: $("empty"), status: $("status"), liveAnnouncer: $("live-announcer"), toast: $("toast"),
+  scrollBottomBtn: $("scroll-bottom-btn"), newChatBtn: $("new-chat-btn"), resetConfirm: $("reset-confirm"),
   mic: $("mic"), textForm: $("text-form"), text: $("text"), send: document.querySelector(".send"),
   bargeInBar: $("barge-in-bar"), stopSpeechBtn: $("stop-speech-btn"),
   setup: $("setup"), setupForm: $("setup-form"), token: $("token"), setupError: $("setup-error"),
@@ -59,6 +60,9 @@ function isNearBottom(threshold = 60) {
 function scrollDown(force = false) {
   if (force || isNearBottom()) {
     ui.log.scrollTop = ui.log.scrollHeight;
+    if (ui.scrollBottomBtn) ui.scrollBottomBtn.hidden = true;
+  } else if (ui.scrollBottomBtn) {
+    ui.scrollBottomBtn.hidden = false;
   }
 }
 
@@ -502,13 +506,49 @@ ui.setupForm.addEventListener("submit", () => {
   connect();
 });
 
+ui.log.addEventListener("scroll", () => {
+  if (isNearBottom() && ui.scrollBottomBtn) {
+    ui.scrollBottomBtn.hidden = true;
+  }
+});
+
+ui.scrollBottomBtn?.addEventListener("click", () => {
+  scrollDown(true);
+  if (ui.scrollBottomBtn) ui.scrollBottomBtn.hidden = true;
+});
+
+function promptResetConversation() {
+  const hasMessages = ui.log.querySelectorAll(".msg, .tool").length > 0;
+  if (!hasMessages) {
+    send({ type: "reset" });
+    return;
+  }
+  if (ui.resetConfirm) {
+    ui.resetConfirm.showModal();
+  } else if (confirm("Effacer la conversation en cours ?")) {
+    send({ type: "reset" });
+  }
+}
+
+ui.resetConfirm?.addEventListener("close", () => {
+  if (ui.resetConfirm.returnValue === "confirm") {
+    send({ type: "reset" });
+    showToast("Conversation effacée", "ok");
+  }
+});
+
+ui.newChatBtn?.addEventListener("click", promptResetConversation);
+
 $("settings-btn").addEventListener("click", () => {
   ui.settings.showModal();
   ui.modelMsg.textContent = "";
   send({ type: "get_settings" });
   send({ type: "list_models" });
 });
-$("reset-btn").addEventListener("click", () => { send({ type: "reset" }); ui.settings.close(); });
+$("reset-btn").addEventListener("click", () => {
+  ui.settings.close();
+  promptResetConversation();
+});
 $("logout-btn").addEventListener("click", () => {
   store.set("token", null);
   store.set("session", null);
