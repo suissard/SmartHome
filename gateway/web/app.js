@@ -5,7 +5,7 @@ import { Recorder, toBase64 } from "./recorder.js";
 
 const $ = (id) => document.getElementById(id);
 const ui = {
-  log: $("log"), empty: $("empty"), status: $("status"),
+  log: $("log"), empty: $("empty"), status: $("status"), liveAnnouncer: $("live-announcer"),
   mic: $("mic"), textForm: $("text-form"), text: $("text"), send: document.querySelector(".send"),
   setup: $("setup"), setupForm: $("setup-form"), token: $("token"), setupError: $("setup-error"),
   settings: $("settings"), speak: $("speak"), autostop: $("autostop"), sessionId: $("session-id"),
@@ -49,13 +49,23 @@ const state = {
 };
 
 // ---- Fil de conversation ----
+function isNearBottom(threshold = 60) {
+  return ui.log.scrollHeight - ui.log.scrollTop - ui.log.clientHeight <= threshold;
+}
+
+function scrollDown(force = false) {
+  if (force || isNearBottom()) {
+    ui.log.scrollTop = ui.log.scrollHeight;
+  }
+}
+
 function addBubble(kind, text) {
   ui.empty.hidden = true;
   const el = document.createElement("div");
   el.className = `msg ${kind}`;
   el.textContent = text;
   ui.log.append(el);
-  scrollDown();
+  scrollDown(true);
   return el;
 }
 
@@ -67,10 +77,6 @@ function addToolChip(event) {
   el.title = event.output || "";
   ui.log.append(el);
   scrollDown();
-}
-
-function scrollDown() {
-  ui.log.scrollTop = ui.log.scrollHeight;
 }
 
 function setStatus(stateName, label) {
@@ -273,6 +279,13 @@ ui.textForm.addEventListener("submit", (e) => {
   sendText(text);
 });
 
+ui.log.addEventListener("click", (e) => {
+  const chip = e.target.closest(".hint-chip");
+  if (!chip || !state.ready) return;
+  unlockAudio();
+  sendText(chip.textContent.trim());
+});
+
 // ---- Micro ----
 ui.mic.addEventListener("click", async () => {
   unlockAudio();
@@ -300,6 +313,7 @@ ui.mic.addEventListener("click", async () => {
   state.recorder = recorder;
   ui.mic.dataset.state = "recording";
   ui.mic.setAttribute("aria-label", "Arrêter l'écoute");
+  ui.mic.setAttribute("aria-pressed", "true");
   setStatus("busy", "J'écoute…");
 });
 
@@ -309,6 +323,7 @@ function stopRecording() {
   state.recorder = null;
   ui.mic.dataset.state = "idle";
   ui.mic.setAttribute("aria-label", "Parler");
+  ui.mic.setAttribute("aria-pressed", "false");
   const { wav, hadSpeech } = recorder.stop();
   refreshControls();
   if (hadSpeech) sendAudio(wav);
