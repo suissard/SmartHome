@@ -8,7 +8,6 @@ const ui = {
   log: $("log"), empty: $("empty"), status: $("status"), liveAnnouncer: $("live-announcer"), toast: $("toast"),
   scrollBottomBtn: $("scroll-bottom-btn"), newChatBtn: $("new-chat-btn"), resetConfirm: $("reset-confirm"),
   mic: $("mic"), textForm: $("text-form"), text: $("text"), send: document.querySelector(".send"),
-  bargeInBar: $("barge-in-bar"), stopSpeechBtn: $("stop-speech-btn"),
   setup: $("setup"), setupForm: $("setup-form"), token: $("token"), setupError: $("setup-error"),
   settings: $("settings"), speak: $("speak"), autostop: $("autostop"), sessionId: $("session-id"),
   confirm: $("confirm"), confirmQuestion: $("confirm-question"), confirmBar: $("confirm-bar"), confirmTimerText: $("confirm-timer-text"),
@@ -148,7 +147,18 @@ function isSpeaking() {
 
 function updateSpeakingState() {
   const speaking = isSpeaking();
-  if (ui.bargeInBar) ui.bargeInBar.hidden = !speaking;
+  if (ui.mic && !state.recorder) {
+    ui.mic.classList.toggle("stop-mode", speaking);
+    if (speaking) {
+      ui.mic.dataset.state = "stop";
+      ui.mic.setAttribute("aria-label", "Interrompre la voix de l'assistant");
+      ui.mic.setAttribute("title", "Interrompre la voix de l'assistant");
+    } else {
+      ui.mic.dataset.state = "idle";
+      ui.mic.setAttribute("aria-label", "Parler");
+      ui.mic.removeAttribute("title");
+    }
+  }
   if (speaking) {
     if (!state.busy) setStatus("speaking", "L'assistant parle…");
     const targetBubble = state.speakingBubble || ui.log.querySelector(".msg.bot:last-of-type");
@@ -287,6 +297,7 @@ function handleEvent(event) {
         if (!state.botBubble.textContent.trim()) state.botBubble.remove();
       }
       state.botBubble = null;
+      stopPlayback();
       break;
     case "error":
       // Avant "ready", l'erreur concerne l'authentification : elle est traitée à la fermeture (code 4401)
@@ -398,7 +409,10 @@ ui.mic.addEventListener("click", async () => {
     stopRecording();
     return;
   }
-  interruptAssistant();
+  if (isSpeaking()) {
+    interruptAssistant();
+    return;
+  }
   const cfg = state.audioConfig || {};
   const recorder = new Recorder({
     targetRate: cfg.sample_rate || 16000,
@@ -416,8 +430,10 @@ ui.mic.addEventListener("click", async () => {
     return;
   }
   state.recorder = recorder;
+  ui.mic.classList.remove("stop-mode");
   ui.mic.dataset.state = "recording";
   ui.mic.setAttribute("aria-label", "Arrêter l'écoute");
+  ui.mic.removeAttribute("title");
   ui.mic.setAttribute("aria-pressed", "true");
   setStatus("busy", "J'écoute…");
 });
@@ -438,8 +454,15 @@ function stopRecording() {
   const recorder = state.recorder;
   if (!recorder) return;
   state.recorder = null;
-  ui.mic.dataset.state = "idle";
-  ui.mic.setAttribute("aria-label", "Parler");
+  const speaking = isSpeaking();
+  ui.mic.classList.toggle("stop-mode", speaking);
+  ui.mic.dataset.state = speaking ? "stop" : "idle";
+  ui.mic.setAttribute("aria-label", speaking ? "Interrompre la voix de l'assistant" : "Parler");
+  if (speaking) {
+    ui.mic.setAttribute("title", "Interrompre la voix de l'assistant");
+  } else {
+    ui.mic.removeAttribute("title");
+  }
   ui.mic.setAttribute("aria-pressed", "false");
   const { wav, hadSpeech } = recorder.stop();
   refreshControls();
@@ -996,8 +1019,6 @@ ui.advancedForm.addEventListener("submit", (e) => {
   setMessage(ui.advancedMsg, "Enregistrement…");
   send({ type: "update_settings", values });
 });
-
-ui.stopSpeechBtn?.addEventListener("click", () => interruptAssistant());
 
 if ("serviceWorker" in navigator && window.isSecureContext) {
   navigator.serviceWorker.register("sw.js").catch(() => { /* PWA non installable, l'appli fonctionne quand même */ });

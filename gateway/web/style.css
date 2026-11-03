@@ -1,5 +1,5 @@
 /* Le HTML s'appuie sur l'attribut `hidden` pour masquer les éléments d'état
-   (barre barge-in, toast, indicateurs). Sans cette règle, un `display:flex`
+   (toast, indicateurs). Sans cette règle, un `display:flex`
    plus spécifique annule `hidden` et l'élément reste visible. */
 [hidden] {
   display: none !important;
@@ -302,44 +302,6 @@ summary:focus-visible {
   100% { transform: scaleY(1); }
 }
 
-/* ---- Barre d'interruption voix (Barge-in tactile) ---- */
-.barge-in-bar {
-  display: flex;
-  justify-content: center;
-  padding: 6px 16px 0;
-  background: transparent;
-  pointer-events: none;
-}
-.stop-speech-btn {
-  pointer-events: auto;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 16px;
-  background: var(--surface);
-  color: var(--danger);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  font-size: 13px;
-  font-weight: 600;
-  font-family: inherit;
-  cursor: pointer;
-  box-shadow: var(--shadow);
-  transition: transform 150ms ease, background 150ms ease, border-color 150ms ease;
-  min-height: 44px;
-  touch-action: manipulation;
-}
-.stop-speech-btn:hover {
-  background: var(--surface-2);
-  border-color: var(--danger);
-}
-.stop-speech-btn:active {
-  transform: scale(0.97);
-}
-.stop-speech-btn svg {
-  width: 16px; height: 16px; fill: currentColor;
-}
-
 .tool {
   align-self: flex-start;
   font-size: 13px;
@@ -472,7 +434,7 @@ summary:focus-visible {
   place-items: center;
   box-shadow: var(--shadow);
   touch-action: manipulation;
-  transition: transform 150ms ease, background-color 150ms ease, box-shadow 150ms ease;
+  transition: transform 150ms ease, background-color 150ms ease, box-shadow 150ms ease, color 150ms ease;
 }
 .mic::before {
   content: "";
@@ -482,7 +444,7 @@ summary:focus-visible {
   background: var(--accent);
   opacity: 0.2;
   z-index: 0;
-  transition: opacity 200ms ease, transform 200ms ease;
+  transition: opacity 200ms ease, transform 200ms ease, background-color 150ms ease;
 }
 .mic:hover:not(:disabled)::before {
   opacity: 0.35;
@@ -491,8 +453,47 @@ summary:focus-visible {
 .mic:active:not(:disabled) {
   transform: scale(0.95);
 }
-.mic svg { width: 28px; height: 28px; position: relative; z-index: 1; }
+.mic svg {
+  width: 28px;
+  height: 28px;
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 1;
+  fill: currentColor;
+  transition: opacity 150ms ease, transform 150ms ease;
+}
+.mic .icon-stop {
+  opacity: 0;
+  transform: translate(-50%, -50%) scale(0.5);
+  pointer-events: none;
+}
+.mic .icon-mic {
+  opacity: 1;
+  transform: translate(-50%, -50%) scale(1);
+}
 .mic:disabled { opacity: 0.45; cursor: default; }
+
+/* Mode stop : actif pendant que l'assistant parle */
+.mic.stop-mode {
+  background: var(--danger);
+  color: #ffffff;
+}
+.mic.stop-mode::before {
+  background: var(--danger);
+  opacity: 0.35;
+}
+.mic.stop-mode .icon-mic {
+  opacity: 0;
+  transform: translate(-50%, -50%) scale(0.5);
+  pointer-events: none;
+}
+.mic.stop-mode .icon-stop {
+  opacity: 1;
+  transform: translate(-50%, -50%) scale(1);
+}
+
 .mic[data-state="recording"] { background: var(--danger); }
 .mic[data-state="recording"]::before {
   background: var(--danger);
