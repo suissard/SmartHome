@@ -48,17 +48,20 @@
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
   <footer class="composer">
-    <button id="mic" class="mic" type="button" aria-label="Parler" aria-pressed="false" data-state="idle" disabled>
-      <svg class="icon-mic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.9V21h2v-3.1A7 7 0 0 0 19 11h-2Z"/></svg>
-      <svg class="icon-stop" viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
-      <span class="mic-level" aria-hidden="true"></span>
-    </button>
     <form id="text-form" class="text-form" autocomplete="off">
       <input id="text" type="text" placeholder="Écrire une demande…" aria-label="Demande écrite" enterkeyhint="send" disabled>
-      <button class="send" type="submit" aria-label="Envoyer" disabled>
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.4 20.4 21 12 3.4 3.6 3.4 10l12.6 2-12.6 2z"/></svg>
-      </button>
     </form>
+    <!-- Visible tant que l'assistant parle : indicateur de voix et bouton pour la couper -->
+    <button id="voice-stop" class="voice-stop" type="button" aria-label="Interrompre la voix de l'assistant" title="Interrompre la voix de l'assistant" hidden>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+      <span class="sound-wave" aria-hidden="true"><span></span><span></span><span></span><span></span></span>
+    </button>
+    <!-- Bouton principal : parler, ou envoyer dès qu'un texte est saisi -->
+    <button id="mic" class="mic" type="button" aria-label="Parler" aria-pressed="false" data-state="idle" disabled>
+      <svg class="icon-mic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 1 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.9V21h2v-3.1A7 7 0 0 0 19 11h-2Z"/></svg>
+      <svg class="icon-send" viewBox="0 0 24 24" aria-hidden="true"><path d="M3.4 20.4 21 12 3.4 3.6 3.4 10l12.6 2-12.6 2z"/></svg>
+      <span class="mic-level" aria-hidden="true"></span>
+    </button>
   </footer>
 
   <!-- Connexion : saisie du jeton de la passerelle -->
@@ -163,6 +166,31 @@
       <div class="actions">
         <button type="submit" value="cancel">Annuler</button>
         <button type="submit" value="confirm" class="danger">Effacer</button>
+      </div>
+    </form>
+  </dialog>
+  <!-- Appui long sur une bulle -->
+  <dialog id="msg-menu" class="sheet confirm" aria-labelledby="msg-menu-title">
+    <form method="dialog">
+      <h2 id="msg-menu-title">Message</h2>
+      <p id="msg-preview" class="msg-preview"></p>
+      <div class="actions stacked">
+        <button type="submit" id="msg-relaunch" value="relaunch" class="primary">Relancer à partir d'ici</button>
+        <button type="submit" id="msg-edit" value="edit">Modifier et relancer</button>
+        <button type="submit" value="delete" class="danger">Supprimer</button>
+        <button type="submit" value="cancel">Annuler</button>
+      </div>
+      <p id="msg-menu-note" class="meta">Relancer ou modifier efface les messages suivants.</p>
+    </form>
+  </dialog>
+  <dialog id="msg-editor" class="sheet" aria-labelledby="msg-editor-title">
+    <form method="dialog">
+      <h2 id="msg-editor-title">Modifier le message</h2>
+      <label for="msg-editor-text" class="sr-only">Texte du message</label>
+      <textarea id="msg-editor-text" rows="4"></textarea>
+      <div class="actions">
+        <button type="submit" value="cancel">Annuler</button>
+        <button type="submit" id="msg-editor-save" value="save" class="primary">Relancer</button>
       </div>
     </form>
   </dialog>

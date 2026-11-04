@@ -7,6 +7,7 @@ avec des composants factices (aucun modèle chargé, aucune action réelle).
 import base64
 import sys
 import threading
+import time
 import unittest
 from pathlib import Path
 
@@ -169,6 +170,73 @@ class TestGateway(unittest.TestCase):
         self.assertEqual(r.json()["text"], "Écho : Bonjour")
         self.assertTrue(base64.b64decode(r.json()["audio"]["data"]).startswith(b"RIFF"))
 
+    def test_list_models_of_another_provider(self):
+        from unittest import mock
+        other = mock.Mock()
+        other.list_models.return_value = [{"name": "a/b", "capabilities": ["tools"], "size": 0}]
+        with mock.patch("llm.providers.LLM_PROVIDERS.create", return_value=other) as create, \
+                self.client.websocket_connect("/ws") as ws:
+            ws.send_json({"type": "auth", "token": TOKEN})
+            ws.receive_json()
+            ws.send_json({"type": "list_models", "provider": "openrouter"})
+            event = ws.receive_json()
+        self.assertEqual((event["type"], event["provider"], event["models"][0]["name"]), ("models", "openrouter", "a/b"))
+        self.assertEqual(create.call_args.args[0], "openrouter")
+
+    def test_turns_can_be_forgotten_relaunched_and_edited(self):
+        with self.client.websocket_connect("/ws") as ws:
+            ws.send_json({"type": "auth", "token": TOKEN, "session": "h"})
+            ws.receive_json()
+            for turn in ("t1", "t2"):
+                ws.send_json({"type": "text", "text": turn, "turn": turn})
+                events = collect_until_done(ws)
+                self.assertTrue(all(e.get("turn") == turn for e in events if e["type"] in ("token", "response", "done")))
+            history = self.core.get_session("h").conversation.history
+            self.assertEqual([m["turn"] for m in history], ["t1", "t1", "t2", "t2"])
+
+            # Relance de t2 : ses messages sont remplacés par le nouvel échange
+            ws.send_json({"type": "text", "text": "t3", "turn": "t3", "forget": ["t2"]})
+            collect_until_done(ws)
+            self.assertEqual([m["turn"] for m in history], ["t1", "t1", "t3", "t3"])
+
+            # Correction de la réponse de t1 : l'échange suivant disparaît
+            ws.send_json({"type": "edit_answer", "turn": "t1", "text": "Corrigé", "forget": ["t3"]})
+            ws.send_json({"type": "ping"})
+            self.assertEqual(ws.receive_json()["type"], "pong")
+            self._wait_for(lambda: len(history) == 2)
+            self.assertEqual(history[1]["content"], "Corrigé")
+
+            ws.send_json({"type": "forget", "turns": ["t1"], "role": "user"})
+            self._wait_for(lambda: [m["role"] for m in history] == ["assistant"])
+
+    def test_relaunch_brings_back_messages_out_of_the_window(self):
+        for turn in ("t1", "t2", "t3", "t4"):
+            self.core.respond("w", text=turn, turn=turn)
+        conversation = self.core.get_session("w").conversation
+        self.assertEqual([m["turn"] for m in conversation.history], ["t3", "t3", "t4", "t4"])
+
+        self.core.edit_answer("w", "t1", "Corrigé")
+        self.core.respond("w", text="bis", turn="t5", forget=["t3", "t4"])
+        self.assertEqual([m["turn"] for m in conversation.history], ["t2", "t2", "t5", "t5"])
+        self.core.forget("w", ["t2", "t5"])
+        self.assertEqual([m["content"] for m in conversation.history], ["t1", "Corrigé"])
+        self.assertEqual(conversation.older, [])
+
+    def test_turn_is_not_sent_to_the_llm(self):
+        seen = []
+        chat = self.core.llm.chat
+        self.core.llm.chat = lambda messages, **kw: seen.append(messages) or chat(messages, **kw)
+        self.core.respond("s", text="un", turn="t1")
+        self.core.respond("s", text="deux", turn="t2")
+        self.assertTrue(all("turn" not in m for m in seen[-1]))
+
+    def _wait_for(self, condition):
+        for _ in range(200):
+            if condition():
+                return
+            time.sleep(0.01)
+        self.fail("condition non atteinte")
+
     def test_websocket_rejects_bad_token(self):
         with self.client.websocket_connect("/ws") as ws:
             ws.send_json({"type": "auth", "token": "faux"})
@@ -244,6 +312,38 @@ class TestWebClientServing(unittest.TestCase):
         with secured.websocket_connect("/ws", headers=proxied) as ws:
             ws.send_json({"type": "auth", "token": TOKEN})
             self.assertEqual(ws.receive_json()["type"], "ready")
+
+
+class DatetimePromptTests(unittest.TestCase):
+    def test_datetime_line_and_prompt(self):
+        from datetime import datetime, timezone
+        from llm.llm import current_datetime_line, get_default_system_prompt
+        line = current_datetime_line(datetime(2026, 11, 4, 9, 5, tzinfo=timezone.utc))
+        self.assertIn("mercredi 4 novembre 2026", line)
+        self.assertIn("09:05", line)
+        self.assertIn("Nous sommes le", get_default_system_prompt(Settings(LLM_INJECT_DATETIME=True)))
+        self.assertNotIn("Nous sommes le", get_default_system_prompt(Settings(LLM_INJECT_DATETIME=False)))
+
+
+class PairingTests(unittest.TestCase):
+    def test_url_with_token_in_fragment(self):
+        from core.pairing import pairing_url
+        s = Settings(GATEWAY_HOST="100.64.0.1", GATEWAY_PORT=9000, GATEWAY_AUTH_TOKEN="a b/c")
+        self.assertEqual(pairing_url(s), "http://100.64.0.1:9000/#token=a%20b%2Fc")
+
+    def test_public_url_wins_and_no_token(self):
+        from core.pairing import pairing_url
+        s = Settings(GATEWAY_PUBLIC_URL="https://pc.ts.net/", GATEWAY_AUTH_TOKEN="")
+        self.assertEqual(pairing_url(s), "https://pc.ts.net/")
+
+    def test_tailscale_serve_url(self):
+        from unittest import mock
+        from core import pairing
+        status = {"Web": {"pc.ts.net:443": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:8765"}}}}}
+        with mock.patch.object(pairing, "_tailscale_json", return_value=status):
+            self.assertEqual(pairing.tailscale_serve_url(8765), "https://pc.ts.net")
+            self.assertEqual(pairing.tailscale_serve_url(9999), "")
+            self.assertTrue(pairing.pairing_url(Settings(GATEWAY_AUTH_TOKEN="t")).startswith("https://pc.ts.net/#token="))
 
 
 if __name__ == "__main__":

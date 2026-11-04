@@ -1,7 +1,7 @@
 import sys
 import threading
 
-from core.profiles import active_profile, describe_profile, pop_profile_argument
+from core.profiles import active_profile, describe_profile, pop_profile_argument, warn_shadowed_profile
 
 pop_profile_argument(sys.argv)  # --profile <nom> doit être connu avant le chargement de core.config
 
@@ -183,6 +183,7 @@ def main():
 
     print(f"\n🟢 Démarrage de SmartHome")
     print(f"  • Profil        : {active_profile()} — {describe_profile(active_profile())}")
+    warn_shadowed_profile()
     print(f"  • Cerveau LLM   : {llm_info} (Mémoire: {LLM_HISTORY_MESSAGES} msgs)")
     print(f"  • Écoute STT    : {stt_info}")
     print(f"  • Voix TTS      : {tts_info}{' (streaming par phrase)' if settings.TTS_STREAMING else ''}")
@@ -198,6 +199,8 @@ def main():
         gateway, _ = start_in_thread(core, settings)
         auth = "jeton requis" if settings.GATEWAY_AUTH_TOKEN else "loopback, sans jeton"
         print(f"  • Passerelle    : ws://{settings.GATEWAY_HOST}:{settings.GATEWAY_PORT}/ws ({auth})")
+        from core.pairing import print_pairing
+        print_pairing(settings)
     else:
         print("  • Passerelle    : Désactivée (GATEWAY_ENABLED=false)")
     print(f"  • Veille active : {FOLLOW_UP_TIMEOUT}s\n")

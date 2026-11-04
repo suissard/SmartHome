@@ -8,9 +8,12 @@ Routes :
 - WS   /ws       : session interactive (streaming, outils, confirmations). Protocole JSON :
     client -> serveur : {"type": "auth", "token", "session"?}  (premier message si pas d'en-tête Authorization)
                         {"type": "text", "text", "speak"?} | {"type": "audio", "data": <WAV base64>, "speak"?}
+                        (avec "turn"? : identifiant de l'échange, repris dans ses événements et "done" ; "forget"? : échanges
+                        à retirer d'abord de l'historique, pour relancer à partir d'un message)
+                        {"type": "forget", "turns", "role"?} | {"type": "edit_answer", "turn", "text", "forget"?}
                         {"type": "confirm_response", "id", "accepted": bool} | {"type": "stop"} | {"type": "reset"}
                         | {"type": "ping"}
-                        Paramètres (voir core/settings_store.py) : {"type": "get_settings"} | {"type": "list_models"}
+                        Paramètres (voir core/settings_store.py) : {"type": "get_settings"} | {"type": "list_models", "provider"?: nom}
                         | {"type": "update_settings", "values": {VARIABLE: valeur}} | {"type": "restart"}
     serveur -> client : {"type": "ready", "session", "tools", "audio", "confirm_timeout", "llm"} puis les événements du cœur
                         (transcript, token, tool, confirm_request, response, interrupted, error), la voix si speak :
@@ -151,13 +154,13 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
                       "data": base64.b64encode(to_wav_bytes(samples, sample_rate)).decode()})
             return SpeechPipeline(core.tts, sink=send_chunk)
 
-        def run_request(text, audio, speak) -> Reply:
+        def run_request(text, audio, speak, turn, forget) -> Reply:
             speech = streamed_speech() if speak and core.settings.TTS_STREAMING else None
             if speech:
                 speeches.add(speech)
             try:
                 reply = core.respond(session.id, text=text, audio_wav=audio, synthesize=speak and not speech,
-                                     on_sentence=speech.say if speech else None)
+                                     on_sentence=speech.say if speech else None, turn=turn, forget=forget)
                 if speech:
                     speech.wait()
                 return reply
@@ -167,26 +170,47 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
                     speech.close()
 
         async def handle(message: dict):
+            turn = message.get("turn")
+            tag = {"turn": turn} if turn else {}
             try:
                 audio = base64.b64decode(message["data"]) if message["type"] == "audio" else None
-                reply = await asyncio.to_thread(run_request, message.get("text"), audio, bool(message.get("speak")))
+                reply = await asyncio.to_thread(run_request, message.get("text"), audio, bool(message.get("speak")),
+                                                turn, message.get("forget") or ())
                 if reply.audio_wav:
                     push({"type": "audio", "format": "wav", "data": base64.b64encode(reply.audio_wav).decode()})
             except Exception as e:
-                push({"type": "error", "message": str(e)})
+                push({"type": "error", "message": str(e), **tag})
             finally:
-                push({"type": "done"})
+                push({"type": "done", **tag})
+
+        async def handle_history(message: dict):
+            """Suppression d'un message ou correction d'une réponse (bloquant tant qu'une réponse est en cours)."""
+            try:
+                if message["type"] == "forget":
+                    await asyncio.to_thread(core.forget, session.id, message.get("turns") or (), message.get("role"))
+                else:
+                    await asyncio.to_thread(core.edit_answer, session.id, message["turn"], str(message["text"]),
+                                            message.get("forget") or ())
+            except Exception as e:
+                push({"type": "error", "message": f"Historique non modifié : {e}"})
 
         async def handle_settings(message: dict):
             """Lecture / modification des paramètres et liste des modèles (appels bloquants hors de la boucle)."""
             kind = message["type"]
             try:
                 if kind == "list_models":
+                    # Fournisseur demandé (champ de modèle d'un autre fournisseur que l'actif), sinon le fournisseur actif
+                    name = str(message.get("provider") or core.settings.LLM_PROVIDER)
                     try:
-                        models = await asyncio.to_thread(core.llm.list_models)
-                        push({"type": "models", "provider": core.settings.LLM_PROVIDER, "models": models})
+                        if name == core.settings.LLM_PROVIDER:
+                            provider = core.llm
+                        else:
+                            from llm.providers import LLM_PROVIDERS
+                            provider = LLM_PROVIDERS.create(name, core.settings)
+                        models = await asyncio.to_thread(provider.list_models)
+                        push({"type": "models", "provider": name, "models": models})
                     except Exception as e:
-                        push({"type": "models", "provider": core.settings.LLM_PROVIDER, "models": [],
+                        push({"type": "models", "provider": name, "models": [],
                               "error": f"Liste des modèles indisponible : {e}"})
                     return
                 if kind == "update_settings":
@@ -244,6 +268,10 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
                 elif kind == "reset":
                     session.conversation.clear()
                     push({"type": "reset_done"})
+                elif kind in ("forget", "edit_answer"):
+                    task = asyncio.create_task(handle_history(message))
+                    tasks.add(task)
+                    task.add_done_callback(tasks.discard)
                 elif kind in ("get_settings", "update_settings", "list_models"):
                     task = asyncio.create_task(handle_settings(message))
                     tasks.add(task)

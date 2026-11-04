@@ -144,6 +144,8 @@ class Settings(BaseModel):
         "Tu es un assistant vocal domotique. Réponds en français de manière claire, concise et directe "
         "(1 à 2 phrases max). N'utilise pas de markdown ou d'emoji."
     )
+    # Ajoute la date et l'heure courantes au prompt système (recalculées à chaque demande)
+    LLM_INJECT_DATETIME: EnvBool = True
     LLM_STREAM: EnvBool = True
     LLM_THINK: EnvBool = False
     LLM_HISTORY_MESSAGES: int = Field(5, ge=0)
@@ -258,6 +260,12 @@ class Settings(BaseModel):
     GATEWAY_PORT: int = Field(8765, ge=1, le=65535)
     # Jeton exigé par les clients ; obligatoire hors loopback (LAN, Tailscale)
     GATEWAY_AUTH_TOKEN: str = ""
+    # URL publique de l'interface (ex: https://pc.tailnet.ts.net) ; sinon déduite de GATEWAY_HOST / GATEWAY_PORT
+    GATEWAY_PUBLIC_URL: str = ""
+    # Utilise l'URL HTTPS de `tailscale serve` (ou l'IP Tailscale si l'écoute est sur 0.0.0.0) quand Tailscale est actif
+    GATEWAY_TAILSCALE_URL: EnvBool = True
+    # Affiche l'URL de connexion (jeton compris) et son QR code au démarrage
+    GATEWAY_QR_ENABLED: EnvBool = True
     # Délai laissé à un client distant pour confirmer une action dangereuse (secondes)
     GATEWAY_CONFIRM_TIMEOUT: float = Field(20.0, gt=0.0)
     # Durée d'inactivité après laquelle une session distante (et son historique) est oubliée (secondes)
@@ -401,6 +409,7 @@ OLLAMA_TTS_MODEL = settings.OLLAMA_TTS_MODEL
 OLLAMA_TTS_VOICE = settings.OLLAMA_TTS_VOICE
 OLLAMA_AUDIO_TIMEOUT = settings.OLLAMA_AUDIO_TIMEOUT
 LLM_SYSTEM_PROMPT = settings.LLM_SYSTEM_PROMPT
+LLM_INJECT_DATETIME = settings.LLM_INJECT_DATETIME
 LLM_STREAM = settings.LLM_STREAM
 LLM_THINK = settings.LLM_THINK
 LLM_HISTORY_MESSAGES = settings.LLM_HISTORY_MESSAGES
@@ -463,6 +472,9 @@ GATEWAY_ENABLED = settings.GATEWAY_ENABLED
 GATEWAY_HOST = settings.GATEWAY_HOST
 GATEWAY_PORT = settings.GATEWAY_PORT
 GATEWAY_AUTH_TOKEN = settings.GATEWAY_AUTH_TOKEN
+GATEWAY_PUBLIC_URL = settings.GATEWAY_PUBLIC_URL
+GATEWAY_TAILSCALE_URL = settings.GATEWAY_TAILSCALE_URL
+GATEWAY_QR_ENABLED = settings.GATEWAY_QR_ENABLED
 GATEWAY_CONFIRM_TIMEOUT = settings.GATEWAY_CONFIRM_TIMEOUT
 GATEWAY_SESSION_TIMEOUT = settings.GATEWAY_SESSION_TIMEOUT
 GATEWAY_MAX_MESSAGE_BYTES = settings.GATEWAY_MAX_MESSAGE_BYTES

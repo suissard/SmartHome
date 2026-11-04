@@ -80,6 +80,20 @@ def profile_values(name: Optional[str] = None) -> dict[str, str]:
     return {k: v for k, v in values.items() if v is not None}
 
 
+def shadowed_by_environment(name: Optional[str] = None) -> dict[str, str]:
+    """Réglages du profil masqués par une variable d'environnement de valeur différente ({variable: valeur de l'environnement}).
+    Typique : un `source .env` dans le terminal, dont les variables exportées l'emportent sur le profil."""
+    return {k: os.environ[k] for k, v in profile_values(name).items()
+            if (os.environ.get(k) or "").strip() and os.environ[k] != v}
+
+
+def warn_shadowed_profile():
+    shadowed = shadowed_by_environment()
+    if shadowed:
+        print(f"⚠️ [CONFIG] Le profil {active_profile()!r} est masqué par des variables d'environnement : {', '.join(shadowed)}.")
+        print(f"   Elles viennent du terminal (ex: `source .env`) : ouvrez un nouveau terminal ou `unset {' '.join(shadowed)}`.")
+
+
 def pop_profile_argument(argv: list[str]) -> Optional[str]:
     """Retire `--profile <nom>` / `--profile=<nom>` de argv et le place dans SMARTHOME_PROFILE."""
     for i, arg in enumerate(argv):

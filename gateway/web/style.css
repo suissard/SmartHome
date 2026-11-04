@@ -251,6 +251,18 @@ summary:focus-visible {
   line-height: 1.55;
   box-shadow: var(--shadow-sm);
 }
+/* Appui long : sans cela, le téléphone sélectionne le texte au lieu d'ouvrir le menu */
+@media (pointer: coarse) {
+  .msg { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+}
+.msg-preview {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
 .msg.user {
   align-self: flex-end;
   background: var(--user);
@@ -380,7 +392,6 @@ summary:focus-visible {
 }
 
 .text-form {
-  order: 1;
   flex: 1;
   display: flex;
   gap: 8px;
@@ -400,28 +411,28 @@ summary:focus-visible {
 }
 .text-form input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 
-.send {
+.voice-stop {
   flex: none;
-  width: 44px; height: 44px;
-  border-radius: 50%;
-  border: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 44px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid var(--danger);
   background: var(--surface-2);
-  color: var(--accent);
+  color: var(--danger);
   cursor: pointer;
-  display: grid; place-items: center;
-  transition: background-color 150ms ease, transform 100ms ease;
   touch-action: manipulation;
+  transition: background-color 150ms ease, transform 100ms ease;
 }
-.send:hover:not(:disabled) {
-  background: var(--border);
-}
-.send:active:not(:disabled) {
-  transform: scale(0.95);
-}
-.send:disabled { opacity: 0.4; cursor: default; }
+.voice-stop:hover { background: var(--border); }
+.voice-stop:active { transform: scale(0.95); }
+.voice-stop svg { width: 18px; height: 18px; fill: currentColor; }
+.voice-stop .sound-wave { margin-left: 0; }
+.voice-stop .sound-wave span { background: currentColor; }
 
 .mic {
-  order: 2;
   flex: none;
   position: relative;
   width: 58px; height: 58px;
@@ -464,7 +475,7 @@ summary:focus-visible {
   fill: currentColor;
   transition: opacity 150ms ease, transform 150ms ease;
 }
-.mic .icon-stop {
+.mic .icon-send {
   opacity: 0;
   transform: translate(-50%, -50%) scale(0.5);
   pointer-events: none;
@@ -475,21 +486,12 @@ summary:focus-visible {
 }
 .mic:disabled { opacity: 0.45; cursor: default; }
 
-/* Mode stop : actif pendant que l'assistant parle */
-.mic.stop-mode {
-  background: var(--danger);
-  color: #ffffff;
-}
-.mic.stop-mode::before {
-  background: var(--danger);
-  opacity: 0.35;
-}
-.mic.stop-mode .icon-mic {
+/* Un texte est saisi : le bouton envoie au lieu d'écouter */
+.mic[data-state="send"] .icon-mic {
   opacity: 0;
   transform: translate(-50%, -50%) scale(0.5);
-  pointer-events: none;
 }
-.mic.stop-mode .icon-stop {
+.mic[data-state="send"] .icon-send {
   opacity: 1;
   transform: translate(-50%, -50%) scale(1);
 }

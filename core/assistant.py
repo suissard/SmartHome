@@ -14,7 +14,7 @@ import uuid
 import wave
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Iterable, Optional
 
 _ROOT_DIR = Path(__file__).resolve().parent.parent
 if str(_ROOT_DIR) not in sys.path:
@@ -242,6 +242,22 @@ class AssistantCore:
             for sid in [s.id for s in self._sessions.values() if not s.persistent and s.last_seen < limit]:
                 del self._sessions[sid]
 
+    # ---- Historique (le verrou attend la fin de la réponse en cours, qui pourrait y écrire) ----
+    def forget(self, session_id: str, turns: Iterable[str], role: Optional[str] = None):
+        """Retire de l'historique les messages de ces échanges (seulement ceux de `role` s'il est précisé)."""
+        session = self.get_session(session_id)
+        if session:
+            with session.lock:
+                session.conversation.forget(turns, role)
+
+    def edit_answer(self, session_id: str, turn: str, text: str, forget: Iterable[str] = ()):
+        """Remplace la réponse d'un échange et retire les échanges `forget` (ceux qui la suivaient)."""
+        session = self.get_session(session_id)
+        if session:
+            with session.lock:
+                session.conversation.edit_answer(turn, text)
+                session.conversation.forget(forget)
+
     # ---- Pipeline ----
     def respond(
         self,
@@ -250,17 +266,24 @@ class AssistantCore:
         audio_wav: Optional[bytes] = None,
         synthesize: bool = False,
         on_sentence: Optional[Callable[[str], None]] = None,
+        turn: Optional[str] = None,
+        forget: Iterable[str] = (),
     ) -> Reply:
         """Traite une demande (texte ou enregistrement WAV) et retourne la réponse. Bloquant : à appeler
         depuis un thread pour un serveur asyncio. Les demandes d'une même session sont traitées une à une.
-        `on_sentence` reçoit chaque phrase à prononcer dès qu'elle est complète (parole en streaming)."""
+        `on_sentence` reçoit chaque phrase à prononcer dès qu'elle est complète (parole en streaming).
+        `turn` identifie l'échange (repris dans les événements et l'historique) ; `forget` retire d'abord
+        ces échanges de l'historique (relance d'un message : les suivants sont effacés)."""
         session = self.open_session(session_id)
-        emit = self.events.emit
         sid = session.id
+
+        def emit(event_type: str, session_id: str, **data):
+            self.events.emit(event_type, session_id, **data, **({"turn": turn} if turn else {}))
 
         with session.lock:
             session.last_seen = time.monotonic()
             session.cancel.clear()
+            session.conversation.forget(forget)
             reply = Reply(sid, transcript=(text or "").strip())
             llm_audio = None
 
@@ -307,6 +330,7 @@ class AssistantCore:
                 audio_bytes=llm_audio,
                 on_token=on_token,
                 on_tool=lambda r: emit("tool", sid, **_tool_summary(r)),
+                turn=turn,
             )
             reply.tools = [_tool_summary(r) for r in session.conversation.last_tool_results]
 

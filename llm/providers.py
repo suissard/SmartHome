@@ -242,19 +242,39 @@ class OpenRouterLLM(LLMProvider):
         from openai import OpenAI
         self.client = OpenAI(base_url=settings.OPENROUTER_BASE_URL, api_key=settings.OPENROUTER_API_KEY or "missing-key")
         self.model = settings.OPENROUTER_MODEL
+        self._catalog: Optional[list[dict]] = None
         self._input_modalities: Optional[dict[str, list[str]]] = None
 
     @classmethod
     def describe(cls, settings: Settings) -> str:
         return f"OpenRouter ({settings.OPENROUTER_MODEL})"
 
-    def _detect_audio_input(self, model: str) -> bool:
-        if self._input_modalities is None:
+    def _fetch_catalog(self, refresh: bool = False) -> list[dict]:
+        """Catalogue public d'OpenRouter (/models), mis en cache."""
+        if self._catalog is None or refresh:
             import httpx
             response = httpx.get(f"{self.settings.OPENROUTER_BASE_URL.rstrip('/')}/models", timeout=10)
             response.raise_for_status()
+            self._catalog = response.json().get("data", [])
+            self._input_modalities = None
+        return self._catalog
+
+    def list_models(self) -> list[dict]:
+        models = []
+        for m in self._fetch_catalog(refresh=True):
+            modalities = (m.get("architecture") or {}).get("input_modalities") or []
+            capabilities = [c for c, found in (
+                ("tools", "tools" in (m.get("supported_parameters") or [])),
+                ("audio", "audio" in modalities),
+                ("vision", "image" in modalities),
+            ) if found]
+            models.append({"name": m["id"], "capabilities": capabilities, "size": 0})
+        return sorted(models, key=lambda m: m["name"])
+
+    def _detect_audio_input(self, model: str) -> bool:
+        if self._input_modalities is None:
             self._input_modalities = {
-                m["id"]: (m.get("architecture") or {}).get("input_modalities") or [] for m in response.json().get("data", [])
+                m["id"]: (m.get("architecture") or {}).get("input_modalities") or [] for m in self._fetch_catalog()
             }
         # Modèle absent du catalogue (alias, modèle privé...) : on laisse l'API trancher
         modalities = self._input_modalities.get(model)

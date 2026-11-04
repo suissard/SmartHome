@@ -35,6 +35,7 @@ EDITABLE_GROUPS: list[tuple[str, list[tuple[str, str, bool]]]] = [
         ("LLM_DECISION_MODELS", "Modèles de décision", LIVE),
         ("OPENROUTER_MODEL", "Modèle OpenRouter", LIVE),
         ("LLM_SYSTEM_PROMPT", "Prompt système", LIVE),
+        ("LLM_INJECT_DATETIME", "Date et heure dans le prompt", LIVE),
         ("LLM_THINK", "Réflexion (thinking)", LIVE),
         ("LLM_HISTORY_MESSAGES", "Messages gardés en mémoire", LIVE),
         ("LLM_TOOL_CALLING", "Appel d'outils", LIVE),
@@ -117,6 +118,7 @@ VISIBLE_WHEN: dict[str, list[dict]] = {
     "OLLAMA_MODEL": [{"LLM_PROVIDER": ["ollama"]}],
     "OPENROUTER_MODEL": [{"LLM_PROVIDER": ["openrouter"]}],
     "LLM_SYSTEM_PROMPT": _LANGUAGE_MODEL,
+    "LLM_INJECT_DATETIME": _LANGUAGE_MODEL,
     "LLM_THINK": _LANGUAGE_MODEL,
     "LLM_TOOL_CALLING": _LANGUAGE_MODEL,
     "LLM_MAX_TOOL_ROUNDS": _LANGUAGE_MODEL,
@@ -222,7 +224,7 @@ def _field_spec(name: str) -> dict:
     elif name == "TTS_VOICE":
         voices = sorted(p.stem for p in (BASE_DIR / "voices").glob("*.onnx"))
         spec = {"kind": "select", "options": voices} if voices else spec
-    elif name == "OLLAMA_MODEL":
+    elif name in ("OLLAMA_MODEL", "OPENROUTER_MODEL"):
         spec = {"kind": "model"}  # liste fournie à part par le fournisseur (message "list_models")
     elif name == "LLM_DECISION_MESSAGES":
         try:

@@ -7,9 +7,11 @@ const $ = (id) => document.getElementById(id);
 const ui = {
   log: $("log"), empty: $("empty"), status: $("status"), liveAnnouncer: $("live-announcer"), toast: $("toast"),
   scrollBottomBtn: $("scroll-bottom-btn"), newChatBtn: $("new-chat-btn"), resetConfirm: $("reset-confirm"),
-  mic: $("mic"), textForm: $("text-form"), text: $("text"), send: document.querySelector(".send"),
+  mic: $("mic"), voiceStop: $("voice-stop"), textForm: $("text-form"), text: $("text"),
   setup: $("setup"), setupForm: $("setup-form"), token: $("token"), setupError: $("setup-error"),
   restartConfirm: $("restart-confirm"),
+  msgMenu: $("msg-menu"), msgPreview: $("msg-preview"), msgRelaunch: $("msg-relaunch"), msgEdit: $("msg-edit"), msgMenuNote: $("msg-menu-note"),
+  msgEditor: $("msg-editor"), msgEditorTitle: $("msg-editor-title"), msgEditorText: $("msg-editor-text"), msgEditorSave: $("msg-editor-save"),
   settings: $("settings"), speak: $("speak"), autostop: $("autostop"), sessionId: $("session-id"),
   confirm: $("confirm"), confirmQuestion: $("confirm-question"), confirmBar: $("confirm-bar"), confirmTimerText: $("confirm-timer-text"),
   modelBadge: $("model-badge"), modelCurrent: $("model-current"), modelOllama: $("model-ollama"),
@@ -50,7 +52,12 @@ const state = {
   llm: null,               // modèle actif : {provider, model, decision}
   restarting: false,       // redémarrage demandé : reconnexion en cours
   settings: null,          // groupes de paramètres du serveur (message "settings")
+  modelsBy: {},            // modèles par fournisseur (complétion des champs de modèle)
   models: [],              // modèles du fournisseur : [{name, capabilities, size}]
+  turnCount: 0,            // numérote les échanges de cette page (identifiant "turn" envoyé au serveur)
+  eventTurn: null,         // échange de l'événement en cours de traitement : les bulles créées lui appartiennent
+  droppedTurns: new Set(), // échanges effacés : leurs derniers événements sont ignorés
+  menuTarget: null,        // bulle visée par le menu d'appui long
 };
 
 // ---- Fil de conversation ----
@@ -72,6 +79,8 @@ function addBubble(kind, text) {
   const el = document.createElement("div");
   el.className = `msg ${kind}`;
   el.textContent = text;
+  el.tabIndex = 0;  // touche « menu » du clavier : voir l'événement contextmenu
+  if (state.eventTurn) el.dataset.turn = state.eventTurn;
   ui.log.append(el);
   scrollDown(true);
   return el;
@@ -157,6 +166,7 @@ function formatActionLabel(name, args = {}, executed = true) {
 function addToolChip(event) {
   const el = document.createElement("div");
   el.className = `tool ${event.executed ? "ok" : "refused"}`;
+  if (state.eventTurn) el.dataset.turn = state.eventTurn;
   const label = formatActionLabel(event.name, event.arguments, event.executed);
   const signature = formatActionSignature(event.name, event.arguments);
   const icon = event.executed ? "✓" : "✕";
@@ -182,20 +192,18 @@ function isSpeaking() {
   return state.playing.size > 0 || state.audioPending > 0;
 }
 
+// Bouton principal : arrêter l'écoute, envoyer le texte saisi, sinon parler
+function updateMainButton() {
+  const recording = Boolean(state.recorder);
+  const mode = recording ? "recording" : ui.text.value.trim() ? "send" : "idle";
+  ui.mic.dataset.state = mode;
+  ui.mic.setAttribute("aria-label", { recording: "Arrêter l'écoute", send: "Envoyer", idle: "Parler" }[mode]);
+  ui.mic.setAttribute("aria-pressed", String(recording));
+}
+
 function updateSpeakingState() {
   const speaking = isSpeaking();
-  if (ui.mic && !state.recorder) {
-    ui.mic.classList.toggle("stop-mode", speaking);
-    if (speaking) {
-      ui.mic.dataset.state = "stop";
-      ui.mic.setAttribute("aria-label", "Interrompre la voix de l'assistant");
-      ui.mic.setAttribute("title", "Interrompre la voix de l'assistant");
-    } else {
-      ui.mic.dataset.state = "idle";
-      ui.mic.setAttribute("aria-label", "Parler");
-      ui.mic.removeAttribute("title");
-    }
-  }
+  ui.voiceStop.hidden = !speaking;
   if (speaking) {
     if (!state.busy) setStatus("speaking", "L'assistant parle…");
     const targetBubble = state.speakingBubble || ui.log.querySelector(".msg.bot:last-of-type");
@@ -220,7 +228,6 @@ function updateSpeakingState() {
 function refreshControls() {
   const enabled = state.ready;
   ui.text.disabled = !enabled;
-  ui.send.disabled = !enabled;
   ui.mic.disabled = !enabled;
   if (enabled) {
     if (state.busy) {
@@ -234,6 +241,23 @@ function refreshControls() {
 }
 
 // ---- Connexion ----
+// Lien d'appairage (QR code du terminal) : #token=... (ou ?token=...) est mémorisé puis effacé de la barre d'adresse
+function consumePairingToken() {
+  const hash = new URLSearchParams(location.hash.slice(1));
+  const query = new URLSearchParams(location.search);
+  const token = hash.get("token") ?? query.get("token");
+  if (token === null) return;
+  if (token.trim()) {
+    store.set("token", token.trim());
+    store.set("session", null);
+  }
+  hash.delete("token");
+  query.delete("token");
+  const search = query.toString();
+  const rest = hash.toString();
+  history.replaceState(null, "", location.pathname + (search ? `?${search}` : "") + (rest ? `#${rest}` : ""));
+}
+
 function connect() {
   const scheme = location.protocol === "https:" ? "wss" : "ws";
   const ws = new WebSocket(`${scheme}://${location.host}/ws`);
@@ -248,7 +272,11 @@ function connect() {
   ws.addEventListener("message", (msg) => {
     let event;
     try { event = JSON.parse(msg.data); } catch { return; }
+    // Seule la fin d'un échange effacé compte encore : elle tient le compte des demandes en cours
+    if (state.droppedTurns.has(event.turn) && event.type !== "done") return;
+    state.eventTurn = event.turn ?? null;
     handleEvent(event);
+    state.eventTurn = null;
   });
 
   ws.addEventListener("close", (e) => {
@@ -370,8 +398,13 @@ function handleEvent(event) {
       if (ui.advanced.open && !ui.advancedForm.dataset.dirty) renderAdvanced();
       break;
     case "models":
-      state.models = event.models || [];
-      renderModelPicker(event.error);
+      state.modelsBy[event.provider] = event.models || [];
+      ensureModelsDatalist(event.provider);
+      // Le sélecteur de la fenêtre des réglages ne concerne que le fournisseur actif
+      if (event.provider === (state.llm?.provider || settingValue("LLM_PROVIDER"))) {
+        state.models = event.models || [];
+        renderModelPicker(event.error);
+      }
       break;
     case "settings_saved":
       onSettingsSaved(event);
@@ -419,19 +452,28 @@ function interruptAssistant() {
   if (state.busy || speaking) send({ type: "stop" });
 }
 
-function sendText(text) {
+function newTurn() {
+  state.turnCount += 1;
+  return `${Date.now().toString(36)}-${state.turnCount}`;
+}
+
+// `forget` : échanges à retirer de l'historique du serveur avant de répondre (relance d'un message)
+function sendText(text, forget = []) {
   interruptAssistant();
-  addBubble("user", text);
+  const turn = newTurn();
+  addBubble("user", text).dataset.turn = turn;
   state.busy += 1;
   refreshControls();
-  send({ type: "text", text, speak: ui.speak.checked });
+  send({ type: "text", text, speak: ui.speak.checked, turn, forget });
 }
 
 function sendAudio(wavBytes) {
+  const turn = newTurn();
   state.pendingUser = addBubble("user", "🎙️ …");
+  state.pendingUser.dataset.turn = turn;
   state.busy += 1;
   refreshControls();
-  send({ type: "audio", data: toBase64(wavBytes), speak: ui.speak.checked });
+  send({ type: "audio", data: toBase64(wavBytes), speak: ui.speak.checked, turn });
 }
 
 ui.textForm.addEventListener("submit", (e) => {
@@ -440,14 +482,176 @@ ui.textForm.addEventListener("submit", (e) => {
   const text = ui.text.value.trim();
   if (!text || !state.ready) return;
   ui.text.value = "";
+  updateMainButton();
   sendText(text);
 });
+
+ui.text.addEventListener("input", updateMainButton);
 
 ui.log.addEventListener("click", (e) => {
   const chip = e.target.closest(".hint-chip");
   if (!chip || !state.ready) return;
   unlockAudio();
   sendText(chip.textContent.trim());
+});
+
+ui.voiceStop.addEventListener("click", interruptAssistant);
+
+// ---- Appui long sur une bulle : supprimer, relancer, modifier ----
+const LONG_PRESS_MS = 500;
+const LONG_PRESS_TOLERANCE_PX = 10;
+let press = null;
+
+function cancelPress() {
+  clearTimeout(press?.timer);
+  press = null;
+}
+
+function menuBubble(target) {
+  const el = target.closest?.(".msg");
+  return el && (el.dataset.turn || el.classList.contains("error")) ? el : null;
+}
+
+ui.log.addEventListener("pointerdown", (e) => {
+  cancelPress();
+  const el = menuBubble(e.target);
+  if (!el || e.button !== 0) return;
+  press = { x: e.clientX, y: e.clientY, timer: setTimeout(() => {
+    press = null;
+    navigator.vibrate?.(15);
+    openMessageMenu(el);
+  }, LONG_PRESS_MS) };
+});
+ui.log.addEventListener("pointermove", (e) => {
+  if (press && Math.hypot(e.clientX - press.x, e.clientY - press.y) > LONG_PRESS_TOLERANCE_PX) cancelPress();
+});
+for (const name of ["pointerup", "pointercancel", "scroll"]) ui.log.addEventListener(name, cancelPress);
+
+// Clic droit, touche « menu », et appui long sur les navigateurs qui le signalent ainsi
+ui.log.addEventListener("contextmenu", (e) => {
+  const el = menuBubble(e.target);
+  if (!el) return;
+  e.preventDefault();
+  cancelPress();
+  openMessageMenu(el);
+});
+
+function turnElements(turn, selector = ".msg, .tool") {
+  return [...ui.log.querySelectorAll(selector)].filter((el) => el.dataset.turn === turn);
+}
+
+// Bulle de l'utilisateur dont on peut renvoyer le texte (un message vocal sans transcription n'en a pas)
+function relaunchSource(el) {
+  const [source] = turnElements(el.dataset.turn, ".msg.user");
+  return source && !source.textContent.startsWith("🎙️") ? source : null;
+}
+
+function openMessageMenu(el) {
+  if (ui.msgMenu.open || ui.msgEditor.open) return;
+  state.menuTarget = el;
+  const isBot = el.classList.contains("bot");
+  const canRelaunch = Boolean(el.dataset.turn && relaunchSource(el));
+  const canEdit = isBot ? !el.matches(".pending, .cut") : el.classList.contains("user") && canRelaunch;
+  ui.msgPreview.textContent = el.textContent;
+  ui.msgRelaunch.hidden = !canRelaunch;
+  ui.msgEdit.hidden = !canEdit;
+  ui.msgEdit.textContent = isBot ? "Modifier la réponse" : "Modifier et relancer";
+  ui.msgMenuNote.hidden = !canRelaunch && !canEdit;
+  ui.msgMenu.showModal();
+}
+
+function removeElements(elements) {
+  for (const el of elements) {
+    if (el === state.botBubble) state.botBubble = null;
+    if (el === state.pendingUser) state.pendingUser = null;
+    el.remove();
+  }
+  ui.empty.hidden = ui.log.querySelector(".msg, .tool") !== null;
+}
+
+// Efface ces éléments et retourne leurs échanges, à retirer aussi de l'historique du serveur
+function dropElements(elements) {
+  const turns = [...new Set(elements.map((el) => el.dataset.turn).filter(Boolean))];
+  turns.forEach((turn) => state.droppedTurns.add(turn));
+  removeElements(elements);
+  return turns;
+}
+
+function followingElements(el) {
+  const elements = [];
+  for (let next = el.nextElementSibling; next; next = next.nextElementSibling) {
+    if (next.matches(".msg, .tool")) elements.push(next);
+  }
+  return elements;
+}
+
+function relaunchFrom(el, text) {
+  const source = relaunchSource(el);
+  const content = text ?? source.textContent;
+  sendText(content, dropElements([source, ...followingElements(source)]));
+}
+
+function deleteMessage(el) {
+  const { turn } = el.dataset;
+  if (el.classList.contains("error")) {
+    removeElements([el]);
+  } else if (el.classList.contains("user")) {
+    if (state.busy) interruptAssistant();
+    removeElements([el]);
+    send({ type: "forget", turns: [turn], role: "user" });
+  } else {
+    // La réponse peut tenir sur plusieurs bulles, séparées par ses outils
+    const answer = turnElements(turn, ".msg.bot, .tool");
+    if (state.busy || answer.includes(state.speakingBubble)) interruptAssistant();
+    dropElements(answer);
+    send({ type: "forget", turns: [turn], role: "assistant" });
+  }
+}
+
+function openMessageEditor(el) {
+  const isBot = el.classList.contains("bot");
+  ui.msgEditorTitle.textContent = isBot ? "Modifier la réponse" : "Modifier le message";
+  ui.msgEditorSave.textContent = isBot ? "Enregistrer" : "Relancer";
+  ui.msgEditorText.value = isBot
+    ? turnElements(el.dataset.turn, ".msg.bot").map((b) => b.textContent).join("\n\n")
+    : el.textContent;
+  ui.msgEditor.showModal();
+}
+
+function saveEditedAnswer(el, text) {
+  const { turn } = el.dataset;
+  const [first, ...others] = turnElements(turn, ".msg.bot");
+  const answer = turnElements(turn);
+  interruptAssistant();
+  const forget = dropElements(followingElements(answer[answer.length - 1]));
+  removeElements(others);
+  first.textContent = text;
+  send({ type: "edit_answer", turn, text, forget });
+}
+
+ui.msgMenu.addEventListener("close", () => {
+  const el = state.menuTarget;
+  const action = ui.msgMenu.returnValue;
+  ui.msgMenu.returnValue = "";
+  if (!el?.isConnected) return;
+  if (action === "delete") deleteMessage(el);
+  else if (action === "relaunch") {
+    unlockAudio();
+    relaunchFrom(el);
+  } else if (action === "edit") openMessageEditor(el);
+});
+
+ui.msgEditor.addEventListener("close", () => {
+  const el = state.menuTarget;
+  const text = ui.msgEditorText.value.trim();
+  const save = ui.msgEditor.returnValue === "save";
+  ui.msgEditor.returnValue = "";
+  if (!save || !text || !el?.isConnected) return;
+  if (el.classList.contains("bot")) saveEditedAnswer(el, text);
+  else {
+    unlockAudio();
+    relaunchFrom(el, text);
+  }
 });
 
 // ---- Micro ----
@@ -457,10 +661,12 @@ ui.mic.addEventListener("click", async () => {
     stopRecording();
     return;
   }
-  if (isSpeaking()) {
-    interruptAssistant();
+  if (ui.text.value.trim()) {
+    ui.textForm.requestSubmit();
     return;
   }
+  // Parler pendant une réponse l'interrompt : le micro ne doit pas capter la voix de l'assistant
+  interruptAssistant();
   const cfg = state.audioConfig || {};
   const recorder = new Recorder({
     targetRate: cfg.sample_rate || 16000,
@@ -478,11 +684,7 @@ ui.mic.addEventListener("click", async () => {
     return;
   }
   state.recorder = recorder;
-  ui.mic.classList.remove("stop-mode");
-  ui.mic.dataset.state = "recording";
-  ui.mic.setAttribute("aria-label", "Arrêter l'écoute");
-  ui.mic.removeAttribute("title");
-  ui.mic.setAttribute("aria-pressed", "true");
+  updateMainButton();
   setStatus("busy", "J'écoute…");
 });
 
@@ -502,16 +704,7 @@ function stopRecording() {
   const recorder = state.recorder;
   if (!recorder) return;
   state.recorder = null;
-  const speaking = isSpeaking();
-  ui.mic.classList.toggle("stop-mode", speaking);
-  ui.mic.dataset.state = speaking ? "stop" : "idle";
-  ui.mic.setAttribute("aria-label", speaking ? "Interrompre la voix de l'assistant" : "Parler");
-  if (speaking) {
-    ui.mic.setAttribute("title", "Interrompre la voix de l'assistant");
-  } else {
-    ui.mic.removeAttribute("title");
-  }
-  ui.mic.setAttribute("aria-pressed", "false");
+  updateMainButton();
   const { wav, hadSpeech } = recorder.stop();
   refreshControls();
   if (hadSpeech) {
@@ -984,8 +1177,13 @@ function renderField(field) {
       input.value = field.kind === "list" ? field.value.join(", ") : field.value;
       if (field.kind === "model") {
         // Saisie libre complétée par les modèles connus
-        input.setAttribute("list", "models-datalist");
-        ensureModelsDatalist();
+        const provider = field.name.split("_")[0].toLowerCase();  // OLLAMA_MODEL, OPENROUTER_MODEL
+        input.setAttribute("list", `models-datalist-${provider}`);
+        ensureModelsDatalist(provider);
+        if (!state.modelsBy[provider]) {
+          state.modelsBy[provider] = [];  // demandé une seule fois par ouverture
+          send({ type: "list_models", provider });
+        }
       }
     }
     input.id = id;
@@ -1029,14 +1227,18 @@ function appendTag(el, field) {
   el.append(tag);
 }
 
-function ensureModelsDatalist() {
-  let list = $("models-datalist");
+function ensureModelsDatalist(provider) {
+  const id = `models-datalist-${provider}`;
+  let list = $(id);
   if (!list) {
     list = document.createElement("datalist");
-    list.id = "models-datalist";
+    list.id = id;
     document.body.append(list);
   }
-  list.replaceChildren(...state.models.map((m) => new Option(m.name)));
+  list.replaceChildren(...(state.modelsBy[provider] || []).map((m) => {
+    const caps = (m.capabilities || []).join(", ");
+    return new Option(caps ? `${m.name} · ${caps}` : m.name, m.name);
+  }));
 }
 
 // Valeur saisie si elle diffère de la valeur actuelle (sinon undefined)
@@ -1110,4 +1312,5 @@ if ("serviceWorker" in navigator && window.isSecureContext) {
   }).catch(() => { /* PWA non installable, l'appli fonctionne quand même */ });
 }
 
+consumePairingToken();
 connect();

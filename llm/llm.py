@@ -8,8 +8,9 @@ API publique conservée : ask_llm(), get_history(), clear_history(), add_history
 
 import re
 import sys
+from datetime import datetime
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Iterable, Optional
 
 # Inclusion de la racine du projet pour import autonome
 _ROOT_DIR = Path(__file__).resolve().parent.parent
@@ -37,9 +38,29 @@ Tu peux agir sur l'ordinateur et la maison grâce aux outils fournis.
 5. N'écris jamais le nom d'un outil dans ta réponse : appelle-le."""
 
 
+_WEEKDAYS = ("lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche")
+_MONTHS = ("janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août",
+           "septembre", "octobre", "novembre", "décembre")
+
+
+def current_datetime_line(now: Optional[datetime] = None) -> str:
+    """Date et heure locales en toutes lettres (la langue du prompt par défaut est le français)."""
+    now = now or datetime.now().astimezone()
+    return (f"Nous sommes le {_WEEKDAYS[now.weekday()]} {now.day} {_MONTHS[now.month - 1]} {now.year}, "
+            f"il est {now:%H:%M} (fuseau {now:%Z}).")
+
+
 def get_default_system_prompt(settings: Optional[Settings] = None, use_tags: Optional[bool] = None) -> str:
-    """Retourne le prompt système enrichi : liste des tags d'actions (mode tags) ou consignes d'outils (mode natif)."""
+    """Prompt système complet : consignes de base, date et heure courantes, puis outils (voir `_tools_prompt`)."""
     s = settings or get_settings()
+    prompt = _tools_prompt(s, use_tags)
+    if s.LLM_INJECT_DATETIME:
+        prompt = f"{prompt.rstrip()}\n\n{current_datetime_line()}"
+    return prompt
+
+
+def _tools_prompt(s: Settings, use_tags: Optional[bool]) -> str:
+    """Prompt système enrichi : liste des tags d'actions (mode tags) ou consignes d'outils (mode natif)."""
     if use_tags is None:
         use_tags = s.LLM_TOOL_CALLING == "tags"
     if not s.ACTIONS_DYNAMIC_PROMPT:
@@ -75,6 +96,8 @@ class Conversation:
         self._tools = tools
         self.max_messages = self.settings.LLM_HISTORY_MESSAGES
         self.history: list[dict] = []
+        # Messages sortis de la fenêtre : ils y reviennent si une suppression ou une relance y refait de la place
+        self.older: list[dict] = []
         # "auto" bascule définitivement sur "tags" si le modèle refuse les outils
         self.tool_mode = self.settings.LLM_TOOL_CALLING
         self.last_tool_results: list[ToolResult] = []
@@ -100,19 +123,45 @@ class Conversation:
             self._provider = LLM_PROVIDERS.create(self.settings.LLM_PROVIDER, self.settings)
         return self._provider
 
-    def add_message(self, role: str, content: str):
-        """Ajoute un message à l'historique et tronque selon LLM_HISTORY_MESSAGES."""
+    def add_message(self, role: str, content: str, turn: Optional[str] = None):
+        """Ajoute un message à l'historique et tronque selon LLM_HISTORY_MESSAGES.
+        `turn` identifie l'échange côté client (suppression ou relance d'un message)."""
         if self.max_messages <= 0:
             return
-        self.history.append({"role": role, "content": content})
-        if len(self.history) > self.max_messages:
-            del self.history[:-self.max_messages]
+        self.history.append({"role": role, "content": content, **({"turn": turn} if turn else {})})
+        self._fit_window()
+
+    def _fit_window(self):
+        """Répartit les messages entre la fenêtre envoyée au LLM (`history`) et les plus anciens (`older`)."""
+        messages = self.older + self.history
+        split = max(len(messages) - self.max_messages, 0)
+        if split:
             # La fenêtre doit commencer par un tour utilisateur (sinon l'échange est coupé en deux)
-            while self.history and self.history[0]["role"] != "user":
-                self.history.pop(0)
+            while split < len(messages) and messages[split]["role"] != "user":
+                split += 1
+        self.older = messages[:split]
+        self.history[:] = messages[split:]
 
     def clear(self):
         self.history.clear()
+        self.older.clear()
+
+    def forget(self, turns: Iterable[str], role: Optional[str] = None):
+        """Retire les messages de ces échanges (seulement ceux de `role` s'il est précisé)."""
+        turns = set(turns)
+
+        def kept(messages: list[dict]) -> list[dict]:
+            return [m for m in messages if m.get("turn") not in turns or (role and m["role"] != role)]
+
+        self.older = kept(self.older)
+        self.history[:] = kept(self.history)
+        self._fit_window()
+
+    def edit_answer(self, turn: str, text: str):
+        """Remplace la réponse de l'assistant pour cet échange."""
+        for message in self.older + self.history:
+            if message.get("turn") == turn and message["role"] == "assistant":
+                message["content"] = text
 
     def ask(
         self,
@@ -126,6 +175,7 @@ class Conversation:
         use_tools: bool = True,
         on_token: Optional[Callable[[str], None]] = None,
         on_tool: Optional[Callable[[ToolResult], None]] = None,
+        turn: Optional[str] = None,
     ) -> str:
         """Envoie un prompt texte ou un enregistrement audio et retourne la réponse (ou un message ⚠️ en cas d'erreur).
         `on_token` reçoit les fragments en streaming (affichage console par défaut), `on_tool` chaque outil exécuté."""
@@ -133,12 +183,12 @@ class Conversation:
         think = self.settings.LLM_THINK if think is None else think
         self.last_tool_results = []
         if use_tools and self.provider.is_decision_model(model):
-            return self._decide(prompt, audio_bytes, use_history, on_tool)
+            return self._decide(prompt, audio_bytes, use_history, on_tool, turn)
 
         def build_messages(use_tags: bool) -> list[dict]:
             messages = [{"role": "system", "content": system_prompt or get_default_system_prompt(self.settings, use_tags)}]
             if use_history:
-                messages.extend(self.history)
+                messages.extend({"role": m["role"], "content": m["content"]} for m in self.history)
             messages.append({"role": "user", "content": prompt or ""})
             return messages
 
@@ -172,11 +222,11 @@ class Conversation:
         full_text = _THINK_TAGS.sub("", full_text).strip()
 
         if use_history and full_text:
-            self.add_message("user", prompt or ("🎙️ [Message vocal]" if audio_bytes else ""))
-            self.add_message("assistant", full_text)
+            self.add_message("user", prompt or ("🎙️ [Message vocal]" if audio_bytes else ""), turn)
+            self.add_message("assistant", full_text, turn)
         return full_text
 
-    def _decide(self, prompt, audio_bytes, use_history: bool, on_tool) -> str:
+    def _decide(self, prompt, audio_bytes, use_history: bool, on_tool, turn: Optional[str] = None) -> str:
         """Modèle de décision : choix et exécution de la commande, puis réponse type (voir llm/decision.py)."""
         from llm.decision import run_decision
         if audio_bytes and not prompt:
@@ -189,8 +239,8 @@ class Conversation:
             return err_str
         print(f"🤖 {text}")
         if use_history:
-            self.add_message("user", prompt)
-            self.add_message("assistant", text)
+            self.add_message("user", prompt, turn)
+            self.add_message("assistant", text, turn)
         return text
 
     def _run(self, messages: list[dict], native: bool, options: dict) -> str:
