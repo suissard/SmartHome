@@ -1,9 +1,10 @@
 """
 Module d'action pour la gestion du volume audio (Volume, Mute, Unmute).
-Contient les métadonnées et le script bash embarqué.
+Contient les métadonnées et le script d'exécution embarqué (Linux et Windows).
 """
 
-from typing import List
+import sys
+from typing import List, Tuple
 from actions.base import BaseAction, percent_choices
 
 _VOLUME_SCRIPT = r"""
@@ -22,7 +23,6 @@ if command -v pactl >/dev/null 2>&1; then
             pactl set-sink-mute @DEFAULT_SINK@ toggle
             ;;
         up|+*)
-            # Démute automatiquement lors de l'augmentation du volume
             pactl set-sink-mute @DEFAULT_SINK@ 0
             pactl set-sink-volume @DEFAULT_SINK@ +5%
             ;;
@@ -63,36 +63,35 @@ elif command -v wpctl >/dev/null 2>&1; then
                 if [ "$val" -gt 0 ]; then
                     wpctl set-mute @DEFAULT_AUDIO_SINK@ 0
                 fi
-                frac=$(awk "BEGIN {print $val/100}")
-                wpctl set-volume @DEFAULT_AUDIO_SINK@ "$frac"
+                wpctl set-volume @DEFAULT_AUDIO_SINK@ "${val}%"
             fi
             ;;
     esac
 elif command -v amixer >/dev/null 2>&1; then
     case "$TARGET" in
         mute)
-            amixer set Master mute
+            amixer -q set Master mute
             ;;
         unmute)
-            amixer set Master unmute
+            amixer -q set Master unmute
             ;;
         toggle)
-            amixer set Master toggle
+            amixer -q set Master toggle
             ;;
         up|+*)
-            amixer set Master unmute
-            amixer set Master 5%+
+            amixer -q set Master unmute
+            amixer -q set Master 5%+
             ;;
         down|-*)
-            amixer set Master 5%-
+            amixer -q set Master 5%-
             ;;
         *)
             val="${TARGET%%%}"
             if [[ "$val" =~ ^[0-9]+$ ]]; then
                 if [ "$val" -gt 0 ]; then
-                    amixer set Master unmute
+                    amixer -q set Master unmute
                 fi
-                amixer set Master "${val}%"
+                amixer -q set Master "${val}%"
             fi
             ;;
     esac
@@ -101,6 +100,47 @@ else
     exit 1
 fi
 """
+
+
+def _windows_volume(target: str) -> Tuple[int, str, str]:
+    target = (target or "").strip().lower()
+    import ctypes
+    user32 = ctypes.windll.user32
+    VK_MUTE = 0xAD
+    VK_DOWN = 0xAE
+    VK_UP = 0xAF
+
+    def press(vk: int, times: int = 1):
+        for _ in range(times):
+            user32.keybd_event(vk, 0, 0, 0)
+            user32.keybd_event(vk, 0, 2, 0)
+
+    try:
+        if target in ("mute", "unmute", "toggle"):
+            press(VK_MUTE)
+            msg = "Son coupé" if target == "mute" else ("Son réactivé" if target == "unmute" else "Son basculé")
+            print(f"✅ [ACTIONS] [Windows] {msg}")
+            return 0, msg, ""
+        elif target in ("up", "+", "plus", "monte", "monter", "augmente", "augmenter"):
+            press(VK_UP, 4)
+            print("✅ [ACTIONS] [Windows] Volume augmenté")
+            return 0, "Volume augmenté", ""
+        elif target in ("down", "-", "moins", "baisse", "baisser", "diminue", "diminuer"):
+            press(VK_DOWN, 4)
+            print("✅ [ACTIONS] [Windows] Volume diminué")
+            return 0, "Volume diminué", ""
+        elif target.rstrip("%").isdigit():
+            val = max(0, min(100, int(target.rstrip("%"))))
+            press(VK_DOWN, 50)
+            press(VK_UP, val // 2)
+            msg = f"Volume réglé à {val}%"
+            print(f"✅ [ACTIONS] [Windows] {msg}")
+            return 0, msg, ""
+        else:
+            return 1, "", f"Commande de volume inconnue : '{target}'"
+    except Exception as e:
+        print(f"❌ [ACTIONS] [Windows] Exception volume : {e}")
+        return -1, "", str(e)
 
 
 class VolumeAction(BaseAction):
@@ -123,6 +163,18 @@ class VolumeAction(BaseAction):
         target = (args or "").strip() or "toggle"
         return [target]
 
+    def execute_sync_windows(self, args: str = "", timeout: float = 10.0) -> Tuple[int, str, str]:
+        cmd_args = self.build_args(args)
+        target = cmd_args[0] if cmd_args else "toggle"
+        return _windows_volume(target)
+
+    def execute_windows(self, args: str = "", dry_run: bool = False) -> bool:
+        if dry_run:
+            print(f"🔍 [ACTIONS] [DRY RUN] [Windows] Volume {args}")
+            return True
+        code, out, err = self.execute_sync_windows(args)
+        return code == 0
+
 
 class MuteAction(BaseAction):
     def __init__(self):
@@ -138,6 +190,16 @@ class MuteAction(BaseAction):
 
     def build_args(self, args: str = "") -> List[str]:
         return ["mute"]
+
+    def execute_sync_windows(self, args: str = "", timeout: float = 10.0) -> Tuple[int, str, str]:
+        return _windows_volume("mute")
+
+    def execute_windows(self, args: str = "", dry_run: bool = False) -> bool:
+        if dry_run:
+            print("🔍 [ACTIONS] [DRY RUN] [Windows] Mute")
+            return True
+        code, out, err = self.execute_sync_windows(args)
+        return code == 0
 
 
 class UnmuteAction(BaseAction):
@@ -155,12 +217,22 @@ class UnmuteAction(BaseAction):
     def build_args(self, args: str = "") -> List[str]:
         return ["unmute"]
 
+    def execute_sync_windows(self, args: str = "", timeout: float = 10.0) -> Tuple[int, str, str]:
+        return _windows_volume("unmute")
+
+    def execute_windows(self, args: str = "", dry_run: bool = False) -> bool:
+        if dry_run:
+            print("🔍 [ACTIONS] [DRY RUN] [Windows] Unmute")
+            return True
+        code, out, err = self.execute_sync_windows(args)
+        return code == 0
+
 
 ACTIONS = [VolumeAction(), MuteAction(), UnmuteAction()]
 
 
 if __name__ == "__main__":
-    print("🧪 [DEBUG] Test du module actions/definitions/volume.py")
+    print("🧪 [DEBUG] Test du module actions/modules/volume.py")
     for act in ACTIONS:
         code, out, err = act.execute_sync()
-        print(f"Action [{act.tag}] -> code: {code}")
+        print(f"Action [{act.tag}] -> code: {code}, out: {out}")

@@ -1,6 +1,7 @@
 """
 Base d'abstraction pour les actions système de SmartHome.
 Chaque action hérite de BaseAction et encapsule ses métadonnées et son script d'exécution embarqué.
+Prend en charge Linux (bash) et Windows (PowerShell / Win32).
 """
 
 from dataclasses import dataclass, field
@@ -8,8 +9,21 @@ import os
 import re
 import shlex
 import subprocess
+import sys
 from pathlib import Path
 from typing import Dict, Optional, List, Tuple
+
+if sys.platform == "win32":
+    if hasattr(sys.stdout, "reconfigure"):
+        try:
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+    if hasattr(sys.stderr, "reconfigure"):
+        try:
+            sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
 
 
 def percent_choices(up: str, down: str) -> Dict[str, str]:
@@ -25,6 +39,7 @@ class BaseAction:
     tag: str
     description: str
     script_code: str = ""
+    script_code_windows: str = ""
     has_args: bool = False
     args_hint: str = ""
     example_prompt: str = ""
@@ -77,7 +92,7 @@ class BaseAction:
         return None
 
     def build_args(self, args: str = "") -> List[str]:
-        """Découpe les arguments passés pour le script bash. Peut être surchargé."""
+        """Découpe les arguments passés pour le script bash ou powershell. Peut être surchargé."""
         args_clean = (args or "").strip()
         if not args_clean:
             return []
@@ -87,13 +102,16 @@ class BaseAction:
             return args_clean.split()
 
     def execute(self, args: str = "", dry_run: bool = False) -> bool:
-        """Exécute le script bash embarqué de manière asynchrone non-bloquante."""
+        """Exécute l'action de manière asynchrone non-bloquante."""
+        if dry_run:
+            print(f"🔍 [ACTIONS] [DRY RUN] Tag [{self.tag}] avec args: {args}")
+            return True
+
+        if sys.platform == "win32":
+            return self.execute_windows(args, dry_run=dry_run)
+
         cmd_args = self.build_args(args)
         cmd_exec = ["bash", "-c", self.script_code, "_"] + cmd_args
-
-        if dry_run:
-            print(f"🔍 [ACTIONS] [DRY RUN] Tag [{self.tag}] avec args: {cmd_args}")
-            return True
 
         if not self.script_code.strip():
             print(f"⚠️ [ACTIONS] Aucun script défini pour [{self.tag}]")
@@ -109,18 +127,52 @@ class BaseAction:
             )
             return True
         except Exception as e:
-            print(f"⚠️ [ACTIONS] Erreur lors de l'exécution de [{self.tag}] : {e}")
+            print(f"❌ [ACTIONS] Erreur lors de l'exécution de [{self.tag}] : {e}")
             return False
 
     def execute_sync(self, args: str = "", timeout: float = 10.0) -> Tuple[int, str, str]:
-        """Exécute le script bash de manière synchrone (utile pour les tests et le diagnostic)."""
+        """Exécute l'action de manière synchrone."""
+        if sys.platform == "win32":
+            return self.execute_sync_windows(args, timeout=timeout)
+
         cmd_args = self.build_args(args)
         cmd_exec = ["bash", "-c", self.script_code, "_"] + cmd_args
 
         try:
+            print(f"🚀 [ACTIONS] Exécution synchrone [{self.tag}] (args: {cmd_args})")
             res = subprocess.run(cmd_exec, capture_output=True, text=True, timeout=timeout)
+            if res.returncode == 0:
+                print(f"✅ [ACTIONS] [{self.tag}] Succès : {res.stdout.strip() or 'OK'}")
+            else:
+                print(f"❌ [ACTIONS] [{self.tag}] Échec (code {res.returncode}) : {(res.stderr or res.stdout).strip()}")
             return res.returncode, res.stdout, res.stderr
         except Exception as e:
+            print(f"❌ [ACTIONS] Erreur lors de l'exécution de [{self.tag}] : {e}")
+            return -1, "", str(e)
+
+    def execute_windows(self, args: str = "", dry_run: bool = False) -> bool:
+        """Exécution asynchrone par défaut sous Windows."""
+        code, out, err = self.execute_sync_windows(args, timeout=10.0)
+        return code == 0
+
+    def execute_sync_windows(self, args: str = "", timeout: float = 10.0) -> Tuple[int, str, str]:
+        """Exécution synchrone par défaut sous Windows via PowerShell."""
+        if not self.script_code_windows.strip():
+            print(f"⚠️ [ACTIONS] Action [{self.tag}] non prise en charge sous Windows.")
+            return -1, "", f"Action [{self.tag}] non prise en charge sous Windows."
+
+        cmd_args = self.build_args(args)
+        ps_cmd = ["powershell", "-NoProfile", "-NonInteractive", "-Command", self.script_code_windows] + cmd_args
+        try:
+            print(f"🚀 [ACTIONS] [Windows] Exécution [{self.tag}] (args: {cmd_args})")
+            res = subprocess.run(ps_cmd, capture_output=True, text=True, timeout=timeout)
+            if res.returncode == 0:
+                print(f"✅ [ACTIONS] [{self.tag}] Succès : {res.stdout.strip() or 'OK'}")
+            else:
+                print(f"❌ [ACTIONS] [{self.tag}] Échec (code {res.returncode}) : {(res.stderr or res.stdout).strip()}")
+            return res.returncode, res.stdout, res.stderr
+        except Exception as e:
+            print(f"❌ [ACTIONS] Erreur Windows [{self.tag}] : {e}")
             return -1, "", str(e)
 
 
@@ -129,13 +181,14 @@ CommandDefinition = BaseAction
 
 
 if __name__ == "__main__":
-    print("🧪 [DEBUG] Test de BaseAction avec script embarqué")
+    print("🧪 [DEBUG] Test de BaseAction")
     sample_action = BaseAction(
         tag="ECHO_TEST",
         description="Action de test echo",
         script_code='echo "Hello from action: $1, $2"',
+        script_code_windows='Write-Output "Hello from action: $args"',
         has_args=True
     )
     print(f"Action : [{sample_action.tag}]")
     code, out, err = sample_action.execute_sync("world 42")
-    print(f"Code : {code} | Sortie : {out.strip()}")
+    print(f"Code : {code} | Sortie : {out.strip()} | Erreur : {err.strip()}")

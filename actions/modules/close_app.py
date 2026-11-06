@@ -3,7 +3,7 @@ Module d'action pour fermer proprement une application autorisée (SIGTERM, jama
 Réutilise la liste blanche de [OPEN] (ACTIONS_OPEN_ALLOWED_APPS).
 """
 
-from typing import List
+from typing import List, Tuple
 from actions.base import BaseAction
 from core.config import ACTIONS_OPEN_ALLOWED_APPS
 
@@ -47,6 +47,29 @@ class CloseAppAction(BaseAction):
             print(f"⛔ [ACTIONS] Application non autorisée pour [CLOSE] : '{args}' (voir ACTIONS_OPEN_ALLOWED_APPS)")
             return []
         return [app]
+
+    def execute_sync_windows(self, args: str = "", timeout: float = 10.0) -> Tuple[int, str, str]:
+        cmd_args = self.build_args(args)
+        if not cmd_args:
+            return 1, "", f"Application non autorisée ou invalide : '{args}'"
+        app = cmd_args[0].lower().strip()
+        app_target = app if app.endswith(".exe") else f"{app}.exe"
+        try:
+            import subprocess
+            print(f"🚀 [ACTIONS] [Windows] Fermeture de l'application '{app_target}'...")
+            res = subprocess.run(["taskkill", "/IM", app_target, "/F"], capture_output=True, text=True, timeout=timeout)
+            if res.returncode == 0:
+                print(f"✅ [ACTIONS] [Windows] Application '{app_target}' fermée.")
+                return 0, f"{app} fermé", ""
+            return res.returncode, res.stdout, res.stderr
+        except Exception as e:
+            return -1, "", str(e)
+
+    def execute_windows(self, args: str = "", dry_run: bool = False) -> bool:
+        if dry_run:
+            return True
+        code, out, err = self.execute_sync_windows(args)
+        return code == 0
 
 
 ACTIONS = [CloseAppAction()]

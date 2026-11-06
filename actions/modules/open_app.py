@@ -3,7 +3,7 @@ Module d'action pour le lancement d'applications installées.
 Contient les métadonnées et le script bash multi-environnements embarqué.
 """
 
-from typing import List
+from typing import List, Tuple
 from actions.base import BaseAction
 from core.config import ACTIONS_OPEN_ALLOWED_APPS
 
@@ -130,6 +130,41 @@ class OpenAppAction(BaseAction):
             print(f"⛔ [ACTIONS] Application non autorisée pour [OPEN] : '{app}' (voir ACTIONS_OPEN_ALLOWED_APPS)")
             return []
         return [app]
+
+    def execute_sync_windows(self, args: str = "", timeout: float = 10.0) -> Tuple[int, str, str]:
+        cmd_args = self.build_args(args)
+        if not cmd_args:
+            return 1, "", f"Application non autorisée ou invalide : '{args}'"
+        app = cmd_args[0].lower().strip()
+        app_map = {
+            "navigateur": "chrome", "browser": "chrome", "chrome": "chrome", "google chrome": "chrome",
+            "edge": "msedge", "code": "code", "vscode": "code",
+            "terminal": "wt", "console": "powershell",
+            "fichiers": "explorer", "explorateur": "explorer", "files": "explorer",
+            "calculatrice": "calc", "calc": "calc",
+            "musique": "spotify",
+            "paramètres": "ms-settings:", "parametres": "ms-settings:", "settings": "ms-settings:",
+        }
+        target = app_map.get(app, app)
+        try:
+            print(f"🚀 [ACTIONS] [Windows] Lancement de l'application '{target}'...")
+            if target.startswith("ms-settings:"):
+                import os
+                os.startfile(target)
+            else:
+                import subprocess
+                subprocess.Popen(["cmd", "/c", "start", "", target], shell=True)
+            print(f"✅ [ACTIONS] [Windows] Application '{target}' lancée.")
+            return 0, f"Application {app} lancée", ""
+        except Exception as e:
+            print(f"❌ [ACTIONS] [Windows] Erreur ouverture {target} : {e}")
+            return -1, "", str(e)
+
+    def execute_windows(self, args: str = "", dry_run: bool = False) -> bool:
+        if dry_run:
+            return True
+        code, out, err = self.execute_sync_windows(args)
+        return code == 0
 
 
 ACTIONS = [OpenAppAction()]

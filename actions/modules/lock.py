@@ -1,8 +1,11 @@
 """
 Module d'action pour le verrouillage de session utilisateur.
-Contient les métadonnées et le script bash multi-environnements embarqué.
+Contient les métadonnées et le script de verrouillage (Linux et Windows).
 """
 
+import subprocess
+import sys
+from typing import Tuple
 from actions.base import BaseAction
 
 _LOCK_SCRIPT = r"""
@@ -56,10 +59,30 @@ class LockAction(BaseAction):
             example_response="[LOCK] Session verrouillée."
         )
 
+    def execute_sync_windows(self, args: str = "", timeout: float = 10.0) -> Tuple[int, str, str]:
+        try:
+            import ctypes
+            print("🚀 [ACTIONS] [Windows] Verrouillage de la session utilisateur...")
+            ok = ctypes.windll.user32.LockWorkStation()
+            if ok:
+                print("✅ [ACTIONS] [Windows] Session verrouillée avec succès.")
+                return 0, "Session verrouillée", ""
+            return 1, "", "Échec du verrouillage de la session"
+        except Exception as e:
+            print(f"❌ [ACTIONS] [Windows] Exception lock : {e}")
+            return -1, "", str(e)
+
+    def execute_windows(self, args: str = "", dry_run: bool = False) -> bool:
+        if dry_run:
+            print("🔍 [ACTIONS] [DRY RUN] [Windows] Verrouillage simulé")
+            return True
+        code, out, err = self.execute_sync_windows(args)
+        return code == 0
+
 
 ACTIONS = [LockAction()]
 
 
 if __name__ == "__main__":
-    print("🧪 [DEBUG] Test du module actions/definitions/lock.py")
+    print("🧪 [DEBUG] Test du module actions/modules/lock.py")
     print(f"Action : [{ACTIONS[0].tag}] chargée avec succès.")

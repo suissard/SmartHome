@@ -3,7 +3,8 @@ Module d'action pour l'affichage de notifications sur le bureau.
 Contient les métadonnées et le script bash embarqué.
 """
 
-from typing import List
+from typing import List, Tuple
+import subprocess
 from actions.base import BaseAction
 
 _NOTIFY_SCRIPT = r"""
@@ -64,6 +65,36 @@ class NotifyAction(BaseAction):
     def build_args(self, args: str = "") -> List[str]:
         msg = (args or "").strip()
         return [msg] if msg else []
+
+    def execute_sync_windows(self, args: str = "", timeout: float = 10.0) -> Tuple[int, str, str]:
+        msg = (args or "").strip()
+        if not msg:
+            return 1, "", "Usage : notify <message>"
+        try:
+            print(f"🔔 [NOTIFY] [Windows] {msg}")
+            import base64
+            b64_msg = base64.b64encode(msg.encode("utf-8")).decode("ascii")
+            ps = (
+                "[reflection.assembly]::loadwithpartialname('System.Windows.Forms') | Out-Null\n"
+                "$n = New-Object System.Windows.Forms.NotifyIcon\n"
+                "$n.Icon = [System.Drawing.SystemIcons]::Information\n"
+                "$n.Visible = $true\n"
+                f"$text = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('{b64_msg}'))\n"
+                "$n.ShowBalloonTip(5000, 'SmartHome', $text, [System.Windows.Forms.ToolTipIcon]::Info)\n"
+                "Start-Sleep -Seconds 1\n"
+                "$n.Dispose()\n"
+            )
+            encoded = base64.b64encode(ps.encode("utf-16le")).decode("ascii")
+            subprocess.Popen(["powershell", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded])
+            return 0, f"Notification envoyée : {msg}", ""
+        except Exception as e:
+            return -1, "", str(e)
+
+    def execute_windows(self, args: str = "", dry_run: bool = False) -> bool:
+        if dry_run:
+            return True
+        code, out, err = self.execute_sync_windows(args)
+        return code == 0
 
 
 ACTIONS = [NotifyAction()]

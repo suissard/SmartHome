@@ -103,6 +103,8 @@ SmartHome/
 
 Un script installe tout : paquets système, environnement Python, dépendances, `.env`, modèles (openWakeWord, Whisper, Ollama) et, en option, le démarrage automatique. Il peut être relancé sans risque (le `.env` existant est conservé).
 
+Dans un terminal, il pose d'abord quelques questions aux flèches (comme le menu de `./start.sh`, `←` pour revenir en arrière) afin de n'installer que le nécessaire : type de machine (poste vocal ou serveur), profil d'architecture, Ollama (à installer, déjà présent, sur une autre machine ou inutile pour le profil choisi), paquets système, téléchargement des modèles, démarrage automatique. Un récapitulatif est affiché avant toute installation. Avec `-y` ou `--no-menu`, il s'appuie sur les options et le `.env` sans rien demander.
+
 **Linux / macOS** (Debian/Ubuntu, Fedora, Arch, openSUSE, Homebrew) :
 
 ```bash
@@ -133,9 +135,10 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1
 | `--no-system-deps` / `-NoSystemDeps` | Ne rien installer au niveau système |
 | `--no-ollama` / `-NoOllama` | Ni Ollama ni modèle LLM (ex : `LLM_PROVIDER=openrouter`) |
 | `--no-models` / `-NoModels` | Aucun téléchargement de modèle |
-| `-y` / `-Yes` | Répondre oui à tout (installation non interactive) |
+| `--no-menu` / `-NoMenu` | Pas de questions pas à pas (options et `.env` seulement) |
+| `-y` / `-Yes` | Répondre oui à tout (installation non interactive, sans questions) |
 
-Les modèles Ollama téléchargés sont ceux du `.env` (`OLLAMA_MODEL`, et `OLLAMA_STT_MODEL` / `OLLAMA_TTS_MODEL` si ces fournisseurs sont choisis) : modifiez-le avant de relancer le script pour en changer.
+Les options servent de réponses par défaut aux questions ; les `--no-*` suppriment la question correspondante. Sans questions, les modèles Ollama téléchargés sont ceux du `.env` et du profil actif (`OLLAMA_MODEL`, et `OLLAMA_STT_MODEL` / `OLLAMA_TTS_MODEL` si ces fournisseurs sont choisis).
 
 > ⚠️ Sous Windows, l'assistant, la voix et la passerelle fonctionnent, mais les actions système (volume, verrouillage, applications…) et le ducking reposent sur des scripts bash et `pactl` propres à Linux.
 
@@ -198,7 +201,8 @@ Cinq profils prêts à l'emploi dans `profiles/` ; ils surchargent `.env` (les s
 
 | Profil | Écoute (STT) | Cerveau (LLM) | Voix (TTS) |
 |---|---|---|---|
-| `mix` (défaut) | lfm3-audio (Ollama) | DeepSeek V4 Flash (OpenRouter) | lfm3-audio (Ollama) |
+| `hybrid` (défaut) | Whisper local | DeepSeek V4 Flash (OpenRouter) | Piper local |
+| `mix` | lfm3-audio (Ollama) | DeepSeek V4 Flash (OpenRouter) | lfm3-audio (Ollama) |
 | `local-gemma` | gemma4:12b (audio direct) | gemma4:12b | Piper |
 | `local-lfm` | lfm3-audio (audio direct) | lfm3-audio | lfm3-audio |
 | `local-decision` | Whisper | nimble (modèle de décision) | Piper |
@@ -207,7 +211,7 @@ Cinq profils prêts à l'emploi dans `profiles/` ; ils surchargent `.env` (les s
 ```bash
 ./start.sh                      # menu aux flèches, placé sur le dernier profil choisi (Entrée pour valider)
 ./start.sh --setup              # configuration pas à pas : quelques questions, crée le profil perso
-./start.sh --no-menu            # pas de menu : reprend le dernier profil choisi (mix la première fois)
+./start.sh --no-menu            # pas de menu : reprend le dernier profil choisi (hybrid la première fois)
 ./start.sh --profile cloud      # ou SMARTHOME_PROFILE=cloud, ou python main.py --profile cloud
 python -m core.profiles         # liste les profils
 ```

@@ -3,7 +3,7 @@ Profils de configuration de SmartHome (dossier `profiles/`).
 
 Un profil est un fichier `profiles/<nom>.env` qui ne contient que les réglages propres à une
 architecture (fournisseurs, modèles). Ordre de priorité des valeurs :
-variables d'environnement > profil > `.env` > valeurs par défaut.
+profil / réglages utilisateur > variables de la machine (os.environ) > valeurs par défaut.
 Les secrets (OPENROUTER_API_KEY, jetons) restent dans `.env`.
 Un réglage du profil modifié depuis l'interface web va dans `profiles/<nom>.local.env` (non versionné),
 qui complète le profil sans modifier le fichier livré.
@@ -23,7 +23,7 @@ from dotenv import dotenv_values
 from core.menu import Option, answered, choose
 
 PROFILES_DIR = Path(__file__).resolve().parent.parent / "profiles"
-DEFAULT_PROFILE = "mix"
+DEFAULT_PROFILE = "hybrid"
 PROFILE_ENV_VAR = "SMARTHOME_PROFILE"
 LAST_PROFILE_FILE = ".last"
 
@@ -81,10 +81,8 @@ def profile_values(name: Optional[str] = None) -> dict[str, str]:
 
 
 def shadowed_by_environment(name: Optional[str] = None) -> dict[str, str]:
-    """Réglages du profil masqués par une variable d'environnement de valeur différente ({variable: valeur de l'environnement}).
-    Typique : un `source .env` dans le terminal, dont les variables exportées l'emportent sur le profil."""
-    return {k: os.environ[k] for k, v in profile_values(name).items()
-            if (os.environ.get(k) or "").strip() and os.environ[k] != v}
+    """Réglages du profil masqués par une variable d'environnement (vide : le profil supplante la machine)."""
+    return {}
 
 
 def warn_shadowed_profile():

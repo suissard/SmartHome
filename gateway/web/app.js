@@ -13,7 +13,7 @@ const ui = {
   msgMenu: $("msg-menu"), msgPreview: $("msg-preview"), msgRelaunch: $("msg-relaunch"), msgEdit: $("msg-edit"), msgMenuNote: $("msg-menu-note"),
   msgEditor: $("msg-editor"), msgEditorTitle: $("msg-editor-title"), msgEditorText: $("msg-editor-text"), msgEditorSave: $("msg-editor-save"),
   settings: $("settings"), speak: $("speak"), autostop: $("autostop"), sessionId: $("session-id"),
-  confirm: $("confirm"), confirmQuestion: $("confirm-question"), confirmBar: $("confirm-bar"), confirmTimerText: $("confirm-timer-text"),
+  confirm: $("confirm"), confirmQuestion: $("confirm-question"), confirmBar: $("confirm-bar"), confirmTimerText: $("confirm-timer-text"), confirmMicBtn: $("confirm-mic-btn"), confirmVoiceStatus: $("confirm-voice-status"),
   modelBadge: $("model-badge"), modelCurrent: $("model-current"), modelOllama: $("model-ollama"),
   modelSelect: $("model-select"), modelDecision: $("model-decision"), modelMsg: $("model-msg"),
   advanced: $("advanced"), advancedForm: $("advanced-form"), advancedFields: $("advanced-fields"), advancedMsg: $("advanced-msg"), advancedBack: $("advanced-back"),
@@ -348,6 +348,22 @@ function handleEvent(event) {
       state.botBubble?.classList.remove("pending");
       state.botBubble = null;
       addToolChip(event);
+      break;
+    case "toast":
+      showToast(event.message, event.kind || "warn");
+      break;
+    case "confirm_dismiss":
+      if (ui.confirm.open) {
+        clearInterval(confirmTimer);
+        clearInterval(confirmSpeechCheckTimer);
+        confirmSpeechCheckTimer = null;
+        if (state.recorder) {
+          state.recorder.stop();
+          state.recorder = null;
+        }
+        delete ui.confirm.dataset.requestId;
+        ui.confirm.close(event.accepted ? "yes" : "no");
+      }
       break;
     case "confirm_request":
       askConfirmation(event);
@@ -782,6 +798,7 @@ function stopPlayback() {
 
 // ---- Confirmation ----
 let confirmTimer = null;
+let confirmSpeechCheckTimer = null;
 let confirmElapsed = 0;
 let confirmPaused = false;
 let confirmTotalMs = 20000;
@@ -791,16 +808,93 @@ function updateConfirmDisplay() {
   const remainingMs = Math.max(0, confirmTotalMs - confirmElapsed);
   const leftFrac = remainingMs / confirmTotalMs;
   ui.confirmBar.style.transform = `scaleX(${leftFrac})`;
-  const seconds = Math.ceil(remainingMs / 1000);
+
   if (ui.confirmTimerText) {
+    const seconds = Math.ceil(remainingMs / 1000);
     if (confirmPaused) {
       ui.confirmTimerText.textContent = `Décompte en pause (${seconds} s restantes)`;
     } else {
       ui.confirmTimerText.textContent = `Annulation automatique dans ${seconds} s`;
     }
   }
-  if (remainingMs <= 0) {
+
+  if (remainingMs <= 0 && ui.confirm.open) {
     ui.confirm.close("no");
+  }
+}
+
+async function startConfirmListening() {
+  if (!ui.confirm.open) return;
+  clearInterval(confirmSpeechCheckTimer);
+
+  const statusEl = ui.confirmVoiceStatus;
+  const micBtn = ui.confirmMicBtn;
+
+  // Si l'assistant parle encore (lecture de la question TTS), attendre la fin pour ne pas enregistrer sa voix
+  if (isSpeaking()) {
+    if (statusEl) statusEl.textContent = "🔊 L'assistant parle…";
+    confirmSpeechCheckTimer = setInterval(() => {
+      if (!isSpeaking() || !ui.confirm.open) {
+        clearInterval(confirmSpeechCheckTimer);
+        confirmSpeechCheckTimer = null;
+        if (ui.confirm.open) {
+          startConfirmListening();
+        }
+      }
+    }, 150);
+    return;
+  }
+
+  if (state.recorder) {
+    return;
+  }
+
+  unlockAudio();
+  if (statusEl) statusEl.textContent = "🎙️ J'écoute… Dites « Oui » ou « Non »";
+  if (micBtn) micBtn.classList.add("recording");
+
+  const cfg = state.audioConfig || {};
+  const recorder = new Recorder({
+    targetRate: cfg.sample_rate || 16000,
+    voiceThreshold: cfg.voice_threshold ?? 0.02,
+    silenceDuration: cfg.silence_duration ?? 0.8,
+    maxDuration: cfg.max_speech_duration ?? 12,
+    autoStop: true,
+    onLevel: (level) => {
+      if (micBtn) micBtn.style.setProperty("--level", (1 + Math.min(level * 12, 0.6)).toFixed(3));
+    },
+    onAutoStop: () => {
+      stopConfirmRecording();
+    },
+  });
+
+  try {
+    await recorder.start(state.audioCtx);
+    state.recorder = recorder;
+  } catch (err) {
+    console.warn("Écoute micro confirmation indisponible:", err);
+    if (statusEl) statusEl.textContent = "Dites « Oui » ou « Non », ou cliquez ci-dessous";
+    if (micBtn) micBtn.classList.remove("recording");
+  }
+}
+
+function stopConfirmRecording() {
+  const recorder = state.recorder;
+  if (!recorder) return;
+  state.recorder = null;
+  const statusEl = ui.confirmVoiceStatus;
+  const micBtn = ui.confirmMicBtn;
+  if (micBtn) micBtn.classList.remove("recording");
+
+  const { wav, hadSpeech } = recorder.stop();
+  if (hadSpeech) {
+    if (statusEl) statusEl.textContent = "⏳ Traitement de votre réponse…";
+    sendAudio(wav);
+  } else {
+    if (statusEl) statusEl.textContent = "🎙️ Dites « Oui » ou « Non »";
+    if (ui.confirm.open) {
+      setTimeout(startConfirmListening, 250);
+    }
   }
 }
 
@@ -825,7 +919,19 @@ function askConfirmation(event) {
   }, 100);
   if (!ui.confirm.open) ui.confirm.showModal();
   $("confirm-no").focus();
+
+  // Démarrer immédiatement l'écoute vocale
+  startConfirmListening();
 }
+
+ui.confirmMicBtn?.addEventListener("click", () => {
+  if (state.recorder) {
+    stopConfirmRecording();
+  } else {
+    interruptAssistant();
+    startConfirmListening();
+  }
+});
 
 ui.confirm.addEventListener("mouseenter", () => {
   confirmPaused = true;
@@ -850,6 +956,13 @@ ui.confirm.addEventListener("focusout", (e) => {
 
 ui.confirm.addEventListener("close", () => {
   clearInterval(confirmTimer);
+  clearInterval(confirmSpeechCheckTimer);
+  confirmSpeechCheckTimer = null;
+  if (state.recorder) {
+    state.recorder.stop();
+    state.recorder = null;
+  }
+  ui.confirmMicBtn?.classList.remove("recording");
   const id = ui.confirm.dataset.requestId;
   if (!id) return;
   delete ui.confirm.dataset.requestId;
@@ -967,7 +1080,9 @@ function renderModelPicker(error = "") {
   const isOllama = (state.llm?.provider || settingValue("LLM_PROVIDER")) === "ollama";
   ui.modelOllama.hidden = !isOllama;
   if (!isOllama) {
-    setMessage(ui.modelMsg, "Le choix du modèle se fait dans les paramètres avancés pour ce fournisseur.");
+    const key = settingValue("OPENROUTER_API_KEY");
+    const status = key ? "clé configurée" : "⚠️ clé API manquante";
+    setMessage(ui.modelMsg, `Fournisseur OpenRouter (${status}). Modifiez le modèle et la clé dans les paramètres avancés.`);
     return;
   }
   const current = settingValue("OLLAMA_MODEL") || state.llm?.model || "";
@@ -1171,10 +1286,31 @@ function renderField(field) {
     } else if (field.multiline) {
       input = document.createElement("textarea");
       input.value = field.kind === "list" ? field.value.join(", ") : field.value;
+      input.id = id;
+      wrap.append(label, input);
+    } else if (field.kind === "password") {
+      const row = document.createElement("div");
+      row.className = "row";
+      input = document.createElement("input");
+      input.type = "password";
+      if (field.placeholder) input.placeholder = field.placeholder;
+      input.value = field.value ?? "";
+      input.id = id;
+      const toggleBtn = document.createElement("button");
+      toggleBtn.type = "button";
+      toggleBtn.className = "icon-btn";
+      toggleBtn.setAttribute("aria-label", "Afficher ou masquer");
+      toggleBtn.title = "Afficher / Masquer";
+      toggleBtn.innerHTML = `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>`;
+      toggleBtn.addEventListener("click", () => {
+        input.type = input.type === "password" ? "text" : "password";
+      });
+      row.append(input, toggleBtn);
+      wrap.append(label, row);
     } else {
       input = document.createElement("input");
       input.type = "text";
-      input.value = field.kind === "list" ? field.value.join(", ") : field.value;
+      input.value = field.kind === "list" ? field.value.join(", ") : (field.value ?? "");
       if (field.kind === "model") {
         // Saisie libre complétée par les modèles connus
         const provider = field.name.split("_")[0].toLowerCase();  // OLLAMA_MODEL, OPENROUTER_MODEL
@@ -1185,9 +1321,9 @@ function renderField(field) {
           send({ type: "list_models", provider });
         }
       }
+      input.id = id;
+      wrap.append(label, input);
     }
-    input.id = id;
-    wrap.append(label, input);
   }
   input.dataset.name = field.name;
   input.addEventListener("input", () => {

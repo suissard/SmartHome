@@ -133,12 +133,16 @@ class ToolRegistry:
             if call.arguments:
                 summary += f" ({json.dumps(call.arguments, ensure_ascii=False)})"
             if not request_confirmation(summary, self.settings, confirm):
+                print(f"⛔ [TOOLS] Action non confirmée, annulée : {tool.name}")
                 return ToolResult(call, "Action annulée : l'utilisateur n'a pas confirmé.", executed=False)
 
         print(f"🛠️ [TOOLS] {tool.name}({json.dumps(call.arguments, ensure_ascii=False)})")
         try:
-            return ToolResult(call, tool.handler(call.arguments) or "OK", executed=True)
+            output = tool.handler(call.arguments) or "OK"
+            print(f"✅ [TOOLS] {tool.name} -> {output}")
+            return ToolResult(call, output, executed=True)
         except Exception as e:
+            print(f"❌ [TOOLS] {tool.name} -> Erreur : {e}")
             return ToolResult(call, f"Erreur lors de l'exécution de {tool.name} : {e}", executed=False)
 
 

@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 # Script d'installation SmartHome — Linux (Debian/Ubuntu, Fedora, Arch, openSUSE), macOS et serveurs sans écran.
 #
-#   ./install.sh                  Poste avec micro et haut-parleur (assistant vocal complet)
+#   ./install.sh                  Questions pas à pas (machine, profil, Ollama, paquets, modèles, service)
 #   ./install.sh --server         Serveur sans micro : passerelle réseau seule (python -m gateway)
 #   ./install.sh --service        Ajoute le démarrage automatique (systemd)
+#   ./install.sh -y               Sans question : options de la ligne de commande et .env
 #   ./install.sh --help           Toutes les options
 #
+# Dans un terminal interactif, l'assistant core/install_wizard.py demande ce qu'il faut installer ; les options
+# ci-dessous servent de choix par défaut (et --no-* retire la question correspondante).
 # Le script est idempotent : le relancer met à jour les dépendances sans écraser le .env existant.
 
 set -euo pipefail
@@ -19,10 +22,15 @@ MIN_PYTHON="3.10"
 
 MODE="desktop"
 WITH_SERVICE=false
-SYSTEM_DEPS=true
-WITH_OLLAMA=true
+SYSTEM_DEPS="all"        # all (base + outils des actions) | base | none
+OLLAMA_CHOICE="auto"     # auto (selon le .env, avec confirmation) | install | use | remote | none
+OLLAMA_REMOTE_HOST=""
+OLLAMA_PULL=""           # modèles choisis dans l'assistant (sinon déduits du .env)
 DOWNLOAD_MODELS=true
 ASSUME_YES=false
+NO_MENU=false
+WIZARD_RAN=false
+PROFILE=""
 PYTHON_BIN=""
 GATEWAY_BIND=""
 
@@ -37,7 +45,8 @@ Usage : ./install.sh [options]
   --no-system-deps  Ne pas installer les paquets système (apt, dnf, pacman, zypper, brew)
   --no-ollama       Ne pas installer Ollama ni télécharger de modèle LLM
   --no-models       Ne télécharger aucun modèle (openWakeWord, Whisper, Ollama)
-  -y, --yes         Répondre oui à toutes les questions
+  --no-menu         Pas de questions pas à pas : options ci-dessus et .env
+  -y, --yes         Répondre oui à toutes les questions (implique --no-menu)
   -h, --help        Afficher cette aide
 EOF
 }
@@ -48,9 +57,10 @@ while [[ $# -gt 0 ]]; do
         --service) WITH_SERVICE=true ;;
         --host) GATEWAY_BIND="${2:?--host attend une adresse}"; shift ;;
         --python) PYTHON_BIN="${2:?--python attend un chemin}"; shift ;;
-        --no-system-deps) SYSTEM_DEPS=false ;;
-        --no-ollama) WITH_OLLAMA=false ;;
+        --no-system-deps) SYSTEM_DEPS="none" ;;
+        --no-ollama) OLLAMA_CHOICE="none" ;;
         --no-models) DOWNLOAD_MODELS=false ;;
+        --no-menu) NO_MENU=true ;;
         -y|--yes) ASSUME_YES=true ;;
         -h|--help) usage; exit 0 ;;
         *) echo "Option inconnue : $1" >&2; usage; exit 1 ;;
@@ -92,13 +102,73 @@ case "$OS" in
     *) die "Système non pris en charge : $OS" ;;
 esac
 
+PKG_MANAGER=""
+if [[ "$OS" == "Darwin" ]]; then
+    have brew && PKG_MANAGER="brew"
+else
+    for candidate in apt-get dnf pacman zypper; do
+        have "$candidate" && { PKG_MANAGER="$candidate"; break; }
+    done
+fi
+
+# --- 0. Questions pas à pas ---------------------------------------------------
+run_wizard() {
+    # Python du système (≥ 3.9, bibliothèque standard seule) : le venv n'existe pas encore.
+    local py="" candidate
+    for candidate in "$PYTHON_BIN" python3 python; do
+        [[ -n "$candidate" ]] && have "$candidate" \
+            && "$candidate" -c "import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)" 2>/dev/null \
+            && { py="$candidate"; break; }
+    done
+    if [[ -z "$py" ]]; then
+        warn "Python 3 absent : pas de questions pas à pas, installation selon les options et le .env."
+        return
+    fi
+
+    local platform plan status=0
+    platform="$([[ "$OS" == "Darwin" ]] && echo darwin || echo linux)"
+    plan="$("$py" "$ROOT_DIR/core/install_wizard.py" --platform "$platform" --mode "$MODE" \
+        --pkg-manager "$PKG_MANAGER" --host "${GATEWAY_BIND:-0.0.0.0}" \
+        --system-deps "$([[ $SYSTEM_DEPS != none ]] && echo true || echo false)" \
+        --ollama "$([[ $OLLAMA_CHOICE != none ]] && echo true || echo false)" \
+        --models "$DOWNLOAD_MODELS" --service "$WITH_SERVICE")" || status=$?
+    case "$status" in
+        0) ;;
+        1) exit 0 ;;   # « Annuler » dans le récapitulatif
+        130) echo; exit 130 ;;
+        *) die "L'assistant d'installation a échoué (relancez avec --no-menu pour s'en passer)." ;;
+    esac
+
+    local key value
+    while IFS='=' read -r key value; do
+        case "$key" in
+            MODE) MODE="$value" ;;
+            SYSTEM_DEPS) SYSTEM_DEPS="$value" ;;
+            OLLAMA) OLLAMA_CHOICE="$value" ;;
+            OLLAMA_HOST) OLLAMA_REMOTE_HOST="$value" ;;
+            OLLAMA_PULL) OLLAMA_PULL="$value" ;;
+            DOWNLOAD_MODELS) DOWNLOAD_MODELS="$value" ;;
+            WITH_SERVICE) WITH_SERVICE="$value" ;;
+            GATEWAY_BIND) GATEWAY_BIND="$value" ;;
+            PROFILE) PROFILE="$value" ;;
+        esac
+    done <<<"$plan"
+    WIZARD_RAN=true
+}
+
+if ! $ASSUME_YES && ! $NO_MENU && [[ -t 0 && -t 2 ]]; then
+    run_wizard
+fi
+# Les étapes suivantes lisent la configuration du profil choisi (core/config.py applique SMARTHOME_PROFILE)
+[[ -n "$PROFILE" ]] && export SMARTHOME_PROFILE="$PROFILE"
+
 echo "${C_CYAN}🚀 Installation de SmartHome ($([[ $MODE == server ]] && echo "serveur sans micro" || echo "poste vocal") — $OS)${C_RESET}"
 
 # --- 1. Paquets système ------------------------------------------------------
 install_system_deps() {
     step "1/7 Paquets système"
-    if ! $SYSTEM_DEPS; then
-        info "Ignoré (--no-system-deps)."
+    if [[ "$SYSTEM_DEPS" == "none" ]]; then
+        info "Ignoré."
         return
     fi
 
@@ -110,20 +180,20 @@ install_system_deps() {
         brew install python@3.12 portaudio libsndfile
         ok "Paquets Homebrew installés."
         return
-    elif have apt-get; then
+    elif [[ "$PKG_MANAGER" == "apt-get" ]]; then
         base=(python3 python3-venv python3-dev python3-pip build-essential portaudio19-dev libportaudio2 libsndfile1 curl ca-certificates openssl)
         desktop=(pulseaudio-utils alsa-utils libnotify-bin playerctl brightnessctl)
         cmd=(apt-get install -y)
         $SUDO apt-get update
-    elif have dnf; then
+    elif [[ "$PKG_MANAGER" == "dnf" ]]; then
         base=(python3 python3-devel python3-pip gcc portaudio-devel libsndfile curl openssl)
         desktop=(pulseaudio-utils alsa-utils libnotify playerctl brightnessctl)
         cmd=(dnf install -y)
-    elif have pacman; then
+    elif [[ "$PKG_MANAGER" == "pacman" ]]; then
         base=(python python-pip base-devel portaudio libsndfile curl openssl)
         desktop=(libpulse alsa-utils libnotify playerctl brightnessctl)
         cmd=(pacman -S --needed --noconfirm)
-    elif have zypper; then
+    elif [[ "$PKG_MANAGER" == "zypper" ]]; then
         base=(python3 python3-devel python3-pip gcc portaudio-devel libsndfile1 curl openssl)
         desktop=(pulseaudio-utils alsa-utils libnotify-tools playerctl brightnessctl)
         cmd=(zypper install -y)
@@ -133,7 +203,7 @@ install_system_deps() {
     fi
 
     local packages=("${base[@]}")
-    [[ "$MODE" == "desktop" ]] && packages+=("${desktop[@]}")
+    [[ "$MODE" == "desktop" && "$SYSTEM_DEPS" == "all" ]] && packages+=("${desktop[@]}")
     info "${cmd[0]} : ${packages[*]}"
     $SUDO "${cmd[@]}" "${packages[@]}" || die "Échec de l'installation des paquets système."
     ok "Paquets système installés."
@@ -212,6 +282,16 @@ setup_env() {
         ok ".env existant conservé."
     fi
 
+    if [[ -n "$PROFILE" ]]; then
+        # Même fichier que le menu de ./start.sh : le profil y sera présélectionné
+        echo "$PROFILE" >"$ROOT_DIR/profiles/.last"
+        ok "Profil « $PROFILE » retenu (modifiable au lancement de ./start.sh)."
+    fi
+    if [[ -n "$OLLAMA_REMOTE_HOST" ]]; then
+        set_env OLLAMA_HOST "$OLLAMA_REMOTE_HOST"
+        ok "Ollama distant : $OLLAMA_REMOTE_HOST."
+    fi
+
     if [[ "$MODE" == "server" ]]; then
         local host="${GATEWAY_BIND:-0.0.0.0}"
         set_env GATEWAY_HOST "$host"
@@ -232,7 +312,7 @@ setup_env() {
 download_local_models() {
     step "5/7 Modèles locaux"
     if ! $DOWNLOAD_MODELS; then
-        info "Ignoré (--no-models)."
+        info "Ignoré (modèles téléchargés au premier lancement)."
         return
     fi
     if [[ "$MODE" == "desktop" ]]; then
@@ -260,20 +340,35 @@ ollama_up() { curl -fsS --max-time 3 "$1/api/tags" >/dev/null 2>&1; }
 
 setup_ollama() {
     step "6/7 Ollama (LLM local)"
-    if ! $WITH_OLLAMA; then
-        info "Ignoré (--no-ollama)."
+    if [[ "$OLLAMA_CHOICE" == "none" ]]; then
+        info "Ignoré."
         return
     fi
-    local llm stt tts host
+    local llm stt fallback tts host models=()
     llm="$(setting LLM_PROVIDER)"; stt="$(setting STT_PROVIDER)"; tts="$(setting TTS_PROVIDER)"
-    if [[ "$llm" != "ollama" && "$stt" != "ollama" && "$tts" != "ollama" ]]; then
-        info "Aucun fournisseur Ollama configuré (LLM_PROVIDER=$llm) : rien à faire."
-        return
+    fallback="$(setting STT_FALLBACK_PROVIDER)"
+    if $WIZARD_RAN; then
+        # Modèles choisis dans l'assistant (ceux du profil, ou la suggestion si le profil viendra plus tard)
+        IFS=',' read -r -a models <<<"$OLLAMA_PULL"
+    else
+        [[ "$llm" == "ollama" ]] && models+=("$(setting OLLAMA_MODEL)")
+        [[ "$stt" == "ollama" || ( "$stt" =~ ^(direct|none|bypass)$ && "$fallback" == "ollama" ) ]] \
+            && models+=("$(setting OLLAMA_STT_MODEL)")
+        [[ "$tts" == "ollama" ]] && models+=("$(setting OLLAMA_TTS_MODEL)")
+        if [[ ${#models[@]} -eq 0 ]]; then
+            info "Aucun fournisseur Ollama configuré (LLM_PROVIDER=$llm) : rien à faire."
+            return
+        fi
     fi
     host="$(setting OLLAMA_HOST)"
 
-    if ! have ollama && ! ollama_up "$host"; then
-        if confirm "Ollama n'est pas installé. L'installer maintenant (script officiel ollama.com) ?"; then
+    if [[ "$OLLAMA_CHOICE" == "remote" ]]; then
+        ollama_up "$host" || { warn "Ollama distant injoignable sur $host : modèles non téléchargés."; return; }
+    elif ! have ollama && ! ollama_up "$host"; then
+        # « install » a déjà été validé dans l'assistant ; « auto » (sans assistant) demande confirmation
+        if [[ "$OLLAMA_CHOICE" == "install" ]] \
+            || confirm "Ollama n'est pas installé. L'installer maintenant (script officiel ollama.com) ?"; then
+            info "Installation d'Ollama…"
             if [[ "$OS" == "Darwin" ]]; then
                 brew install ollama && brew services start ollama
             else
@@ -297,17 +392,18 @@ setup_ollama() {
     ollama_up "$host" || { warn "Ollama ne répond pas sur $host : modèles non téléchargés."; return; }
     ok "Ollama joignable sur $host."
 
-    if ! $DOWNLOAD_MODELS; then
+    if ! $DOWNLOAD_MODELS || [[ ${#models[@]} -eq 0 ]]; then
         return
     fi
-    local models=()
-    [[ "$llm" == "ollama" ]] && models+=("$(setting OLLAMA_MODEL)")
-    [[ "$stt" == "ollama" ]] && models+=("$(setting OLLAMA_STT_MODEL)")
-    [[ "$tts" == "ollama" ]] && models+=("$(setting OLLAMA_TTS_MODEL)")
     local model
     for model in $(printf '%s\n' "${models[@]}" | sort -u); do
         info "Téléchargement du modèle $model (peut être long)…"
-        OLLAMA_HOST="$host" ollama pull "$model" && ok "Modèle $model prêt." || warn "Échec du téléchargement de $model."
+        if have ollama; then
+            OLLAMA_HOST="$host" ollama pull "$model"
+        else
+            # Ollama distant sans client local : bibliothèque Python ollama du venv
+            "$VPY" -c "import sys, ollama; ollama.Client(host=sys.argv[1]).pull(sys.argv[2])" "$host" "$model"
+        fi && ok "Modèle $model prêt." || warn "Échec du téléchargement de $model."
     done
 }
 
@@ -316,7 +412,7 @@ setup_service() {
     step "7/7 Lancement"
     chmod +x "$ROOT_DIR/start.sh" 2>/dev/null || true
     if ! $WITH_SERVICE; then
-        info "Pas de service (option --service pour un démarrage automatique)."
+        info "Pas de démarrage automatique (relancez l'installation ou option --service pour l'ajouter)."
         return
     fi
     if ! have systemctl; then

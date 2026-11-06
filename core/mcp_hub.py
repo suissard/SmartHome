@@ -82,7 +82,24 @@ class MCPServerConnection:
                 # Résolution des chemins relatifs pour la commande et les arguments
                 resolved_cmd = command
                 if command.startswith(".venv") or command.startswith("./"):
-                    resolved_cmd = str(BASE_DIR / command)
+                    candidate = BASE_DIR / command
+                    if not candidate.exists() and sys.platform == "win32":
+                        win_cmd = command.replace(".venv/bin/python", ".venv/Scripts/python.exe").replace(".venv/bin/", ".venv/Scripts/")
+                        if (BASE_DIR / win_cmd).exists():
+                            candidate = BASE_DIR / win_cmd
+                        elif (BASE_DIR / ".venv" / "Scripts" / "python.exe").exists():
+                            candidate = BASE_DIR / ".venv" / "Scripts" / "python.exe"
+                        else:
+                            candidate = Path(sys.executable)
+                    elif not candidate.exists() and sys.platform != "win32":
+                        unix_cmd = command.replace(".venv/Scripts/python.exe", ".venv/bin/python").replace(".venv/Scripts/", ".venv/bin/")
+                        if (BASE_DIR / unix_cmd).exists():
+                            candidate = BASE_DIR / unix_cmd
+                        elif (BASE_DIR / ".venv" / "bin" / "python").exists():
+                            candidate = BASE_DIR / ".venv" / "bin" / "python"
+                        else:
+                            candidate = Path(sys.executable)
+                    resolved_cmd = str(candidate)
 
                 resolved_args = []
                 for a in args:

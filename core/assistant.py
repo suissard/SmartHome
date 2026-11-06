@@ -119,6 +119,11 @@ class AssistantCore:
             self._fallback_stt = create_fallback_stt(self.settings)
         return self._fallback_stt
 
+    def transcribe_audio(self, audio_wav: bytes) -> str:
+        """Transcrit un buffer WAV avec le fournisseur STT actif (ou de repli si mode direct)."""
+        stt = self.fallback_stt if self.stt.passthrough else self.stt
+        return stt.transcribe(audio_wav)
+
     def audio_to_llm(self) -> bool:
         """True si un enregistrement doit être envoyé tel quel au modèle actif (mode direct et modèle audio)."""
         from audio.stt import STT_PROVIDERS
@@ -284,6 +289,7 @@ class AssistantCore:
             session.last_seen = time.monotonic()
             session.cancel.clear()
             session.conversation.forget(forget)
+            print(f"\n📥 [ASSISTANT {sid}] Nouveau tour (texte: « {text or ''} », audio: {len(audio_wav) if audio_wav else 0} octets)")
             reply = Reply(sid, transcript=(text or "").strip())
             llm_audio = None
 
@@ -298,6 +304,7 @@ class AssistantCore:
                         emit("error", sid, message=f"Erreur de transcription : {e}")
                         return reply
                     emit("transcript", sid, text=reply.transcript)
+                    print(f"🎙️ [STT {sid}] Transcription : « {reply.transcript} »")
 
             if not reply.transcript and llm_audio is None:
                 emit("response", sid, text="", tools=[])
@@ -349,6 +356,7 @@ class AssistantCore:
                 reply.text = get_action_manager().process_response(raw, confirm=session.conversation.confirm)
 
             reply.end_conversation = _asks_to_sleep(raw, reply.tools)
+            print(f"📤 [ASSISTANT {sid}] Réponse : « {reply.text} » ({len(reply.tools)} outil(s))")
             emit("response", sid, text=reply.text, tools=reply.tools, end_conversation=reply.end_conversation)
 
             # Rien n'a été prononcé en direct (réponse non streamée, message d'erreur...) : on dit le texte final

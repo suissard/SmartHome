@@ -31,6 +31,7 @@ LIVE, RESTART = True, False
 EDITABLE_GROUPS: list[tuple[str, list[tuple[str, str, bool]]]] = [
     ("Modèle de langage", [
         ("LLM_PROVIDER", "Fournisseur", LIVE),
+        ("OPENROUTER_API_KEY", "Clé API OpenRouter", LIVE),
         ("OLLAMA_MODEL", "Modèle Ollama", LIVE),
         ("LLM_DECISION_MODELS", "Modèles de décision", LIVE),
         ("OPENROUTER_MODEL", "Modèle OpenRouter", LIVE),
@@ -117,6 +118,12 @@ def _stt_engine(name: str) -> list[dict]:
 VISIBLE_WHEN: dict[str, list[dict]] = {
     "OLLAMA_MODEL": [{"LLM_PROVIDER": ["ollama"]}],
     "OPENROUTER_MODEL": [{"LLM_PROVIDER": ["openrouter"]}],
+    "OPENROUTER_API_KEY": [
+        {"LLM_PROVIDER": ["openrouter"]},
+        {"STT_PROVIDER": ["openrouter"]},
+        {"STT_PROVIDER": _DIRECT_STT, "STT_FALLBACK_PROVIDER": ["openrouter"]},
+        {"TTS_PROVIDER": ["openrouter"]},
+    ],
     "LLM_SYSTEM_PROMPT": _LANGUAGE_MODEL,
     "LLM_INJECT_DATETIME": _LANGUAGE_MODEL,
     "LLM_THINK": _LANGUAGE_MODEL,
@@ -217,7 +224,9 @@ def _field_spec(name: str) -> dict:
         spec = {"kind": "text", "multiline": name in _MULTILINE}
 
     # Choix connus pour certains champs texte
-    if name in ("LLM_PROVIDER", "STT_PROVIDER", "TTS_PROVIDER"):
+    if name == "OPENROUTER_API_KEY":
+        spec = {"kind": "password", "placeholder": "sk-or-v1-..."}
+    elif name in ("LLM_PROVIDER", "STT_PROVIDER", "TTS_PROVIDER"):
         spec = {"kind": "select", "options": _provider_names(name.split("_")[0])}
     elif name == "STT_FALLBACK_PROVIDER":
         spec = {"kind": "select", "options": [n for n in _provider_names("STT") if n != "direct"]}
@@ -313,8 +322,8 @@ def save_changes(settings: Settings, names: list[str], env_file: Path = ENV_FILE
 
 
 def overridden_by_environment(names: list[str]) -> list[str]:
-    """Champs masqués par une variable d'environnement : elle restera prioritaire sur .env au prochain démarrage."""
-    return [name for name in names if (os.environ.get(name) or "").strip()]
+    """Champs masqués par une variable d'environnement (vide : les réglages utilisateur supplantent la machine)."""
+    return []
 
 
 if __name__ == "__main__":

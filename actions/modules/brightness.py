@@ -1,9 +1,11 @@
 """
 Module d'action pour la luminosité de l'écran (valeur en %, up, down).
-Contient les métadonnées et le script bash embarqué.
+Contient les métadonnées et le script d'exécution embarqué (Linux et Windows).
 """
 
-from typing import List
+import subprocess
+import sys
+from typing import List, Tuple
 from actions.base import BaseAction, percent_choices
 
 _BRIGHTNESS_SCRIPT = r"""
@@ -96,14 +98,71 @@ class BrightnessAction(BaseAction):
 
     def build_args(self, args: str = "") -> List[str]:
         value = (args or "").strip().lower().rstrip("%").strip()
-        if value in ("up", "+", "plus", "augmente"):
+        if value in ("up", "+", "plus", "augmente", "augmenter", "monter"):
             return ["up"]
-        if value in ("down", "-", "moins", "baisse"):
+        if value in ("down", "-", "moins", "baisse", "baisser", "diminue", "diminuer"):
             return ["down"]
         if value.isdigit():
             return [str(min(100, int(value)))]
-        print(f"⛔ [ACTIONS] Argument invalide pour [BRIGHTNESS] : '{args}'")
         return []
+
+    def execute_sync_windows(self, args: str = "", timeout: float = 10.0) -> Tuple[int, str, str]:
+        cmd_args = self.build_args(args)
+        if not cmd_args:
+            raw = (args or "").strip().lower()
+            if any(w in raw for w in ("baisse", "diminue", "moins", "down")):
+                target = "down"
+            elif any(w in raw for w in ("augmente", "plus", "monte", "up")):
+                target = "up"
+            else:
+                return 1, "", f"Argument invalide pour BRIGHTNESS : '{args}'"
+        else:
+            target = cmd_args[0]
+
+        # 1. Lecture de la valeur actuelle
+        current = 100
+        try:
+            res_cur = subprocess.run(
+                ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                 "(Get-CimInstance -Namespace root/WMI -ClassName WmiMonitorBrightness -ErrorAction SilentlyContinue).CurrentBrightness"],
+                capture_output=True, text=True, timeout=timeout
+            )
+            val_str = res_cur.stdout.strip().split()
+            if val_str and val_str[-1].isdigit():
+                current = int(val_str[-1])
+        except Exception:
+            pass
+
+        if target == "up":
+            new_val = min(100, current + 10)
+        elif target == "down":
+            new_val = max(0, current - 10)
+        else:
+            try:
+                new_val = max(0, min(100, int(target)))
+            except ValueError:
+                return 1, "", f"Valeur invalide pour BRIGHTNESS : '{target}'"
+
+        try:
+            ps_set = f"(Get-WmiObject -Namespace root/WMI -ClassName WmiMonitorBrightnessMethods).WmiSetBrightness(1, {new_val})"
+            res = subprocess.run(
+                ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps_set],
+                capture_output=True, text=True, timeout=timeout
+            )
+            if res.returncode == 0:
+                msg = f"Luminosité réglée à {new_val}%"
+                print(f"✅ [ACTIONS] [Windows] {msg}")
+                return 0, msg, ""
+            err = (res.stderr or res.stdout).strip()
+            print(f"❌ [ACTIONS] [Windows] Erreur réglage luminosité : {err}")
+            return res.returncode, "", err
+        except Exception as e:
+            print(f"❌ [ACTIONS] [Windows] Exception luminosité : {e}")
+            return -1, "", str(e)
+
+    def execute_windows(self, args: str = "", dry_run: bool = False) -> bool:
+        code, out, err = self.execute_sync_windows(args)
+        return code == 0
 
 
 ACTIONS = [BrightnessAction()]
@@ -112,3 +171,7 @@ ACTIONS = [BrightnessAction()]
 if __name__ == "__main__":
     print("🧪 [DEBUG] Test du module actions/modules/brightness.py")
     print(f"Arguments '40%' -> {ACTIONS[0].build_args('40%')} | 'up' -> {ACTIONS[0].build_args('up')}")
+    if sys.platform == "win32":
+        print("Test Windows execute_sync_windows('down'):")
+        c, o, e = ACTIONS[0].execute_sync_windows("down")
+        print(f"Result: code={c}, out={o}, err={e}")

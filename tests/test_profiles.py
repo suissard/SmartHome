@@ -21,7 +21,7 @@ class ProfilesTest(unittest.TestCase):
     def test_default_profile_exists_and_comes_first(self):
         names = profiles.list_profiles()
         self.assertEqual(names[0], profiles.DEFAULT_PROFILE)
-        self.assertLessEqual({"mix", "local-gemma", "local-lfm", "local-decision", "cloud"}, set(names))
+        self.assertLessEqual({"hybrid", "mix", "local-gemma", "local-lfm", "local-decision", "cloud"}, set(names))
 
     def test_every_profile_is_valid_settings(self):
         for name in profiles.list_profiles():
@@ -29,14 +29,16 @@ class ProfilesTest(unittest.TestCase):
                 Settings.model_validate(profiles.profile_values(name))
                 self.assertTrue(profiles.describe_profile(name))
 
-    def test_profile_overrides_env_file_but_not_environment(self):
+    def test_user_settings_supplant_machine_environment(self):
         with tempfile.TemporaryDirectory() as tmp:
             env = Path(tmp) / ".env"
-            env.write_text("LLM_PROVIDER=ollama\nOLLAMA_MODEL=qwen\n", encoding="utf-8")
-            s = load_settings(env, profile={"LLM_PROVIDER": "openrouter"})
-            self.assertEqual((s.LLM_PROVIDER, s.OLLAMA_MODEL), ("openrouter", "qwen"))
-            with patch.dict(os.environ, {"LLM_PROVIDER": "ollama"}):
-                self.assertEqual(load_settings(env, profile={"LLM_PROVIDER": "openrouter"}).LLM_PROVIDER, "ollama")
+            env.write_text("OPENROUTER_API_KEY=user-key\nOLLAMA_MODEL=qwen\n", encoding="utf-8")
+            with patch.dict(os.environ, {"OPENROUTER_API_KEY": "machine-key", "LLM_PROVIDER": "ollama"}):
+                s = load_settings(env, profile={"LLM_PROVIDER": "openrouter"})
+                # Les réglages utilisateur (.env et profil) supplantent ceux de la machine (os.environ)
+                self.assertEqual(s.OPENROUTER_API_KEY, "user-key")
+                self.assertEqual(s.LLM_PROVIDER, "openrouter")
+                self.assertEqual(s.OLLAMA_MODEL, "qwen")
 
     def test_profile_argument_is_consumed(self):
         argv = ["main.py", "--profile", "cloud", "--x"]
@@ -58,13 +60,13 @@ class ProfilesTest(unittest.TestCase):
     def test_last_choice_is_used_without_menu(self):
         with tempfile.TemporaryDirectory() as tmp, patch.object(profiles, "PROFILES_DIR", Path(tmp)), \
                 patch.dict(os.environ, {profiles.PROFILE_ENV_VAR: ""}):
-            for name in ("mix", "cloud"):
+            for name in ("hybrid", "cloud"):
                 (Path(tmp) / f"{name}.env").write_text("# Titre\n", encoding="utf-8")
-            self.assertEqual(profiles.active_profile(), "mix")
+            self.assertEqual(profiles.active_profile(), "hybrid")
             profiles.remember_profile("cloud")
             self.assertEqual(profiles.active_profile(), "cloud")
             (Path(tmp) / "cloud.env").unlink()
-            self.assertEqual(profiles.active_profile(), "mix")
+            self.assertEqual(profiles.active_profile(), "hybrid")
 
     def test_menu_lines_fit_the_terminal(self):
         with patch.dict(os.environ, {"NO_COLOR": "1"}):
@@ -153,6 +155,16 @@ class ProfilesTest(unittest.TestCase):
 
     def test_media_pause_enabled_by_default(self):
         self.assertTrue(Settings().MEDIA_PAUSE_ENABLED)
+
+    def test_openrouter_api_key_is_editable_and_saves_to_env(self):
+        self.assertIn("OPENROUTER_API_KEY", settings_store.EDITABLE)
+        desc = {f["name"]: f for g in settings_store.describe(Settings()) for f in g["fields"]}
+        self.assertEqual(desc["OPENROUTER_API_KEY"]["kind"], "password")
+        with tempfile.TemporaryDirectory() as tmp:
+            env = Path(tmp) / ".env"
+            s = Settings(OPENROUTER_API_KEY="sk-new-key")
+            settings_store.save_changes(s, ["OPENROUTER_API_KEY"], env)
+            self.assertIn("OPENROUTER_API_KEY=sk-new-key", env.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

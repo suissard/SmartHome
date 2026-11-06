@@ -21,9 +21,9 @@ from pydantic import AliasChoices, BaseModel, BeforeValidator, ConfigDict, Field
 # Encodage UTF-8 pour la console Windows
 if sys.platform == "win32" and hasattr(sys.stdout, "reconfigure"):
     try:
-        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
         if hasattr(sys.stderr, "reconfigure"):
-            sys.stderr.reconfigure(encoding="utf-8")
+            sys.stderr.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
         pass
 
@@ -223,9 +223,9 @@ class Settings(BaseModel):
     # Confirmation vocale des actions dangereuses (extinction, redémarrage, outils MCP destructeurs)
     ACTIONS_CONFIRM_DANGEROUS: EnvBool = True
     ACTIONS_CONFIRM_TIMEOUT: float = Field(6.0, gt=0.0)
-    ACTIONS_CONFIRM_WORDS: CsvList = _parse_list("oui,ouais,confirme,confirmé,vas-y,vas y,ok,d'accord,go,yes")
+    ACTIONS_CONFIRM_WORDS: CsvList = _parse_list("oui,ouais,ouep,confirme,confirmé,confirmer,confirmez,je confirme,valide,valider,je valide,vas-y,vas y,ok,d'accord,go,yes,yep,fais-le,fais le,absolument,bien sûr,c'est bon,vasy,exactement,c'est parti")
     # Un mot d'annulation l'emporte toujours sur un mot de confirmation ("oui... non attends")
-    ACTIONS_CANCEL_WORDS: CsvList = _parse_list("non,annule,annuler,stop,attends,pas")
+    ACTIONS_CANCEL_WORDS: CsvList = _parse_list("non,annule,annuler,stop,attends,surtout pas,pas du tout,refuse,laisse tomber,n'éteins pas,touche à rien,ne fais rien,ne le fais pas,n'éteins surtout pas,abandonne,abandonner")
     # Question posée avant une action dangereuse ({action} = description de l'action)
     ACTIONS_CONFIRM_PROMPT: str = "Tu confirmes : {action} ?"
     # Durée maximale d'exécution d'une action locale appelée comme outil (secondes)
@@ -301,7 +301,9 @@ def load_settings(env_file: Path = ENV_FILE, profile: Optional[dict[str, str]] =
         profile = profile_values() if env_file == ENV_FILE else {}
     raw: dict[str, str] = {}
     # interpolate=False : les gabarits de réponse utilisent ${COMMAND}, ${ARGS}... qui ne sont pas des variables .env
-    sources = [dotenv_values(env_file, interpolate=False) if env_file.exists() else {}, profile, os.environ]
+    env_values = dotenv_values(env_file, interpolate=False) if env_file.exists() else {}
+    # Priorité : profil / réglages utilisateur (.env, local.env) > variables de la machine (os.environ) > défauts
+    sources = [os.environ, env_values, profile]
     for source in sources:
         for key, value in source.items():
             if key in _KNOWN_KEYS and value is not None and value.strip():

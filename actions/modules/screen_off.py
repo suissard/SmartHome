@@ -1,9 +1,10 @@
 """
 Module d'action pour la mise en veille / extinction des écrans.
-Contient les métadonnées et le script bash multi-environnements embarqué.
+Contient les métadonnées et le script d'exécution (Linux et Windows).
 """
 
-from typing import List
+import sys
+from typing import Tuple
 from actions.base import BaseAction
 
 _SCREEN_OFF_SCRIPT = r"""
@@ -48,18 +49,36 @@ class ScreenOffAction(BaseAction):
     def __init__(self):
         super().__init__(
             tag="SCREEN_OFF",
-            done_message="J'éteins les écrans.",
-            description="Mettre en veille / éteindre les écrans.",
+            done_message="Écran éteint.",
+            description="Éteindre l'écran / mettre les moniteurs en veille.",
             script_code=_SCREEN_OFF_SCRIPT,
             has_args=False,
-            example_prompt="Éteins les écrans.",
-            example_response="[SCREEN_OFF] Écrans éteints."
+            example_prompt="Éteins l'écran.",
+            example_response="[SCREEN_OFF] Écran éteint."
         )
+
+    def execute_sync_windows(self, args: str = "", timeout: float = 10.0) -> Tuple[int, str, str]:
+        try:
+            import ctypes
+            print("🚀 [ACTIONS] [Windows] Extinction de l'écran...")
+            # HWND_BROADCAST = 0xFFFF, WM_SYSCOMMAND = 0x0112, SC_MONITORPOWER = 0xF170, 2 = Monitor OFF
+            ctypes.windll.user32.SendMessageW(0xFFFF, 0x0112, 0xF170, 2)
+            print("✅ [ACTIONS] [Windows] Écran éteint.")
+            return 0, "Écran éteint", ""
+        except Exception as e:
+            print(f"❌ [ACTIONS] [Windows] Exception screen_off : {e}")
+            return -1, "", str(e)
+
+    def execute_windows(self, args: str = "", dry_run: bool = False) -> bool:
+        if dry_run:
+            return True
+        code, out, err = self.execute_sync_windows(args)
+        return code == 0
 
 
 ACTIONS = [ScreenOffAction()]
 
 
 if __name__ == "__main__":
-    print("🧪 [DEBUG] Test du module actions/definitions/screen_off.py")
+    print("🧪 [DEBUG] Test du module actions/modules/screen_off.py")
     print(f"Action : [{ACTIONS[0].tag}] chargée avec succès.")

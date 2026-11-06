@@ -61,7 +61,8 @@ class TestSettings(unittest.TestCase):
 
     def test_env_overrides_file_and_empty_means_default(self):
         s = self._load("LLM_PROVIDER=ollama\nMCP_PORT=\nLLM_STREAM=non\n", {"LLM_PROVIDER": "OpenRouter"})
-        self.assertEqual(s.LLM_PROVIDER, "openrouter")
+        # Les réglages utilisateur (.env) supplantent l'environnement machine
+        self.assertEqual(s.LLM_PROVIDER, "ollama")
         self.assertEqual(s.MCP_PORT, 8000)
         self.assertFalse(s.LLM_STREAM)
 

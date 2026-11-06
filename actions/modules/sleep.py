@@ -16,10 +16,17 @@ class SleepAction(BaseAction):
                 "ou n'a plus besoin de rien (au revoir, merci c'est tout, bonne nuit...). N'éteint pas l'ordinateur."
             ),
             script_code="exit 0",
+            script_code_windows="exit 0",
             has_args=False,
             example_prompt="Merci, ce sera tout pour aujourd'hui.",
             example_response="[SLEEP] Avec plaisir, à bientôt !"
         )
+
+    def execute_sync_windows(self, args: str = "", timeout: float = 10.0):
+        return 0, "OK", ""
+
+    def execute_windows(self, args: str = "", dry_run: bool = False) -> bool:
+        return True
 
 
 SLEEP_ACTION = SleepAction()

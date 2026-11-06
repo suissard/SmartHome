@@ -1,14 +1,16 @@
-# Script d'installation SmartHome — Windows 10/11 et Windows Server.
+﻿# Script d'installation SmartHome — Windows 10/11 et Windows Server.
 #
-#   .\install.ps1                 Poste avec micro et haut-parleur (assistant vocal complet)
+#   .\install.ps1                 Questions pas à pas (machine, profil, Ollama, modèles, démarrage automatique)
 #   .\install.ps1 -Server         Serveur sans micro : passerelle réseau seule, jeton généré
 #   .\install.ps1 -Service        Démarrage automatique à l'ouverture de session (tâche planifiée)
+#   .\install.ps1 -Yes            Sans question : options de la ligne de commande et .env
 #   Get-Help .\install.ps1        Toutes les options
 #
 # Si l'exécution des scripts est bloquée :
 #   powershell -ExecutionPolicy Bypass -File .\install.ps1
 #
-# Le script est idempotent : le relancer met à jour les dépendances sans écraser le .env existant.
+# Une fois Python trouvé, l'assistant core/install_wizard.py demande ce qu'il faut installer ; les options
+# servent de choix par défaut. Le script est idempotent : le relancer met à jour les dépendances sans écraser le .env.
 
 [CmdletBinding()]
 param(
@@ -19,7 +21,8 @@ param(
     [switch]$NoSystemDeps,    # Ne rien installer via winget (Python, Ollama)
     [switch]$NoOllama,        # Ne pas installer Ollama ni télécharger de modèle LLM
     [switch]$NoModels,        # Ne télécharger aucun modèle
-    [switch]$Yes              # Répondre oui à toutes les questions
+    [switch]$NoMenu,          # Pas de questions pas à pas
+    [switch]$Yes              # Répondre oui à toutes les questions (implique -NoMenu)
 )
 
 $ErrorActionPreference = "Stop"
@@ -91,6 +94,45 @@ $PyExe = $PyCmd[0]
 $PyArgs = @($PyCmd | Select-Object -Skip 1)
 Ok "Interpréteur : $(& $PyExe @PyArgs --version)"
 
+# --- Questions pas à pas -------------------------------------------------------
+$OllamaChoice = if ($NoOllama) { "none" } else { "auto" }   # auto | install | use | remote | none
+$OllamaRemoteHost = ""
+$OllamaPull = @()
+$ProfileName = ""
+$WizardRan = $false
+
+if (-Not $Yes -and -Not $NoMenu -and -Not [Console]::IsInputRedirected) {
+    $flag = { param($b) if ($b) { "true" } else { "false" } }
+    $wizardArgs = $PyArgs + @("core\install_wizard.py", "--platform", "windows",
+        "--mode", $(if ($Server) { "server" } else { "desktop" }), "--host", $GatewayHost,
+        "--system-deps", (& $flag (-Not $NoSystemDeps)), "--ollama", (& $flag (-Not $NoOllama)),
+        "--models", (& $flag (-Not $NoModels)), "--service", (& $flag $Service))
+    $plan = & $PyExe @wizardArgs
+    switch ($LASTEXITCODE) {
+        0 { }
+        1 { exit 0 }      # « Annuler » dans le récapitulatif
+        130 { exit 130 }
+        default { Die "L'assistant d'installation a échoué (relancez avec -NoMenu pour s'en passer)." }
+    }
+    foreach ($line in $plan) {
+        $key, $value = "$line".Split("=", 2)
+        switch ($key) {
+            "MODE" { $Server = [switch]($value -eq "server") }
+            "OLLAMA" { $OllamaChoice = $value }
+            "OLLAMA_HOST" { $OllamaRemoteHost = $value }
+            "OLLAMA_PULL" { $OllamaPull = @($value.Split(",") | Where-Object { $_ }) }
+            "DOWNLOAD_MODELS" { $NoModels = [switch]($value -ne "true") }
+            "WITH_SERVICE" { $Service = [switch]($value -eq "true") }
+            "GATEWAY_BIND" { if ($value) { $GatewayHost = $value } }
+            "PROFILE" { $ProfileName = $value }
+        }
+    }
+    $WizardRan = $true
+    # Les étapes suivantes lisent la configuration du profil choisi (core/config.py applique SMARTHOME_PROFILE)
+    if ($ProfileName) { $env:SMARTHOME_PROFILE = $ProfileName }
+    Write-Host "🚀 Installation de SmartHome ($(if ($Server) { 'serveur sans micro' } else { 'poste vocal' }) — Windows)" -ForegroundColor Cyan
+}
+
 # --- 2. Environnement virtuel --------------------------------------------------
 Step "2/7 Environnement Python"
 if (-Not (Test-Path $VenvPy)) {
@@ -133,6 +175,16 @@ if (-Not (Test-Path $EnvFile)) {
     Ok ".env créé depuis .env.example."
 } else {
     Ok ".env existant conservé."
+}
+
+if ($ProfileName) {
+    # Même fichier que le menu de démarrage : le profil y sera présélectionné
+    [System.IO.File]::WriteAllText((Join-Path $PSScriptRoot "profiles\.last"), "$ProfileName`n")
+    Ok "Profil « $ProfileName » retenu."
+}
+if ($OllamaRemoteHost) {
+    Set-EnvValue "OLLAMA_HOST" $OllamaRemoteHost
+    Ok "Ollama distant : $OllamaRemoteHost."
 }
 
 if ($Server) {
@@ -178,21 +230,32 @@ function Test-Ollama($url) {
 }
 
 $llm = Get-Setting "LLM_PROVIDER"; $stt = Get-Setting "STT_PROVIDER"; $tts = Get-Setting "TTS_PROVIDER"
-if ($NoOllama) {
-    Info "Ignoré (-NoOllama)."
-} elseif ($llm -ne "ollama" -and $stt -ne "ollama" -and $tts -ne "ollama") {
+$fallback = Get-Setting "STT_FALLBACK_PROVIDER"
+if ($WizardRan) {
+    # Modèles choisis dans l'assistant (ceux du profil, ou la suggestion si le profil viendra plus tard)
+    $models = $OllamaPull
+} else {
+    $models = @()
+    if ($llm -eq "ollama") { $models += Get-Setting "OLLAMA_MODEL" }
+    if ($stt -eq "ollama" -or ($stt -in @("direct", "none", "bypass") -and $fallback -eq "ollama")) { $models += Get-Setting "OLLAMA_STT_MODEL" }
+    if ($tts -eq "ollama") { $models += Get-Setting "OLLAMA_TTS_MODEL" }
+}
+if ($OllamaChoice -eq "none") {
+    Info "Ignoré."
+} elseif (-Not $WizardRan -and $models.Count -eq 0) {
     Info "Aucun fournisseur Ollama configuré (LLM_PROVIDER=$llm) : rien à faire."
 } else {
     $ollamaHost = Get-Setting "OLLAMA_HOST"
-    if (-Not (Have "ollama") -and -Not (Test-Ollama $ollamaHost)) {
-        if (-Not $NoSystemDeps -and (Have "winget") -and (Confirm-Action "Ollama n'est pas installé. L'installer maintenant (winget) ?")) {
+    if ($OllamaChoice -ne "remote" -and -Not (Have "ollama") -and -Not (Test-Ollama $ollamaHost)) {
+        # « install » a déjà été validé dans l'assistant ; « auto » (sans assistant) demande confirmation
+        if (-Not $NoSystemDeps -and (Have "winget") -and ($OllamaChoice -eq "install" -or (Confirm-Action "Ollama n'est pas installé. L'installer maintenant (winget) ?"))) {
             winget install -e --id Ollama.Ollama --accept-package-agreements --accept-source-agreements
             Update-Path
         } else {
             Warn "Ollama absent : installez-le depuis https://ollama.com puis relancez install.ps1."
         }
     }
-    if ((Have "ollama") -and -Not (Test-Ollama $ollamaHost)) {
+    if ($OllamaChoice -ne "remote" -and (Have "ollama") -and -Not (Test-Ollama $ollamaHost)) {
         Info "Démarrage d'Ollama..."
         Start-Process "ollama" -ArgumentList "serve" -WindowStyle Hidden
         for ($i = 0; $i -lt 15 -and -Not (Test-Ollama $ollamaHost); $i++) { Start-Sleep -Seconds 1 }
@@ -202,14 +265,11 @@ if ($NoOllama) {
     } else {
         Ok "Ollama joignable sur $ollamaHost."
         if (-Not $NoModels) {
-            $models = @()
-            if ($llm -eq "ollama") { $models += Get-Setting "OLLAMA_MODEL" }
-            if ($stt -eq "ollama") { $models += Get-Setting "OLLAMA_STT_MODEL" }
-            if ($tts -eq "ollama") { $models += Get-Setting "OLLAMA_TTS_MODEL" }
             $env:OLLAMA_HOST = $ollamaHost
             foreach ($model in ($models | Select-Object -Unique)) {
                 Info "Téléchargement du modèle $model (peut être long)..."
-                ollama pull $model
+                if (Have "ollama") { ollama pull $model }
+                else { & $VenvPy -c "import sys, ollama; ollama.Client(host=sys.argv[1]).pull(sys.argv[2])" $ollamaHost $model }
                 if ($LASTEXITCODE -eq 0) { Ok "Modèle $model prêt." } else { Warn "Échec du téléchargement de $model." }
             }
         }

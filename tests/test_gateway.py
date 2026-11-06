@@ -274,6 +274,41 @@ class TestGateway(unittest.TestCase):
             tool = next(e for e in events if e["type"] == "tool")
             self.assertEqual(tool["executed"], accepted)
 
+    def test_websocket_confirmation_via_text(self):
+        for answer, expected in (("non", []), ("oui", ["shutdown"]), ("je confirme", ["shutdown"])):
+            self.executed.clear()
+            with self.client.websocket_connect("/ws", headers={"Authorization": f"Bearer {TOKEN}"}) as ws:
+                ws.receive_json()  # ready
+                ws.send_json({"type": "text", "text": "éteins l'ordinateur"})
+                request = ws.receive_json()
+                while request["type"] != "confirm_request":
+                    request = ws.receive_json()
+                self.assertIn("éteindre", request["question"])
+                ws.send_json({"type": "text", "text": answer})
+                events = collect_until_done(ws)
+            self.assertEqual(self.executed, expected)
+            dismiss = next(e for e in events if e["type"] == "confirm_dismiss")
+            self.assertEqual(dismiss["accepted"], bool(expected))
+
+    def test_websocket_confirmation_via_audio(self):
+        import base64
+        from unittest.mock import patch
+        with patch.object(FakeSTT, "transcribe", return_value="je confirme"):
+            self.executed.clear()
+            with self.client.websocket_connect("/ws", headers={"Authorization": f"Bearer {TOKEN}"}) as ws:
+                ws.receive_json()  # ready
+                ws.send_json({"type": "text", "text": "éteins l'ordinateur"})
+                request = ws.receive_json()
+                while request["type"] != "confirm_request":
+                    request = ws.receive_json()
+                self.assertIn("éteindre", request["question"])
+                fake_audio = base64.b64encode(b"RIFFfakeWAVaudio12345").decode("ascii")
+                ws.send_json({"type": "audio", "data": fake_audio})
+                events = collect_until_done(ws)
+            self.assertEqual(self.executed, ["shutdown"])
+            dismiss = next(e for e in events if e["type"] == "confirm_dismiss")
+            self.assertTrue(dismiss["accepted"])
+
 
 
 class TestWebClientServing(unittest.TestCase):

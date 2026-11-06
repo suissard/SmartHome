@@ -31,6 +31,21 @@ def is_affirmative(answer: str, confirm_words: list[str], cancel_words: list[str
     return any(contains(w) for w in confirm_words)
 
 
+def is_negative(answer: str, cancel_words: list[str]) -> bool:
+    """True si la réponse contient un mot d'annulation explicite."""
+    text = " " + _NON_WORD.sub(" ", (answer or "").lower()) + " "
+    return any(f" {w} " in text for w in cancel_words)
+
+
+def classify_confirmation(answer: str, confirm_words: list[str], cancel_words: list[str]) -> Optional[bool]:
+    """Retourne True si affirmatif, False si négatif/refusé, None si neutre ou non déterminé."""
+    if is_affirmative(answer, confirm_words, cancel_words):
+        return True
+    if is_negative(answer, cancel_words):
+        return False
+    return None
+
+
 class VoiceConfirmer:
     """Gestionnaire de confirmation utilisant le haut-parleur et le micro partagés."""
 

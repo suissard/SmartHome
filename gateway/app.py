@@ -47,6 +47,7 @@ from starlette.staticfiles import StaticFiles
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from audio.speech import SpeechPipeline
+from audio.confirm import classify_confirmation
 from core.assistant import AssistantCore, Reply, to_wav_bytes
 from core import restart, settings_store
 from core.config import Settings
@@ -123,16 +124,32 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
             pending[request_id] = future
             s = core.settings
             question = s.ACTIONS_CONFIRM_PROMPT.format(action=description.strip().rstrip(".").lower())
+            print(f"❓ [GATEWAY {session.id}] Demande de confirmation envoyée (id={request_id}) : « {question} »")
+            if core.tts and not getattr(core.tts, "passthrough", False):
+                try:
+                    res = core.tts.synthesize(question)
+                    if res:
+                        samples, sr = res
+                        if len(samples) > 0:
+                            wav_data = to_wav_bytes(samples, sr)
+                            push({"type": "audio_chunk", "seq": 0, "format": "wav", "data": base64.b64encode(wav_data).decode("ascii")})
+                except Exception as e:
+                    print(f"⚠️ [GATEWAY {session.id}] Erreur synthèse TTS confirmation : {e}")
             core.events.emit("confirm_request", session.id, id=request_id, question=question)
             try:
-                return bool(future.result(timeout=s.GATEWAY_CONFIRM_TIMEOUT))
+                res = bool(future.result(timeout=s.GATEWAY_CONFIRM_TIMEOUT))
+                print(f"{'✅' if res else '⛔'} [GATEWAY {session.id}] Confirmation {request_id} : {'Acceptée' if res else 'Refusée'}")
+                return res
             except concurrent.futures.TimeoutError:
+                print(f"⏰ [GATEWAY {session.id}] Délai expiré ({s.GATEWAY_CONFIRM_TIMEOUT}s) pour confirmation {request_id}")
                 return False
             finally:
                 pending.pop(request_id, None)
 
         session_id = hello.get("session") or ws.query_params.get("session")
         session = core.open_session(session_id, confirm=confirm)
+        client_ip = getattr(ws.client, "host", ws.client[0] if isinstance(ws.client, (tuple, list)) else "inconnu") if ws.client else "inconnu"
+        print(f"🔌 [GATEWAY {session.id}] Client connecté depuis {client_ip}")
         unsubscribe = core.events.subscribe(lambda e: push(e.to_dict()), session_id=session.id)
         # Modifications de paramètres faites depuis un autre appareil : chaque client recharge son formulaire
         unsubscribe_settings = core.events.subscribe(
@@ -252,7 +269,62 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
                     push({"type": "error", "message": "Message JSON invalide."})
                     continue
                 kind = message.get("type")
+                if pending:
+                    if kind == "confirm_response":
+                        req_id = message.get("id", "")
+                        accepted = bool(message.get("accepted"))
+                        print(f"📩 [GATEWAY {session.id}] Reçu confirm_response (id={req_id}, accepted={accepted})")
+                        future = pending.get(req_id)
+                        if future and not future.done():
+                            future.set_result(accepted)
+                        continue
+
+                    if kind == "text":
+                        user_text = (message.get("text") or "").strip()
+                        decision = classify_confirmation(user_text, s.ACTIONS_CONFIRM_WORDS, s.ACTIONS_CANCEL_WORDS)
+                        if decision is not None:
+                            active_id = next(iter(pending.keys()))
+                            future = pending[active_id]
+                            if not future.done():
+                                print(f"🗣️ [GATEWAY {session.id}] Confirmation résolue par texte (« {user_text} ») -> {'Acceptée' if decision else 'Refusée'}")
+                                future.set_result(decision)
+                                push({"type": "confirm_dismiss", "id": active_id, "accepted": decision})
+                                push({"type": "done", "turn": message.get("turn")})
+                                continue
+                        else:
+                            print(f"❓ [GATEWAY {session.id}] Texte non interprété comme confirmation (« {user_text} »)")
+                            push({"type": "toast", "message": "Réponse non comprise. Dites « Oui » ou « Non »."})
+                            push({"type": "done", "turn": message.get("turn")})
+                            continue
+
+                    if kind == "audio":
+                        try:
+                            audio_raw = base64.b64decode(message.get("data", ""))
+                            transcribed = await asyncio.to_thread(core.transcribe_audio, audio_raw)
+                            print(f"🎙️ [GATEWAY {session.id}] Audio transcrit pendant confirmation : « {transcribed} »")
+                            push({"type": "transcript", "text": transcribed, "turn": message.get("turn")})
+                            decision = classify_confirmation(transcribed, s.ACTIONS_CONFIRM_WORDS, s.ACTIONS_CANCEL_WORDS)
+                            if decision is not None:
+                                active_id = next(iter(pending.keys()))
+                                future = pending[active_id]
+                                if not future.done():
+                                    print(f"🗣️ [GATEWAY {session.id}] Confirmation résolue à la voix (« {transcribed} ») -> {'Acceptée' if decision else 'Refusée'}")
+                                    future.set_result(decision)
+                                    push({"type": "confirm_dismiss", "id": active_id, "accepted": decision})
+                                    push({"type": "done", "turn": message.get("turn")})
+                                    continue
+                            else:
+                                print(f"❓ [GATEWAY {session.id}] Voix non interprétée comme confirmation (« {transcribed} »)")
+                                push({"type": "toast", "message": f"Non compris (« {transcribed} »). Dites « Oui » ou « Non »."})
+                                push({"type": "done", "turn": message.get("turn")})
+                                continue
+                        except Exception as e:
+                            print(f"⚠️ [GATEWAY {session.id}] Erreur confirmation audio : {e}")
+                            push({"type": "done", "turn": message.get("turn")})
+                            continue
                 if kind in ("text", "audio"):
+                    txt_prev = f"texte='{message.get('text')}'" if kind == "text" else f"audio={len(message.get('data',''))}b"
+                    print(f"📩 [GATEWAY {session.id}] Message entrant : {kind} ({txt_prev})")
                     task = asyncio.create_task(handle(message))
                     tasks.add(task)
                     task.add_done_callback(tasks.discard)
@@ -261,11 +333,13 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
                     if future and not future.done():
                         future.set_result(bool(message.get("accepted")))
                 elif kind == "stop":
+                    print(f"⏹️ [GATEWAY {session.id}] Interruption reçue (stop)")
                     # L'utilisateur coupe la parole : fin de la génération et des phrases encore à envoyer
                     core.cancel(session.id)
                     for speech in list(speeches):
                         speech.interrupt()
                 elif kind == "reset":
+                    print(f"🔄 [GATEWAY {session.id}] Réinitialisation de la conversation (reset)")
                     session.conversation.clear()
                     push({"type": "reset_done"})
                 elif kind in ("forget", "edit_answer"):
@@ -296,6 +370,7 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
                 if not future.done():
                     future.set_result(False)
             sender_task.cancel()
+            print(f"🔌 [GATEWAY {session.id}] Client déconnecté")
 
     app = Starlette(routes=[
         Route("/health", health),

@@ -123,7 +123,7 @@ class Wizard:
             options.append(Option(model["name"], ("ollama", model["name"], "audio" in caps, decision),
                                   detail, "décision · local" if decision else "local"))
         if self.use_cloud:
-            for profile in ("mix", "cloud"):
+            for profile in ("hybrid", "mix", "cloud"):
                 name = profiles.profile_values(profile)["OPENROUTER_MODEL"]
                 options.append(Option(name, ("openrouter", name, None, False), tag="en ligne"))
             options.append(Option("Autre modèle OpenRouter…", ("openrouter", "", None, False)))

@@ -1,8 +1,11 @@
 """
 Module d'action pour le redémarrage du système.
-Contient les métadonnées et le script bash de redémarrage.
+Contient les métadonnées et le script de redémarrage (Linux et Windows).
 """
 
+import subprocess
+import sys
+from typing import Tuple
 from actions.base import BaseAction
 
 _REBOOT_SCRIPT = r"""
@@ -30,10 +33,30 @@ class RebootAction(BaseAction):
             example_response="[REBOOT] Redémarrage de la machine en cours."
         )
 
+    def execute_sync_windows(self, args: str = "", timeout: float = 10.0) -> Tuple[int, str, str]:
+        try:
+            print("🚀 [ACTIONS] [Windows] Lancement du redémarrage du système...")
+            res = subprocess.run(["shutdown.exe", "/r", "/t", "0"], capture_output=True, text=True, timeout=timeout)
+            if res.returncode == 0:
+                print("✅ [ACTIONS] [Windows] Commande de redémarrage transmise.")
+            else:
+                print(f"❌ [ACTIONS] [Windows] Échec reboot : {res.stderr}")
+            return res.returncode, res.stdout, res.stderr
+        except Exception as e:
+            print(f"❌ [ACTIONS] [Windows] Exception reboot : {e}")
+            return -1, "", str(e)
+
+    def execute_windows(self, args: str = "", dry_run: bool = False) -> bool:
+        if dry_run:
+            print("🔍 [ACTIONS] [DRY RUN] [Windows] Redémarrage simulé")
+            return True
+        code, out, err = self.execute_sync_windows(args)
+        return code == 0
+
 
 ACTIONS = [RebootAction()]
 
 
 if __name__ == "__main__":
-    print("🧪 [DEBUG] Test du module actions/definitions/reboot.py")
+    print("🧪 [DEBUG] Test du module actions/modules/reboot.py")
     print(f"Action : [{ACTIONS[0].tag}] chargée avec succès.")

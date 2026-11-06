@@ -5,6 +5,7 @@ ni transmis en en-tête Referer. Le front le lit, le mémorise et l'efface de la
 """
 
 import json
+import os
 import socket
 import subprocess
 from urllib.parse import quote, urlparse
@@ -23,9 +24,26 @@ def _lan_ip() -> str:
             return "127.0.0.1"
 
 
+def _tailscale_bin() -> str:
+    """Chemin de l'exécutable tailscale (y compris sous Windows où il n'est pas toujours dans le PATH)."""
+    import shutil, sys
+    found = shutil.which("tailscale")
+    if found:
+        return found
+    if sys.platform == "win32":
+        for candidate in (
+            os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"), "Tailscale", "tailscale.exe"),
+            os.path.join(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"), "Tailscale", "tailscale.exe"),
+            os.path.join(os.environ.get("LocalAppData", ""), "Tailscale", "tailscale.exe"),
+        ):
+            if os.path.isfile(candidate):
+                return candidate
+    return "tailscale"
+
+
 def _tailscale_json(*args: str) -> dict:
     try:
-        out = subprocess.run(["tailscale", *args, "--json"], capture_output=True, text=True, timeout=3, check=True)
+        out = subprocess.run([_tailscale_bin(), *args, "--json"], capture_output=True, text=True, timeout=3, check=True)
         return json.loads(out.stdout)
     except (OSError, subprocess.SubprocessError, ValueError):
         return {}

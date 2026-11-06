@@ -26,7 +26,7 @@ from llm.decision import NO_COMMAND, argument_questions, decidable_tools, tool_l
 from llm.llm import Conversation
 from llm.providers import LLMProvider, LLMResponse, _in_decision_list
 
-SETTINGS = Settings(MCP_CLIENT_ENABLED=False, OLLAMA_MODEL="nimble", LLM_DECISION_MODELS="nimble")
+SETTINGS = Settings(MCP_CLIENT_ENABLED=False, OLLAMA_MODEL="nimble", LLM_DECISION_MODELS="nimble", GATEWAY_AUTH_TOKEN="")
 
 
 class FakeDecider(LLMProvider):
@@ -188,7 +188,7 @@ class TestSettingsStore(unittest.TestCase):
 
     def test_describe_exposes_no_secret_and_types(self):
         fields = {f["name"]: f for g in settings_store.describe(SETTINGS) for f in g["fields"]}
-        self.assertFalse(any("TOKEN" in n or "KEY" in n or n.startswith(("GATEWAY_", "MCP_")) for n in fields))
+        self.assertFalse(any("TOKEN" in n or (n != "OPENROUTER_API_KEY" and "KEY" in n) or n.startswith(("GATEWAY_", "MCP_")) for n in fields))
         self.assertEqual(fields["LLM_THINK"]["kind"], "bool")
         self.assertEqual(fields["LLM_TOOL_CALLING"]["options"], ["auto", "native", "tags"])
         self.assertEqual(fields["LLM_DECISION_MIN_CONFIDENCE"]["max"], 1.0)
