@@ -28,6 +28,8 @@ Routes :
                         Paramètres : {"type": "settings", "groups", "llm"} | {"type": "models", "models", "error"?}
                         | {"type": "settings_saved", "changed", "restart", "overridden", "llm"} | {"type": "settings_error", "message"}
                         | {"type": "profile_saved", "user"} | {"type": "profile_error", "message"}
+                        ; "ready.history" : [{role, content, turn?}] (conversation en cours, rechargée depuis
+                        l'historique du compte si la session est neuve)
                         ; "settings_changed" est diffusé à tous les clients après une modification,
                         "restarting" juste avant un redémarrage demandé par un client.
                         Paramètres, liste des modèles et redémarrage sont réservés aux rôles AUTH_ADMIN_ROLES.
@@ -321,9 +323,16 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
             except Exception as e:
                 push({"type": "settings_error", "message": f"Erreur : {e}"})
 
+        # Conversation en cours (rechargée depuis l'historique du compte pour une session neuve) : la PWA la réaffiche
+        try:
+            history = await asyncio.to_thread(core.restore_history, session.id)
+        except Exception as e:
+            print(f"⚠️ [GATEWAY {session.id}] Historique non rechargé : {e}")
+            history = []
         s = core.settings
         push({
             "type": "ready",
+            "history": history,
             "session": session.id,
             "user": {**user.public(s), **({"token": user.token} if user.token else {})},
             "accounts": directory.enabled,
@@ -423,7 +432,7 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
                         speech.interrupt()
                 elif kind == "reset":
                     print(f"🔄 [GATEWAY {session.id}] Réinitialisation de la conversation (reset)")
-                    session.conversation.clear()
+                    core.reset(session.id)
                     push({"type": "reset_done"})
                 elif kind in ("forget", "edit_answer"):
                     task = asyncio.create_task(handle_history(message))

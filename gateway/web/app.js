@@ -337,6 +337,7 @@ function handleEvent(event) {
       applyUser(event.user, event.accounts);
       if (event.profile_max) ui.profileInstructions.maxLength = event.profile_max;
       fillVoices(event.voices || [], event.user?.voice || "");
+      renderHistory(event.history || []);
       showModel(event.llm);
       refreshControls();
       if (state.restarting) {
@@ -504,6 +505,17 @@ function interruptAssistant() {
   // Barge-in : on coupe la voix ici et la génération côté serveur
   const speaking = stopPlayback();
   if (state.busy || speaking) send({ type: "stop" });
+}
+
+// Conversation en cours renvoyée par le serveur (rechargement de la page, autre appareil, historique du compte) :
+// affichée seulement si l'écran est vide (une simple reconnexion garde les bulles déjà là)
+function renderHistory(messages) {
+  if (!messages.length || ui.log.querySelector(".msg")) return;
+  for (const message of messages) {
+    const el = addBubble(message.role === "user" ? "user" : "bot", message.content);
+    if (message.turn) el.dataset.turn = message.turn;
+  }
+  scrollDown(true);
 }
 
 function newTurn() {

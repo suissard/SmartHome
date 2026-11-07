@@ -40,6 +40,12 @@ puis `AUTH_PROVIDER=pocketbase` dans `.env`.
 - **Voix** : chacun choisit aussi sa voix parmi les voix Piper de `voices/` (bouton « Écouter » pour l'essayer).
   Ajouter une voix = déposer son `.onnx` et son `.onnx.json` dans `voices/`. Avec `TTS_PROVIDER=ollama` ou
   `openrouter`, le choix n'est pas proposé. Champ `voice` ajouté par une troisième migration.
+- **Historique** : les conversations de chaque compte sont conservées, sans limite de durée (projet local), dans la
+  collection `messages` (quatrième migration). À la connexion, la PWA réaffiche la dernière conversation et l'assistant
+  en retrouve le contexte, même après un redémarrage. Supprimer, relancer ou corriger un message est enregistré ;
+  « Nouvelle conversation » en commence une autre (l'ancienne reste en base). Chacun ne voit que ses messages ;
+  l'administrateur de PocketBase (`/_/`) les voit tous. Le jeton maître et le micro « Foyer » ne sont pas enregistrés.
+  Lire la dernière conversation d'un compte : `.venv/bin/python core/history.py`.
 - **Comptes du foyer** : interface `http://127.0.0.1:8090/_/` (collection `users`, champ `role`), depuis la machine
   elle-même (sur un serveur sans écran : `ssh -L 8090:127.0.0.1:8090 serveur`).
 - **État** : `.venv/bin/python -m core.pocketbase` ; vérifier un compte : `.venv/bin/python core/users.py`.
