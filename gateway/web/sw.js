@@ -1,6 +1,6 @@
 // Service worker minimal : rend l'interface installable et disponible au démarrage même si le réseau tarde.
 // Stratégie « réseau d'abord » : la version du serveur est toujours préférée ; seul le squelette est mis en cache.
-const CACHE = "smarthome-shell-v9";
+const CACHE = "smarthome-shell-v10";
 const SHELL = [
   "./",
   "index.html",

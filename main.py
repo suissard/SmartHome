@@ -33,6 +33,7 @@ from core.assistant import AssistantCore, Reply
 from core.mcp_hub import get_mcp_hub
 from core.restart import restart_if_requested
 from core.security import require_token_for_host
+from core.users import local_user
 
 LOCAL_SESSION = "local"
 
@@ -152,7 +153,8 @@ def main():
 
     # Cœur partagé entre le micro local et les clients distants (mêmes modèles chargés une seule fois)
     core = AssistantCore(settings, stt=transcriber.stt, tts=tts)
-    local = core.open_session(LOCAL_SESSION, persistent=True)
+    # Le micro n'identifie pas la voix : compte fixe « Foyer » (rôle AUTH_LOCAL_ROLE)
+    local = core.open_session(LOCAL_SESSION, persistent=True, user=local_user(settings))
     # Voix en streaming (phrase par phrase, interruptible) et micro partagé entre écoute et confirmation
     speech = SpeechPipeline(tts, output_device=settings.AUDIO_OUTPUT_DEVICE_INDEX)
     mic_lock = threading.Lock()

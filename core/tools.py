@@ -97,6 +97,31 @@ def request_confirmation(
 
 
 # ==========================================
+# Droits d'un utilisateur sur les outils
+# ==========================================
+@dataclass(frozen=True)
+class ToolPolicy:
+    """Outils permis à un rôle. Règles : un nom d'outil, "*" (tous), "safe" (tous ceux sans confirmation)
+    ou "-nom" (exclu, prioritaire). Un outil non permis n'est ni proposé au LLM ni exécuté."""
+    allowed: frozenset = frozenset()
+    denied: frozenset = frozenset()
+
+    @classmethod
+    def parse(cls, rules: str) -> "ToolPolicy":
+        items = [item.strip().lower() for item in str(rules or "").split(",") if item.strip()]
+        return cls(
+            allowed=frozenset(i for i in items if not i.startswith("-")),
+            denied=frozenset(i[1:].strip() for i in items if i.startswith("-")),
+        )
+
+    def allows(self, name: str, danger: str = "confirm") -> bool:
+        name = name.lower()
+        if name in self.denied:
+            return False
+        return "*" in self.allowed or name in self.allowed or (danger == "safe" and "safe" in self.allowed)
+
+
+# ==========================================
 # Registre
 # ==========================================
 class ToolRegistry:
@@ -121,6 +146,12 @@ class ToolRegistry:
 
     def schemas(self) -> list[dict]:
         return [t.schema() for t in self._tools.values()]
+
+    def restricted(self, policy: ToolPolicy) -> "ToolRegistry":
+        """Vue du registre limitée aux outils permis par `policy` (mêmes objets Tool, noms inchangés)."""
+        view = ToolRegistry(self.settings)
+        view._tools = {name: tool for name, tool in self._tools.items() if policy.allows(name, tool.danger)}
+        return view
 
     def call(self, call: ToolCall, confirm: Optional[ConfirmationHandler] = None) -> ToolResult:
         """Exécute un appel d'outil (avec confirmation si nécessaire). Ne lève jamais : l'erreur devient le résultat."""

@@ -64,11 +64,19 @@
     </button>
   </footer>
 
-  <!-- Connexion : saisie du jeton de la passerelle -->
+  <!-- Connexion : compte utilisateur (si la passerelle a des comptes) ou jeton de la passerelle -->
   <dialog id="setup" class="sheet" aria-labelledby="setup-title">
     <form method="dialog" id="setup-form">
       <h2 id="setup-title">Connexion</h2>
-      <p>Saisissez le jeton de la passerelle (<code>GATEWAY_AUTH_TOKEN</code> dans le fichier <code>.env</code>). Il reste enregistré sur cet appareil.</p>
+      <div id="account-fields" hidden>
+        <p>Connectez-vous avec votre compte. Seule la session reste enregistrée sur cet appareil, jamais le mot de passe.</p>
+        <label for="identity">Adresse e-mail</label>
+        <input id="identity" type="email" autocomplete="username" spellcheck="false">
+        <label for="password">Mot de passe</label>
+        <input id="password" type="password" autocomplete="current-password">
+        <p class="meta">Ou, pour l'administrateur, le jeton de la passerelle :</p>
+      </div>
+      <p id="token-help">Saisissez le jeton de la passerelle (<code>GATEWAY_AUTH_TOKEN</code> dans le fichier <code>.env</code>). Il reste enregistré sur cet appareil.</p>
       <label for="token">Jeton</label>
       <input id="token" type="password" autocomplete="current-password" spellcheck="false" placeholder="Laisser vide en local sans jeton">
       <p id="setup-error" class="error" hidden></p>
@@ -91,8 +99,9 @@
         <span>Arrêter l'écoute automatiquement à la fin de la phrase</span>
       </label>
       <p class="meta">Session : <code id="session-id">—</code></p>
+      <p class="meta">Connecté : <span id="user-name">—</span></p>
 
-      <section class="block" aria-labelledby="model-title">
+      <section class="block admin-only" aria-labelledby="model-title">
         <h3 id="model-title">Modèle</h3>
         <p id="model-current" class="meta">—</p>
         <div id="model-ollama">
@@ -115,10 +124,10 @@
       </section>
 
       <div class="actions stacked">
-        <button type="button" id="advanced-btn">Paramètres avancés…</button>
+        <button type="button" id="advanced-btn" class="admin-only">Paramètres avancés…</button>
         <button type="button" id="reset-btn">Nouvelle conversation</button>
-        <button type="button" id="restart-btn">Redémarrer SmartHome</button>
-        <button type="button" id="logout-btn" class="danger">Oublier le jeton</button>
+        <button type="button" id="restart-btn" class="admin-only">Redémarrer SmartHome</button>
+        <button type="button" id="logout-btn" class="danger">Se déconnecter</button>
         <button type="submit" class="primary">Fermer</button>
       </div>
     </form>

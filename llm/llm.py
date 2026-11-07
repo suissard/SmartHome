@@ -18,7 +18,7 @@ if str(_ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(_ROOT_DIR))
 
 from core.config import Settings, get_settings
-from core.tools import ConfirmationHandler, ToolRegistry, ToolResult, build_tool_registry
+from core.tools import ConfirmationHandler, ToolPolicy, ToolRegistry, ToolResult, build_tool_registry
 from llm.providers import LLM_PROVIDERS, LLMProvider, ToolsNotSupportedError
 
 _THINK_TAGS = re.compile(r"<think>.*?</think>", flags=re.DOTALL)
@@ -50,16 +50,18 @@ def current_datetime_line(now: Optional[datetime] = None) -> str:
             f"il est {now:%H:%M} (fuseau {now:%Z}).")
 
 
-def get_default_system_prompt(settings: Optional[Settings] = None, use_tags: Optional[bool] = None) -> str:
-    """Prompt système complet : consignes de base, date et heure courantes, puis outils (voir `_tools_prompt`)."""
+def get_default_system_prompt(settings: Optional[Settings] = None, use_tags: Optional[bool] = None,
+                              policy: Optional[ToolPolicy] = None) -> str:
+    """Prompt système complet : consignes de base, date et heure courantes, puis outils (voir `_tools_prompt`).
+    `policy` limite les tags d'actions présentés à ceux que l'utilisateur a le droit d'utiliser."""
     s = settings or get_settings()
-    prompt = _tools_prompt(s, use_tags)
+    prompt = _tools_prompt(s, use_tags, policy)
     if s.LLM_INJECT_DATETIME:
         prompt = f"{prompt.rstrip()}\n\n{current_datetime_line()}"
     return prompt
 
 
-def _tools_prompt(s: Settings, use_tags: Optional[bool]) -> str:
+def _tools_prompt(s: Settings, use_tags: Optional[bool], policy: Optional[ToolPolicy] = None) -> str:
     """Prompt système enrichi : liste des tags d'actions (mode tags) ou consignes d'outils (mode natif)."""
     if use_tags is None:
         use_tags = s.LLM_TOOL_CALLING == "tags"
@@ -71,7 +73,7 @@ def _tools_prompt(s: Settings, use_tags: Optional[bool]) -> str:
         return s.LLM_SYSTEM_PROMPT
     try:
         from actions.manager import get_action_manager
-        return get_action_manager().build_dynamic_system_prompt(s.LLM_SYSTEM_PROMPT)
+        return get_action_manager().build_dynamic_system_prompt(s.LLM_SYSTEM_PROMPT, policy=policy)
     except Exception as e:
         print(f"⚠️ [LLM] Erreur lors de la construction du prompt dynamique : {e}")
         return s.LLM_SYSTEM_PROMPT
@@ -90,10 +92,14 @@ class Conversation:
         settings: Optional[Settings] = None,
         tools: Optional[ToolRegistry] = None,
         confirm: Optional[ConfirmationHandler] = None,
+        tool_policy: Optional[ToolPolicy] = None,
     ):
         self.settings = settings or get_settings()
         self._provider = provider
         self._tools = tools
+        # Droits de l'utilisateur de la session (None : tous les outils) ; vue filtrée mise en cache
+        self.tool_policy = tool_policy
+        self._restricted: Optional[tuple] = None
         self.max_messages = self.settings.LLM_HISTORY_MESSAGES
         self.history: list[dict] = []
         # Messages sortis de la fenêtre : ils y reviennent si une suppression ou une relance y refait de la place
@@ -110,7 +116,12 @@ class Conversation:
         # Construit au premier besoin, pour inclure les outils des serveurs MCP connectés entre-temps
         if self._tools is None:
             self._tools = build_tool_registry(self.settings)
-        return self._tools
+        if self.tool_policy is None:
+            return self._tools
+        cache = self._restricted
+        if cache is None or cache[0] is not self._tools or cache[1] is not self.tool_policy:
+            cache = self._restricted = (self._tools, self.tool_policy, self._tools.restricted(self.tool_policy))
+        return cache[2]
 
     def refresh_tools(self):
         """Reconstruit le registre d'outils (ex: après connexion du hub MCP)."""
@@ -186,7 +197,7 @@ class Conversation:
             return self._decide(prompt, audio_bytes, use_history, on_tool, turn)
 
         def build_messages(use_tags: bool) -> list[dict]:
-            messages = [{"role": "system", "content": system_prompt or get_default_system_prompt(self.settings, use_tags)}]
+            messages = [{"role": "system", "content": system_prompt or get_default_system_prompt(self.settings, use_tags, self.tool_policy)}]
             if use_history:
                 messages.extend({"role": m["role"], "content": m["content"]} for m in self.history)
             messages.append({"role": "user", "content": prompt or ""})

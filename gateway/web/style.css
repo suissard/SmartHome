@@ -5,6 +5,9 @@
   display: none !important;
 }
 
+/* Compte sans droits d'administration : paramètres, modèle et redémarrage masqués */
+body.not-admin .admin-only { display: none !important; }
+
 :root {
   --bg: #f8f9fa;
   --surface: #ffffff;
@@ -568,7 +571,7 @@ summary:focus-visible {
 .sheet h2 { margin: 0 0 8px; font-size: 19px; }
 .sheet p { color: var(--muted); margin: 0 0 14px; }
 .sheet label { display: block; font-size: 14px; margin-bottom: 6px; }
-.sheet input[type="password"], .sheet input[type="text"] {
+.sheet input[type="password"], .sheet input[type="text"], .sheet input[type="email"] {
   width: 100%;
   padding: 11px 12px;
   border-radius: 12px;

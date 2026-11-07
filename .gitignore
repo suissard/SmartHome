@@ -20,3 +20,8 @@ __pycache__/
 .vscode/
 .DS_Store
 *.swp
+
+# PocketBase (comptes utilisateurs) : binaire et données locales, seules les migrations sont versionnées
+pocketbase/pocketbase
+pocketbase/pocketbase.exe
+pocketbase/pb_data/
