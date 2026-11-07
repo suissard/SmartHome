@@ -24,7 +24,7 @@ from core.config import ENV_FILE, Settings, get_settings, set_settings
 from core.events import EventBus
 from core.sentences import SentenceSplitter, matches_phrase
 from core.tools import ConfirmationHandler, ToolRegistry, ToolResult, build_tool_registry
-from core.users import User, tool_policy
+from core.users import User, tool_policy, user_prompt
 from llm.llm import Conversation, ResponseInterrupted
 
 
@@ -196,6 +196,7 @@ class AssistantCore:
                 conversation._provider = self.llm
                 conversation._tools = self.tools
                 conversation.tool_policy = tool_policy(session.user, settings)
+                conversation.user_prompt = user_prompt(session.user, settings)
 
     def model_info(self) -> dict:
         """Modèle actif, pour l'affichage côté client."""
@@ -224,17 +225,44 @@ class AssistantCore:
             if session is None:
                 conversation = Conversation(self.llm, self.settings, tools=self.tools, confirm=confirm,
                                             tool_policy=tool_policy(user, self.settings))
+                conversation.user_prompt = user_prompt(user, self.settings)
                 session = Session(sid, conversation, persistent=persistent, user=user)
                 self._sessions[sid] = session
             else:
                 if confirm is not None:
                     session.conversation.confirm = confirm
                 if user is not None and session.user != user:
-                    # Même compte, rôle ou jeton renouvelés à la reconnexion : les droits suivent
-                    session.user = user
-                    session.conversation.tool_policy = tool_policy(user, self.settings)
+                    # Même compte, rôle, profil ou jeton renouvelés à la reconnexion : droits et prompt suivent
+                    self._assign_user(session, user)
             session.last_seen = time.monotonic()
             return session
+
+    def _assign_user(self, session: Session, user: User):
+        session.user = user
+        session.conversation.tool_policy = tool_policy(user, self.settings)
+        session.conversation.user_prompt = user_prompt(user, self.settings)
+
+    def set_session_user(self, session_id: str, user: User):
+        """Profil du même compte modifié (prénom, consignes) : pris en compte dès la demande suivante."""
+        session = self.get_session(session_id)
+        if session is None or session.user is None or session.user.id != user.id:
+            raise ValueError("Session d'un autre utilisateur.")
+        self._assign_user(session, user)
+
+    # ---- Voix ----
+    def voices(self) -> list[dict]:
+        """Voix que les comptes peuvent choisir (vide si le fournisseur TTS n'en propose pas ou ne charge pas)."""
+        try:
+            return self.tts.voices()
+        except Exception as e:
+            print(f"⚠️ [ASSISTANT] Liste des voix indisponible : {e}")
+            return []
+
+    def session_voice(self, session_id: str) -> Optional[str]:
+        """Voix du compte de la session, si elle est encore installée (sinon None : voix configurée)."""
+        session = self.get_session(session_id)
+        voice = session.user.voice if session and session.user else ""
+        return voice if voice and voice in {v["id"] for v in self.voices()} else None
 
     def get_session(self, session_id: str) -> Optional[Session]:
         with self._sessions_lock:
@@ -381,7 +409,7 @@ class AssistantCore:
 
             if synthesize and reply.text:
                 try:
-                    samples, sample_rate = self.tts.synthesize(reply.text)
+                    samples, sample_rate = self.tts.synthesize(reply.text, voice=self.session_voice(sid))
                     if len(samples):
                         reply.audio_wav = to_wav_bytes(samples, sample_rate)
                 except Exception as e:

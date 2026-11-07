@@ -50,6 +50,11 @@ class FakeDirectory(UserDirectory):
             raise AuthError("Identifiants refusés.")
         return self._user(identity)
 
+    def update_profile(self, user, name, instructions, voice=""):
+        from core.users import clean_profile
+        name, instructions = clean_profile(name, instructions, self.settings)
+        return User(user.id, name, user.role, user.token, instructions, voice)
+
 
 ACCOUNT_SETTINGS = Settings(**{**SETTINGS.model_dump(), "GATEWAY_AUTH_TOKEN": TOKEN, "AUTH_PROVIDER": "fake_test"})
 
@@ -110,6 +115,48 @@ class TestSessionOwnership(unittest.TestCase):
         self.assertFalse(reply.tools[0]["executed"])
 
 
+class TestUserProfile(unittest.TestCase):
+    def test_prompt_lines(self):
+        from core.users import user_prompt
+        s = Settings(MCP_CLIENT_ENABLED=False)
+        self.assertEqual(user_prompt(User("pb_m", "Marie", "member"), s), "Tu parles avec Marie.")
+        with_prefs = user_prompt(User("pb_m", "Marie", "member", instructions="Tutoie-moi."), s)
+        self.assertIn("Tutoie-moi.", with_prefs)
+        self.assertEqual(user_prompt(admin_user(s), s), "")
+        self.assertEqual(user_prompt(local_user(s), s), "")
+        self.assertEqual(user_prompt(None, s), "")
+
+    def test_clean_profile(self):
+        from core.users import clean_profile
+        s = Settings(MCP_CLIENT_ENABLED=False, AUTH_INSTRUCTIONS_MAX_CHARS=5)
+        self.assertEqual(clean_profile("  Marie   Curie ", " abcdefgh ", s), ("Marie Curie", "abcde"))
+        with self.assertRaises(ValueError):
+            clean_profile("   ", "", s)
+
+    def test_session_prompt_follows_profile(self):
+        seen = []
+        core = make_core([])
+        original = core.llm.chat
+
+        def chat(messages, **kwargs):
+            seen.append(messages[0]["content"])
+            return original(messages, **kwargs)
+
+        core.llm.chat = chat
+        marie = User("pb_m", "Marie", "member", instructions="Tutoie-moi.")
+        session = core.open_session("p", user=marie)
+        core.respond(session.id, text="Bonjour")
+        self.assertIn("Tu parles avec Marie.", seen[-1])
+        self.assertIn("Tutoie-moi.", seen[-1])
+
+        core.set_session_user(session.id, User("pb_m", "Marie", "member", instructions="Vouvoie-moi."))
+        core.respond(session.id, text="Encore")
+        self.assertIn("Vouvoie-moi.", seen[-1])
+        self.assertNotIn("Tutoie-moi.", seen[-1])
+        with self.assertRaises(ValueError):
+            core.set_session_user(session.id, User("pb_x", "Autre", "member"))
+
+
 class TestGatewayAccounts(unittest.TestCase):
     def setUp(self):
         self.executed = []
@@ -158,6 +205,27 @@ class TestGatewayAccounts(unittest.TestCase):
             collect_until_done(ws)
         self.assertEqual(self.executed, [])
 
+    def test_profile_update(self):
+        with self.client.websocket_connect("/ws") as ws:
+            ready = self.connect(ws, identity="marie@foyer", password="secret")
+            self.assertTrue(ready["user"]["profile"])
+            ws.send_json({"type": "update_profile", "name": " Marie  C ", "instructions": "Réponds en une phrase."})
+            event = ws.receive_json()
+            self.assertEqual(event["type"], "profile_saved")
+            self.assertEqual((event["user"]["name"], event["user"]["instructions"]), ("Marie C", "Réponds en une phrase."))
+            self.assertNotIn("token", event["user"])
+            ws.send_json({"type": "update_profile", "name": "", "instructions": ""})
+            self.assertEqual(ws.receive_json()["type"], "profile_error")
+        session = self.core.get_session(ready["session"])
+        self.assertIn("Réponds en une phrase.", session.conversation.user_prompt)
+
+    def test_master_token_has_no_profile(self):
+        with self.client.websocket_connect("/ws") as ws:
+            ready = self.connect(ws, token=TOKEN)
+            self.assertFalse(ready["user"]["profile"])
+            ws.send_json({"type": "update_profile", "name": "Moi", "instructions": ""})
+            self.assertEqual(ws.receive_json()["type"], "profile_error")
+
     def test_master_token_is_admin(self):
         with self.client.websocket_connect("/ws") as ws:
             ready = self.connect(ws, token=TOKEN)
@@ -169,6 +237,102 @@ class TestGatewayAccounts(unittest.TestCase):
         with self.client.websocket_connect("/ws") as ws:
             ready = self.connect(ws, token=TOKEN, identity="leo@foyer", password="1234")
         self.assertEqual(ready["user"]["role"], "guest")
+
+
+class VoiceTTS:
+    """Fournisseur TTS factice avec deux voix ; retient la voix de chaque synthèse."""
+    used: list = []
+
+    def __new__(cls, settings):
+        import numpy as np
+        from audio.tts import TTSProvider
+
+        class _Provider(TTSProvider):
+            @classmethod
+            def describe(cls, s):
+                return "Voix factices"
+
+            def voices(self):
+                return [{"id": "fr_FR-tom-medium", "label": "tom", "default": True},
+                        {"id": "fr_FR-upmc-medium", "label": "upmc", "default": False}]
+
+            def synthesize(self, text, voice=None):
+                VoiceTTS.used.append(voice)
+                return np.zeros(100, dtype=np.int16), 8000
+
+        return _Provider(settings)
+
+
+class TestVoices(unittest.TestCase):
+    def setUp(self):
+        from audio.tts import TextToSpeech
+        VoiceTTS.used = []
+        self.core = make_core([])
+        self.core._tts = TextToSpeech(SETTINGS, provider=VoiceTTS(SETTINGS))
+        self.client = TestClient(create_app(self.core, ACCOUNT_SETTINGS))
+
+    def test_list_piper_voices(self):
+        import tempfile
+        import audio.tts as tts
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(tts, "VOICES_DIR", Path(tmp)):
+            for name in ("fr_FR-siwis-medium", "fr_FR-tom-medium", "sans-config"):
+                (Path(tmp) / f"{name}.onnx").write_bytes(b"")
+            for name in ("fr_FR-siwis-medium", "fr_FR-tom-medium"):
+                (Path(tmp) / f"{name}.onnx.json").write_text("{}")
+            voices = tts.list_piper_voices(f"{tmp}/fr_FR-tom-medium.onnx")
+        self.assertEqual([v["id"] for v in voices], ["fr_FR-siwis-medium", "fr_FR-tom-medium"])
+        self.assertEqual(voices[0]["label"], "siwis (fr_FR, medium)")
+        self.assertEqual([v["default"] for v in voices], [False, True])
+
+    def test_piper_voice_cache(self):
+        import audio.tts as tts
+        piper = tts.PiperTTS.__new__(tts.PiperTTS)
+        piper.settings = Settings(MCP_CLIENT_ENABLED=False, TTS_VOICE_CACHE_SIZE=1)
+        piper.voice, piper.default_id = "voix-défaut", "a"
+        piper._cache = tts.OrderedDict()
+        loads = []
+        piper._load = lambda path, config_path: loads.append(Path(path).stem) or f"modèle-{Path(path).stem}"
+        voices = [{"id": i, "label": i, "default": i == "a"} for i in ("a", "b", "c")]
+        with mock.patch.object(tts.PiperTTS, "voices", return_value=voices):
+            self.assertEqual(piper._voice(None), "voix-défaut")
+            self.assertEqual(piper._voice("a"), "voix-défaut")
+            self.assertEqual(piper._voice("../../etc/passwd"), "voix-défaut")  # jamais un chemin
+            self.assertEqual(piper._voice("b"), "modèle-b")
+            self.assertEqual(piper._voice("b"), "modèle-b")
+            piper._voice("c")
+            self.assertEqual(list(piper._cache), ["c"])  # une seule voix supplémentaire gardée
+        self.assertEqual(loads, ["b", "c"])
+
+    def test_profile_voice_is_used_for_spoken_replies(self):
+        with self.client.websocket_connect("/ws") as ws:
+            ready = self.connect(ws)
+            self.assertEqual([v["id"] for v in ready["voices"]], ["fr_FR-tom-medium", "fr_FR-upmc-medium"])
+            ws.send_json({"type": "update_profile", "name": "Marie", "instructions": "", "voice": "inconnue"})
+            self.assertEqual(ws.receive_json()["type"], "profile_error")
+            ws.send_json({"type": "update_profile", "name": "Marie", "instructions": "", "voice": "fr_FR-upmc-medium"})
+            self.assertEqual(ws.receive_json()["user"]["voice"], "fr_FR-upmc-medium")
+            ws.send_json({"type": "text", "text": "Bonjour", "speak": True})
+            collect_until_done(ws)
+            ws.send_json({"type": "preview_voice", "voice": "fr_FR-tom-medium"})
+            event = ws.receive_json()
+            self.assertEqual((event["type"], event["voice"]), ("voice_preview", "fr_FR-tom-medium"))
+        self.assertIn("fr_FR-upmc-medium", VoiceTTS.used)
+        self.assertEqual(VoiceTTS.used[-1], "fr_FR-tom-medium")
+
+    def test_uninstalled_voice_falls_back_to_default(self):
+        session = self.core.open_session("v", user=User("pb_m", "Marie", "member", voice="supprimée"))
+        self.assertIsNone(self.core.session_voice(session.id))
+        self.core.set_session_user("v", User("pb_m", "Marie", "member", voice="fr_FR-upmc-medium"))
+        self.assertEqual(self.core.session_voice("v"), "fr_FR-upmc-medium")
+
+    def test_master_token_gets_no_voice_list(self):
+        with self.client.websocket_connect("/ws") as ws:
+            ws.send_json({"type": "auth", "token": TOKEN})
+            self.assertEqual(ws.receive_json()["voices"], [])
+
+    def connect(self, ws):
+        ws.send_json({"type": "auth", "identity": "marie@foyer", "password": "secret"})
+        return ws.receive_json()
 
 
 class _PocketBaseStub(BaseHTTPRequestHandler):
@@ -186,6 +350,16 @@ class _PocketBaseStub(BaseHTTPRequestHandler):
             status, data = 400, {"message": "Failed to authenticate."}
         else:
             status, data = 404, {"message": "Missing collection."}
+        self._reply(status, data)
+
+    def do_PATCH(self):
+        body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
+        if self.path == "/api/collections/users/records/abc" and self.headers.get("Authorization") == "jwt-1":
+            self._reply(200, {"id": "abc", "email": "marie@foyer", "role": "member", **body})
+        else:
+            self._reply(404, {"message": "The requested resource wasn't found."})
+
+    def _reply(self, status, data):
         payload = json.dumps(data).encode()
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
@@ -213,6 +387,14 @@ class TestPocketBaseDirectory(unittest.TestCase):
         self.assertEqual((user.id, user.name, user.role, user.token), ("pb_abc", "Marie", "member", "jwt-1"))
         refreshed = self.directory().refresh("jwt-1")
         self.assertEqual((refreshed.role, refreshed.token), ("admin", "jwt-2"))
+
+    def test_update_profile(self):
+        directory = self.directory()
+        user = directory.login("marie@foyer", "secret")
+        updated = directory.update_profile(user, "Marie C", "Court.")
+        self.assertEqual((updated.name, updated.instructions, updated.token), ("Marie C", "Court.", "jwt-1"))
+        with self.assertRaises(AuthError):  # 404 = règle d'accès refusée, pas un annuaire absent
+            directory.update_profile(User("pb_abc", "Marie", "member", "expiré"), "Marie", "")
 
     def test_errors(self):
         with self.assertRaises(AuthError):

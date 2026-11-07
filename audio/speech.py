@@ -24,8 +24,10 @@ _POLL_SECONDS = 0.02
 
 
 class SpeechPipeline:
-    def __init__(self, tts, sink: Optional[AudioSink] = None, output_device=None):
+    def __init__(self, tts, sink: Optional[AudioSink] = None, output_device=None, voice: Optional[str] = None):
         self.tts = tts
+        # Voix du compte de la session (None : voix configurée)
+        self.voice = voice
         self.output_device = output_device
         self.sink = sink or self._play_local
         self._texts: queue.Queue = queue.Queue()
@@ -85,7 +87,8 @@ class SpeechPipeline:
                 self._done()
                 continue
             try:
-                samples, sample_rate = self.tts.synthesize(text)
+                samples, sample_rate = (self.tts.synthesize(text, voice=self.voice) if self.voice
+                                        else self.tts.synthesize(text))
             except Exception as e:
                 print(f"⚠️ [SPEECH] Synthèse impossible : {e}")
                 samples, sample_rate = np.zeros(0, dtype=np.int16), 0
