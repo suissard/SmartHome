@@ -9,6 +9,8 @@ const ui = {
   scrollBottomBtn: $("scroll-bottom-btn"), newChatBtn: $("new-chat-btn"), resetConfirm: $("reset-confirm"),
   mic: $("mic"), voiceStop: $("voice-stop"), textForm: $("text-form"), text: $("text"),
   setup: $("setup"), setupForm: $("setup-form"), token: $("token"), setupError: $("setup-error"),
+  accountFields: $("account-fields"), identity: $("identity"), password: $("password"), tokenHelp: $("token-help"),
+  userName: $("user-name"),
   restartConfirm: $("restart-confirm"),
   msgMenu: $("msg-menu"), msgPreview: $("msg-preview"), msgRelaunch: $("msg-relaunch"), msgEdit: $("msg-edit"), msgMenuNote: $("msg-menu-note"),
   msgEditor: $("msg-editor"), msgEditorTitle: $("msg-editor-title"), msgEditorText: $("msg-editor-text"), msgEditorSave: $("msg-editor-save"),
@@ -35,6 +37,11 @@ const store = {
 const state = {
   ws: null,
   ready: false,
+  accounts: false,         // la passerelle a des comptes utilisateurs (AUTH_PROVIDER)
+  admin: true,             // l'utilisateur connecté peut modifier les paramètres et redémarrer
+  pendingLogin: null,      // identifiant + mot de passe saisis, envoyés une seule fois puis oubliés
+  authTried: false,
+  authError: "",
   busy: 0,                 // demandes en cours (chaque demande se termine par {"type": "done"})
   botBubble: null,         // bulle de réponse en cours de streaming
   pendingUser: null,       // bulle « audio envoyé » à remplacer par la transcription
@@ -266,7 +273,13 @@ function connect() {
 
   ws.addEventListener("open", () => {
     // Authentification par premier message (un navigateur ne peut pas envoyer d'en-tête Authorization)
-    ws.send(JSON.stringify({ type: "auth", token: store.get("token", ""), session: store.get("session") }));
+    // Avec des comptes : identifiant + mot de passe juste saisis (jamais enregistrés), sinon le jeton du compte
+    const login = state.pendingLogin;
+    state.pendingLogin = null;
+    ws.send(JSON.stringify({
+      type: "auth", token: store.get("token", ""), session: store.get("session"),
+      ...(login ? { identity: login.identity, password: login.password } : { user_token: store.get("userToken") }),
+    }));
   });
 
   ws.addEventListener("message", (msg) => {
@@ -284,8 +297,13 @@ function connect() {
     state.busy = 0;
     refreshControls();
     if (e.code === 4401) {
-      setStatus("offline", "Jeton requis");
-      openSetup(store.get("token") ? "Ce jeton a été refusé par la passerelle." : "");
+      setStatus("offline", "Connexion requise");
+      // Le jeton du compte a expiré ou a été révoqué : il ne sert plus à rien
+      const hadCredentials = Boolean(store.get("token") || store.get("userToken") || state.authTried);
+      store.set("userToken", null);
+      state.authTried = false;
+      openSetup(hadCredentials ? (state.authError || "Identifiants refusés par la passerelle.") : "");
+      state.authError = "";
       return;
     }
     if (e.code === 4403) {
@@ -314,6 +332,7 @@ function handleEvent(event) {
       state.confirmTimeout = event.confirm_timeout || 20;
       store.set("session", event.session);
       ui.sessionId.textContent = event.session;
+      applyUser(event.user, event.accounts);
       showModel(event.llm);
       refreshControls();
       if (state.restarting) {
@@ -394,6 +413,10 @@ function handleEvent(event) {
     case "error":
       // Avant "ready", l'erreur concerne l'authentification : elle est traitée à la fermeture (code 4401)
       if (state.ready) addBubble("error", event.message);
+      else {
+        state.authError = event.message;
+        state.accounts = Boolean(event.accounts);
+      }
       break;
     case "done":
       state.busy = Math.max(0, state.busy - 1);
@@ -430,7 +453,7 @@ function handleEvent(event) {
       break;
     case "settings_changed":
       // Modifié depuis un autre appareil (ou celui-ci) : on recharge les valeurs affichées
-      if (ui.settings.open || ui.advanced.open) send({ type: "get_settings" });
+      if (state.admin && (ui.settings.open || ui.advanced.open)) send({ type: "get_settings" });
       break;
   }
 }
@@ -970,7 +993,19 @@ ui.confirm.addEventListener("close", () => {
 });
 
 // ---- Connexion & réglages ----
+// Compte connecté : jeton renouvelé à mémoriser, nom affiché, outils d'administration masqués sinon
+function applyUser(user, accounts) {
+  state.accounts = Boolean(accounts);
+  if (user?.token) store.set("userToken", user.token);
+  ui.userName.textContent = user ? `${user.name} (${user.role})` : "—";
+  state.admin = !user || Boolean(user.admin);
+  document.body.classList.toggle("not-admin", !state.admin);
+}
+
 function openSetup(error = "") {
+  ui.accountFields.hidden = !state.accounts;
+  ui.tokenHelp.hidden = state.accounts;
+  ui.password.value = "";
   ui.token.value = store.get("token", "");
   ui.setupError.textContent = error;
   ui.setupError.hidden = !error;
@@ -980,6 +1015,12 @@ function openSetup(error = "") {
 ui.setupForm.addEventListener("submit", () => {
   unlockAudio();
   store.set("token", ui.token.value.trim() || null);
+  const identity = ui.identity.value.trim();
+  if (state.accounts && identity) {
+    state.pendingLogin = { identity, password: ui.password.value };
+    state.authTried = true;
+  }
+  ui.password.value = "";
   state.ws?.close();
   connect();
 });
@@ -1020,6 +1061,7 @@ ui.newChatBtn?.addEventListener("click", promptResetConversation);
 $("settings-btn").addEventListener("click", () => {
   ui.settings.showModal();
   ui.modelMsg.textContent = "";
+  if (!state.admin) return;
   send({ type: "get_settings" });
   send({ type: "list_models" });
 });
@@ -1035,6 +1077,7 @@ ui.restartConfirm.addEventListener("close", () => {
 });
 $("logout-btn").addEventListener("click", () => {
   store.set("token", null);
+  store.set("userToken", null);
   store.set("session", null);
   ui.settings.close();
   state.ws?.close(4000);

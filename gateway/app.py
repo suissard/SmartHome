@@ -6,7 +6,9 @@ Routes :
 - POST /api/ask  : {"text" | "audio" (WAV base64), "session"?, "speak"?} -> réponse JSON (sans confirmation possible :
                    les actions dangereuses sont refusées)
 - WS   /ws       : session interactive (streaming, outils, confirmations). Protocole JSON :
-    client -> serveur : {"type": "auth", "token", "session"?}  (premier message si pas d'en-tête Authorization)
+    client -> serveur : {"type": "auth", "token"?, "session"?}  (premier message si pas d'en-tête Authorization)
+                        Comptes (AUTH_PROVIDER, voir core/users.py) : {"type": "auth", "identity", "password", "session"?}
+                        ou {"type": "auth", "user_token", "session"?} ; le jeton maître ("token") donne l'accès administrateur
                         {"type": "text", "text", "speak"?} | {"type": "audio", "data": <WAV base64>, "speak"?}
                         (avec "turn"? : identifiant de l'échange, repris dans ses événements et "done" ; "forget"? : échanges
                         à retirer d'abord de l'historique, pour relancer à partir d'un message)
@@ -15,7 +17,9 @@ Routes :
                         | {"type": "ping"}
                         Paramètres (voir core/settings_store.py) : {"type": "get_settings"} | {"type": "list_models", "provider"?: nom}
                         | {"type": "update_settings", "values": {VARIABLE: valeur}} | {"type": "restart"}
-    serveur -> client : {"type": "ready", "session", "tools", "audio", "confirm_timeout", "llm"} puis les événements du cœur
+    serveur -> client : {"type": "ready", "session", "user", "tools", "audio", "confirm_timeout", "llm"} puis les événements du cœur
+                        ("user" : {"id", "name", "role", "admin", "token"?} ; "token" = jeton du compte à réutiliser,
+                        refus : {"type": "error", "message", "accounts"} puis fermeture 4401)
                         (transcript, token, tool, confirm_request, response, interrupted, error), la voix si speak :
                         {"type": "audio_chunk", "seq", "format": "wav", "data"} phrase par phrase (TTS_STREAMING)
                         ou {"type": "audio", ...} en un bloc, et {"type": "done"} à la fin de chaque demande.
@@ -23,6 +27,7 @@ Routes :
                         | {"type": "settings_saved", "changed", "restart", "overridden", "llm"} | {"type": "settings_error", "message"}
                         ; "settings_changed" est diffusé à tous les clients après une modification,
                         "restarting" juste avant un redémarrage demandé par un client.
+                        Paramètres, liste des modèles et redémarrage sont réservés aux rôles AUTH_ADMIN_ROLES.
 """
 
 import asyncio
@@ -54,6 +59,7 @@ from core.config import Settings
 from core.security import (
     BearerTokenMiddleware, LocalOnlyMiddleware, SecurityHeadersMiddleware, bearer_from_headers, token_matches,
 )
+from core.users import AuthError, DirectoryUnavailable, User, admin_user, create_directory, is_admin
 
 # Interface web (PWA) servie à la racine : publique, elle ne contient aucun secret (le jeton est saisi par l'utilisateur)
 WEB_DIR = Path(__file__).resolve().parent / "web"
@@ -62,6 +68,7 @@ WEB_DIR = Path(__file__).resolve().parent / "web"
 WS_UNAUTHORIZED = 4401
 AUTH_TIMEOUT_SECONDS = 10
 RESTART_DELAY_SECONDS = 0.3
+ADMIN_ONLY_MESSAGE = "Réservé aux administrateurs."
 
 
 def _reply_to_dict(reply: Reply) -> dict:
@@ -74,6 +81,22 @@ def _reply_to_dict(reply: Reply) -> dict:
 def create_app(core: AssistantCore, settings: Optional[Settings] = None):
     # Le jeton et l'adresse sont fixés au démarrage ; le reste est relu dans core.settings (modifiable à chaud)
     token = (settings or core.settings).GATEWAY_AUTH_TOKEN
+    # Annuaire des comptes (AUTH_PROVIDER), fixé au démarrage comme le jeton
+    directory = create_directory(settings or core.settings)
+
+    def identify(hello: dict) -> User:
+        """Identité annoncée par le premier message : jeton maître, identifiant + mot de passe, ou jeton de compte.
+        Bloquant (requête à l'annuaire). Lève AuthError / DirectoryUnavailable."""
+        if hello.get("type") != "auth":
+            raise AuthError("Jeton manquant ou invalide.")
+        # Une connexion explicite à un compte passe avant le jeton maître resté enregistré sur l'appareil
+        if directory.enabled and hello.get("identity"):
+            return directory.login(str(hello.get("identity", "")).strip(), str(hello.get("password", "")))
+        if token_matches(str(hello.get("token") or ""), token):
+            return admin_user(core.settings)
+        if directory.enabled and hello.get("user_token"):
+            return directory.refresh(str(hello["user_token"]))
+        raise AuthError("Identifiant et mot de passe requis." if directory.enabled else "Jeton manquant ou invalide.")
 
     async def health(request: Request):
         return JSONResponse({"status": "ok", "service": "smarthome-gateway"})
@@ -86,7 +109,8 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
             return JSONResponse({"error": "Corps JSON invalide."}, status_code=400)
         if not body.get("text") and audio is None:
             return JSONResponse({"error": "Champ 'text' ou 'audio' requis."}, status_code=400)
-        session = core.open_session(body.get("session"))
+        # Seul le jeton maître protège /api/ask : c'est l'administrateur
+        session = core.open_session(body.get("session"), user=admin_user(core.settings))
         reply = await asyncio.to_thread(
             core.respond, session.id, text=body.get("text"), audio_wav=audio, synthesize=bool(body.get("speak"))
         )
@@ -97,17 +121,26 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
         loop = asyncio.get_running_loop()
 
         # 1. Authentification : en-tête Authorization, sinon premier message {"type": "auth"} (navigateurs)
+        #    ou, avec des comptes (AUTH_PROVIDER), identifiant + mot de passe / jeton de compte
         hello: dict = {}
         authorized = not token or token_matches(bearer_from_headers(ws.scope.get("headers", [])), token)
+        user = admin_user(core.settings)
         if not authorized:
             try:
                 hello = json.loads(await asyncio.wait_for(ws.receive_text(), AUTH_TIMEOUT_SECONDS))
+                if not isinstance(hello, dict):
+                    hello = {}
             except Exception:
                 hello = {}
-            if hello.get("type") != "auth" or not token_matches(str(hello.get("token", "")), token):
-                await ws.send_json({"type": "error", "message": "Jeton manquant ou invalide."})
+            try:
+                user = await asyncio.to_thread(identify, hello)
+            except (AuthError, DirectoryUnavailable) as e:
+                if isinstance(e, DirectoryUnavailable):
+                    print(f"⚠️ [GATEWAY] Annuaire des comptes indisponible : {e}")
+                await ws.send_json({"type": "error", "message": str(e), "accounts": directory.enabled})
                 await ws.close(code=WS_UNAUTHORIZED)
                 return
+        admin = is_admin(user, core.settings)
 
         outbox: asyncio.Queue = asyncio.Queue()
 
@@ -147,9 +180,9 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
                 pending.pop(request_id, None)
 
         session_id = hello.get("session") or ws.query_params.get("session")
-        session = core.open_session(session_id, confirm=confirm)
+        session = core.open_session(session_id, confirm=confirm, user=user)
         client_ip = getattr(ws.client, "host", ws.client[0] if isinstance(ws.client, (tuple, list)) else "inconnu") if ws.client else "inconnu"
-        print(f"🔌 [GATEWAY {session.id}] Client connecté depuis {client_ip}")
+        print(f"🔌 [GATEWAY {session.id}] {user.name} (rôle {user.role}) connecté depuis {client_ip}")
         unsubscribe = core.events.subscribe(lambda e: push(e.to_dict()), session_id=session.id)
         # Modifications de paramètres faites depuis un autre appareil : chaque client recharge son formulaire
         unsubscribe_settings = core.events.subscribe(
@@ -214,6 +247,9 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
         async def handle_settings(message: dict):
             """Lecture / modification des paramètres et liste des modèles (appels bloquants hors de la boucle)."""
             kind = message["type"]
+            if not admin:
+                push({"type": "settings_error", "message": ADMIN_ONLY_MESSAGE})
+                return
             try:
                 if kind == "list_models":
                     # Fournisseur demandé (champ de modèle d'un autre fournisseur que l'actif), sinon le fournisseur actif
@@ -248,7 +284,10 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
         push({
             "type": "ready",
             "session": session.id,
-            "tools": [t.name for t in core.tools.all()],
+            "user": {**user.public(s), **({"token": user.token} if user.token else {})},
+            "accounts": directory.enabled,
+            # Outils permis à cet utilisateur (son rôle)
+            "tools": [t.name for t in session.conversation.tools.all()],
             # Réglages utiles au client (détection de fin de phrase côté navigateur, délai de confirmation)
             "audio": {
                 "sample_rate": s.AUDIO_RATE,
@@ -350,6 +389,8 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
                     task = asyncio.create_task(handle_settings(message))
                     tasks.add(task)
                     task.add_done_callback(tasks.discard)
+                elif kind == "restart" and not admin:
+                    push({"type": "settings_error", "message": ADMIN_ONLY_MESSAGE})
                 elif kind == "restart":
                     core.events.emit("restarting", None)
                     # Laisse partir l'annonce aux clients avant l'arrêt

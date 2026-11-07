@@ -273,9 +273,25 @@ class Settings(BaseModel):
     # Taille maximale d'un message WebSocket (audio base64 compris), en octets
     GATEWAY_MAX_MESSAGE_BYTES: int = Field(10 * 1024 * 1024, gt=0)
 
+    # 👥 Comptes utilisateurs de la PWA (le jeton GATEWAY_AUTH_TOKEN reste l'accès administrateur et machine)
+    # Annuaire des comptes : none (jeton unique, comme avant) | pocketbase
+    AUTH_PROVIDER: str = "none"
+    POCKETBASE_URL: str = "http://127.0.0.1:8090"
+    POCKETBASE_USERS_COLLECTION: str = "users"
+    POCKETBASE_TIMEOUT: float = Field(5.0, gt=0.0)
+    # Rôle d'un compte dont le champ « role » est vide
+    AUTH_DEFAULT_ROLE: str = "member"
+    # Rôles autorisés à modifier les paramètres et à redémarrer SmartHome
+    AUTH_ADMIN_ROLES: CsvList = Field(default_factory=lambda: ["admin"])
+    # Rôle du micro de l'ordinateur (aucune identification de la voix : profil « Foyer »)
+    AUTH_LOCAL_ROLE: str = "admin"
+    # Outils permis par rôle : noms séparés par des virgules, "*" (tous), "safe" (sans confirmation), "-nom" (exclu)
+    AUTH_ROLE_TOOLS: JsonDict = Field(default_factory=lambda: {"admin": "*", "member": "*", "guest": "safe"})
+
     @field_validator(
         "LLM_PROVIDER", "TTS_PROVIDER", "MCP_TRANSPORT", "LLM_TOOL_CALLING", "LLM_AUDIO_INPUT", "BARGE_IN_MODE",
         "FEEDBACK_WAKEWORD_TYPE", "FEEDBACK_RESPONSE_END_TYPE", "FEEDBACK_TIMEOUT_TYPE",
+        "AUTH_PROVIDER", "AUTH_DEFAULT_ROLE", "AUTH_LOCAL_ROLE",
         mode="before",
     )
     @classmethod

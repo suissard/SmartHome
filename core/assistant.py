@@ -24,6 +24,7 @@ from core.config import ENV_FILE, Settings, get_settings, set_settings
 from core.events import EventBus
 from core.sentences import SentenceSplitter, matches_phrase
 from core.tools import ConfirmationHandler, ToolRegistry, ToolResult, build_tool_registry
+from core.users import User, tool_policy
 from llm.llm import Conversation, ResponseInterrupted
 
 
@@ -71,6 +72,7 @@ class Session:
     id: str
     conversation: Conversation
     persistent: bool = False      # jamais expirée (session locale)
+    user: Optional[User] = None   # propriétaire (None : session interne, sans restriction d'outils)
     last_seen: float = field(default_factory=time.monotonic)
     lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     cancel: threading.Event = field(default_factory=threading.Event, repr=False)
@@ -193,6 +195,7 @@ class AssistantCore:
                 conversation.tool_mode = settings.LLM_TOOL_CALLING
                 conversation._provider = self.llm
                 conversation._tools = self.tools
+                conversation.tool_policy = tool_policy(session.user, settings)
 
     def model_info(self) -> dict:
         """Modèle actif, pour l'affichage côté client."""
@@ -206,18 +209,30 @@ class AssistantCore:
         session_id: Optional[str] = None,
         confirm: Optional[ConfirmationHandler] = None,
         persistent: bool = False,
+        user: Optional[User] = None,
     ) -> Session:
-        """Retourne la session existante (en mettant à jour sa confirmation) ou en crée une nouvelle."""
+        """Retourne la session existante (en mettant à jour sa confirmation) ou en crée une nouvelle.
+        Avec `user`, une session appartenant à quelqu'un d'autre n'est jamais reprise : une nouvelle est créée
+        (un client ne peut pas lire l'historique d'un autre compte en devinant son identifiant de session)."""
         self._expire_sessions()
         with self._sessions_lock:
             sid = session_id or uuid.uuid4().hex[:12]
             session = self._sessions.get(sid)
+            if session is not None and user is not None and (session.user is None or session.user.id != user.id):
+                print(f"⛔ [ASSISTANT] Session {sid} d'un autre utilisateur : nouvelle session pour {user.name}.")
+                session, sid = None, uuid.uuid4().hex[:12]
             if session is None:
-                conversation = Conversation(self.llm, self.settings, tools=self.tools, confirm=confirm)
-                session = Session(sid, conversation, persistent=persistent)
+                conversation = Conversation(self.llm, self.settings, tools=self.tools, confirm=confirm,
+                                            tool_policy=tool_policy(user, self.settings))
+                session = Session(sid, conversation, persistent=persistent, user=user)
                 self._sessions[sid] = session
-            elif confirm is not None:
-                session.conversation.confirm = confirm
+            else:
+                if confirm is not None:
+                    session.conversation.confirm = confirm
+                if user is not None and session.user != user:
+                    # Même compte, rôle ou jeton renouvelés à la reconnexion : les droits suivent
+                    session.user = user
+                    session.conversation.tool_policy = tool_policy(user, self.settings)
             session.last_seen = time.monotonic()
             return session
 
@@ -353,7 +368,8 @@ class AssistantCore:
             reply.text = raw
             if raw and self.settings.ACTIONS_ENABLED:
                 from actions.manager import get_action_manager
-                reply.text = get_action_manager().process_response(raw, confirm=session.conversation.confirm)
+                reply.text = get_action_manager().process_response(
+                    raw, confirm=session.conversation.confirm, policy=session.conversation.tool_policy)
 
             reply.end_conversation = _asks_to_sleep(raw, reply.tools)
             print(f"📤 [ASSISTANT {sid}] Réponse : « {reply.text} » ({len(reply.tools)} outil(s))")
