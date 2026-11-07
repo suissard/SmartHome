@@ -282,6 +282,8 @@ class Settings(BaseModel):
     AUTH_PROVIDER: str = "none"
     POCKETBASE_URL: str = "http://127.0.0.1:8090"
     POCKETBASE_USERS_COLLECTION: str = "users"
+    # Historique des conversations des comptes (conservé sans limite, effaçable message par message)
+    POCKETBASE_MESSAGES_COLLECTION: str = "messages"
     POCKETBASE_TIMEOUT: float = Field(5.0, gt=0.0)
     # SmartHome lance lui-même PocketBase (binaire pocketbase/ du projet) si l'adresse est locale et qu'il ne répond pas
     POCKETBASE_AUTOSTART: EnvBool = True

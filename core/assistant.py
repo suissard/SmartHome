@@ -22,6 +22,7 @@ if str(_ROOT_DIR) not in sys.path:
 
 from core.config import ENV_FILE, Settings, get_settings, set_settings
 from core.events import EventBus
+from core.history import HistoryStore, new_conversation_id
 from core.sentences import SentenceSplitter, matches_phrase
 from core.tools import ConfirmationHandler, ToolRegistry, ToolResult, build_tool_registry
 from core.users import User, tool_policy, user_prompt
@@ -73,6 +74,8 @@ class Session:
     conversation: Conversation
     persistent: bool = False      # jamais expirée (session locale)
     user: Optional[User] = None   # propriétaire (None : session interne, sans restriction d'outils)
+    conversation_id: str = field(default_factory=new_conversation_id)  # conversation enregistrée (historique)
+    restored: bool = False        # dernière conversation du compte déjà rechargée
     last_seen: float = field(default_factory=time.monotonic)
     lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     cancel: threading.Event = field(default_factory=threading.Event, repr=False)
@@ -97,6 +100,8 @@ class AssistantCore:
         self.env_file = env_file or ENV_FILE
         self._sessions: dict[str, Session] = {}
         self._sessions_lock = threading.Lock()
+        # Historique persistant des comptes (PocketBase) ; inactif sans annuaire
+        self.history = HistoryStore(self.settings)
 
     # ---- Composants partagés (chargés au premier besoin) ----
     @property
@@ -291,20 +296,58 @@ class AssistantCore:
                 del self._sessions[sid]
 
     # ---- Historique (le verrou attend la fin de la réponse en cours, qui pourrait y écrire) ----
+    def restore_history(self, session_id: str) -> list[dict]:
+        """Recharge une fois la dernière conversation enregistrée du compte (session neuve), puis renvoie
+        la conversation de la session pour l'affichage : [{role, content, turn?}], tags d'actions retirés."""
+        session = self.get_session(session_id)
+        if session is None:
+            return []
+        if not session.restored and self.history.applies(session.user):
+            conversation_id, messages = self.history.load_latest(session.user)
+            with session.lock:
+                conversation = session.conversation
+                if conversation_id and not (conversation.older or conversation.history):
+                    session.conversation_id = conversation_id
+                    conversation.older = messages
+                    conversation._fit_window()
+                    print(f"📜 [ASSISTANT {session.id}] Conversation de {session.user.name} rechargée "
+                          f"({len(messages)} message(s))")
+        session.restored = True
+        from actions.manager import get_action_manager
+        manager = get_action_manager()
+        with session.lock:
+            messages = list(session.conversation.older) + list(session.conversation.history)
+        return [{"role": m["role"], **({"turn": m["turn"]} if m.get("turn") else {}),
+                 "content": manager.extract_actions(m["content"])[0] if m["role"] == "assistant" else m["content"]}
+                for m in messages if m.get("role") in ("user", "assistant")]
+
+    def reset(self, session_id: str):
+        """Nouvelle conversation : l'historique en mémoire est vidé, l'ancienne conversation reste enregistrée."""
+        session = self.get_session(session_id)
+        if session:
+            with session.lock:
+                session.conversation.clear()
+                session.conversation_id = new_conversation_id()
+
     def forget(self, session_id: str, turns: Iterable[str], role: Optional[str] = None):
         """Retire de l'historique les messages de ces échanges (seulement ceux de `role` s'il est précisé)."""
         session = self.get_session(session_id)
         if session:
+            turns = list(turns)
             with session.lock:
                 session.conversation.forget(turns, role)
+                self.history.forget(session.user, session.conversation_id, turns, role)
 
     def edit_answer(self, session_id: str, turn: str, text: str, forget: Iterable[str] = ()):
         """Remplace la réponse d'un échange et retire les échanges `forget` (ceux qui la suivaient)."""
         session = self.get_session(session_id)
         if session:
+            forget = list(forget)
             with session.lock:
                 session.conversation.edit_answer(turn, text)
                 session.conversation.forget(forget)
+                self.history.edit_answer(session.user, session.conversation_id, turn, text)
+                self.history.forget(session.user, session.conversation_id, forget)
 
     # ---- Pipeline ----
     def respond(
@@ -331,7 +374,11 @@ class AssistantCore:
         with session.lock:
             session.last_seen = time.monotonic()
             session.cancel.clear()
+            forget = list(forget)
             session.conversation.forget(forget)
+            self.history.forget(session.user, session.conversation_id, forget)
+            # Échange toujours numéroté dans l'historique (pour l'enregistrer, puis l'effacer ou le corriger)
+            stored_turn = turn or uuid.uuid4().hex[:12]
             print(f"\n📥 [ASSISTANT {sid}] Nouveau tour (texte: « {text or ''} », audio: {len(audio_wav) if audio_wav else 0} octets)")
             reply = Reply(sid, transcript=(text or "").strip())
             llm_audio = None
@@ -380,7 +427,7 @@ class AssistantCore:
                 audio_bytes=llm_audio,
                 on_token=on_token,
                 on_tool=lambda r: emit("tool", sid, **_tool_summary(r)),
-                turn=turn,
+                turn=stored_turn,
             )
             reply.tools = [_tool_summary(r) for r in session.conversation.last_tool_results]
 
@@ -388,6 +435,9 @@ class AssistantCore:
                 reply.interrupted = True
                 emit("interrupted", sid)
                 return reply
+            conversation = session.conversation
+            self.history.append(session.user, session.conversation_id,
+                                [m for m in conversation.older + conversation.history if m.get("turn") == stored_turn])
             if splitter:
                 for sentence in splitter.flush():
                     say(sentence)

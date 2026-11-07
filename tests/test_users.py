@@ -335,6 +335,111 @@ class TestVoices(unittest.TestCase):
         return ws.receive_json()
 
 
+class MemoryHistory:
+    """Historique factice (même interface que core.history.HistoryStore), en mémoire."""
+
+    def __init__(self):
+        self.rows = []
+
+    def applies(self, user):
+        return user is not None and user.has_profile
+
+    def load_latest(self, user):
+        mine = [r for r in self.rows if r["user"] == user.id]
+        if not mine:
+            return None, []
+        conversation = mine[-1]["conversation"]
+        return conversation, [{k: r[k] for k in ("role", "content", "turn")} for r in mine if r["conversation"] == conversation]
+
+    def append(self, user, conversation, messages):
+        if self.applies(user):
+            self.rows += [{"user": user.id, "conversation": conversation, **m} for m in messages]
+
+    def forget(self, user, conversation, turns, role=None):
+        turns = set(turns)
+        self.rows = [r for r in self.rows if not (r["user"] == getattr(user, "id", None) and r["turn"] in turns
+                                                  and (role is None or r["role"] == role))]
+
+    def edit_answer(self, user, conversation, turn, text):
+        for r in self.rows:
+            if r["user"] == getattr(user, "id", None) and r["turn"] == turn and r["role"] == "assistant":
+                r["content"] = text
+
+    def flush(self, timeout=0):
+        pass
+
+
+class TestHistory(unittest.TestCase):
+    def setUp(self):
+        self.store = MemoryHistory()
+        self.marie = User("pb_m", "Marie", "member", "tok-marie@foyer")
+
+    def core(self):
+        core = make_core([])
+        core.history = self.store
+        return core
+
+    def test_conversation_survives_a_new_session(self):
+        core = self.core()
+        session = core.open_session(None, user=self.marie)
+        self.assertEqual(core.restore_history(session.id), [])
+        core.respond(session.id, text="Bonjour", turn="t1")
+        core.respond(session.id, text="Il pleut", turn="t2")
+        core.respond(session.id, text="Sans numéro")  # numéro attribué par le serveur pour l'enregistrer
+        core.edit_answer(session.id, "t2", "Réponse corrigée.")
+        core.forget(session.id, ["t1"])
+
+        other = self.core()
+        restored = other.open_session(None, user=self.marie)
+        messages = other.restore_history(restored.id)
+        self.assertEqual([m["content"] for m in messages],
+                         ["Il pleut", "Réponse corrigée.", "Sans numéro", "Écho : Sans numéro"])
+        self.assertTrue(messages[2]["turn"])
+        self.assertEqual(restored.conversation_id, session.conversation_id)
+        self.assertEqual(len(restored.conversation.older + restored.conversation.history), 4)
+
+    def test_new_conversation_keeps_the_old_one(self):
+        core = self.core()
+        session = core.open_session(None, user=self.marie)
+        core.respond(session.id, text="Ancien sujet", turn="a")
+        old = session.conversation_id
+        core.reset(session.id)
+        self.assertNotEqual(session.conversation_id, old)
+        core.respond(session.id, text="Nouveau sujet", turn="b")
+        self.assertEqual({r["conversation"] for r in self.store.rows}, {old, session.conversation_id})
+        fresh = self.core()
+        s2 = fresh.open_session(None, user=self.marie)
+        self.assertEqual([m["content"] for m in fresh.restore_history(s2.id)], ["Nouveau sujet", "Écho : Nouveau sujet"])
+
+    def test_sessions_without_account_are_not_stored(self):
+        core = self.core()
+        core.respond("anonyme", text="Bonjour")
+        local = core.open_session("local", persistent=True, user=local_user(SETTINGS))
+        core.respond(local.id, text="Bonjour")
+        self.assertEqual(self.store.rows, [])
+        # La conversation en mémoire est tout de même renvoyée (rechargement de la page)
+        self.assertEqual(len(core.restore_history("anonyme")), 2)
+
+    def test_ready_carries_the_conversation(self):
+        core = self.core()
+        session = core.open_session(None, user=User("pb_marie@foyer", "Marie", "member", "tok-marie@foyer"))
+        core.respond(session.id, text="Bonjour", turn="t1")
+        app_core = self.core()
+        client = TestClient(create_app(app_core, ACCOUNT_SETTINGS))
+        with client.websocket_connect("/ws") as ws:
+            ws.send_json({"type": "auth", "identity": "marie@foyer", "password": "secret"})
+            ready = ws.receive_json()
+        self.assertEqual([m["content"] for m in ready["history"]], ["Bonjour", "Écho : Bonjour"])
+
+    def test_filters_reject_unsafe_turns(self):
+        from core.history import HistoryStore
+        store = HistoryStore(Settings(MCP_CLIENT_ENABLED=False, AUTH_PROVIDER="pocketbase"))
+        self.assertIsNone(store._turn_filter(self.marie, "c1", ['" || user != "'], None))
+        self.assertEqual(store._turn_filter(self.marie, "c1", ["t-1"], "assistant"),
+                         'user = "m" && conversation = "c1" && (turn = "t-1") && role = "assistant"')
+        self.assertIsNone(HistoryStore(Settings(MCP_CLIENT_ENABLED=False)).append(self.marie, "c1", []))
+
+
 class _PocketBaseStub(BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass

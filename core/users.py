@@ -114,6 +114,35 @@ def tool_policy(user: Optional[User], settings: Optional[Settings] = None) -> Op
 
 
 # ==========================================
+# API REST de PocketBase (bibliothèque standard)
+# ==========================================
+def pb_request(settings: Settings, path: str, body: Optional[dict] = None, token: str = "", method: str = "POST",
+               not_found_is_refusal: bool = False, query: Optional[dict] = None) -> dict:
+    """Requête vers /api/collections/<path>. Lève AuthError (refus) ou DirectoryUnavailable (serveur, configuration).
+    `not_found_is_refusal` : pour un enregistrement, PocketBase répond 404 quand la règle d'accès refuse."""
+    collection, _, rest = path.partition("/")
+    url = (f"{settings.POCKETBASE_URL.rstrip('/')}/api/collections/{urllib.parse.quote(collection, safe='')}"
+           f"{'/' + rest if rest else ''}{'?' + urllib.parse.urlencode(query) if query else ''}")
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = token
+    data = json.dumps(body or {}).encode() if method in ("POST", "PATCH") else None
+    request = urllib.request.Request(url, data=data, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(request, timeout=settings.POCKETBASE_TIMEOUT) as response:
+            return json.loads(response.read() or b"{}")
+    except urllib.error.HTTPError as e:
+        e.close()
+        if e.code in (400, 401, 403) or (e.code == 404 and not_found_is_refusal):
+            raise AuthError("Identifiants refusés.") from e
+        if e.code == 404:
+            raise DirectoryUnavailable(f"Collection PocketBase « {collection} » introuvable.") from e
+        raise DirectoryUnavailable(f"PocketBase a répondu {e.code}.") from e
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError) as e:
+        raise DirectoryUnavailable(f"PocketBase injoignable ({settings.POCKETBASE_URL}) : {e}") from e
+
+
+# ==========================================
 # Annuaires
 # ==========================================
 class UserDirectory:
@@ -171,33 +200,10 @@ class PocketBaseDirectory(UserDirectory):
     def describe(cls, settings: Settings) -> str:
         return f"PocketBase ({settings.POCKETBASE_URL}, collection {settings.POCKETBASE_USERS_COLLECTION})"
 
-    def _url(self, action: str) -> str:
-        collection = urllib.parse.quote(self.settings.POCKETBASE_USERS_COLLECTION, safe="")
-        return f"{self.settings.POCKETBASE_URL.rstrip('/')}/api/collections/{collection}/{action}"
-
     def _post(self, action: str, body: Optional[dict] = None, token: str = "", method: str = "POST",
               not_found_is_refusal: bool = False) -> dict:
-        """`not_found_is_refusal` : pour un enregistrement, PocketBase répond 404 quand la règle d'accès refuse."""
-        headers = {"Content-Type": "application/json"}
-        if token:
-            headers["Authorization"] = token
-        request = urllib.request.Request(
-            self._url(action), data=json.dumps(body or {}).encode(), headers=headers, method=method
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=self.settings.POCKETBASE_TIMEOUT) as response:
-                return json.loads(response.read() or b"{}")
-        except urllib.error.HTTPError as e:
-            e.close()
-            if e.code in (400, 401, 403) or (e.code == 404 and not_found_is_refusal):
-                raise AuthError("Identifiants refusés.") from e
-            if e.code == 404:
-                raise DirectoryUnavailable(
-                    f"Collection PocketBase « {self.settings.POCKETBASE_USERS_COLLECTION} » introuvable."
-                ) from e
-            raise DirectoryUnavailable(f"PocketBase a répondu {e.code}.") from e
-        except (urllib.error.URLError, TimeoutError, OSError, ValueError) as e:
-            raise DirectoryUnavailable(f"PocketBase injoignable ({self.settings.POCKETBASE_URL}) : {e}") from e
+        return pb_request(self.settings, f"{self.settings.POCKETBASE_USERS_COLLECTION}/{action}", body, token, method,
+                          not_found_is_refusal)
 
     def _user(self, data: dict) -> User:
         record = data.get("record") or {}
