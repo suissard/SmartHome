@@ -34,6 +34,11 @@ if ($Status) {
         Write-Host "  • Processus python local : ACTIF (PID: $pids)" -ForegroundColor Green
         $active = $true
     }
+    $pb = Get-Process pocketbase -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$PSScriptRoot\pocketbase\*" }
+    if ($pb) {
+        Write-Host "  • PocketBase (comptes)    : ACTIF (PID: $(($pb | ForEach-Object { $_.Id }) -join ', '))" -ForegroundColor Green
+        $active = $true
+    }
     if (-not $active) {
         Write-Host "`nSmartHome n'est pas en cours d'exécution." -ForegroundColor Yellow
     }
@@ -67,6 +72,14 @@ if ($procs) {
     $pids = ($procs | ForEach-Object { $_.Id }) -join ", "
     Write-Host "  • Arrêt des processus locaux (PID: $pids)..."
     $procs | Stop-Process -Force -ErrorAction SilentlyContinue
+    $StoppedAnything = $true
+}
+
+# 3. PocketBase lancé par SmartHome (comptes utilisateurs) : un arrêt forcé de Python le laisse orphelin
+$pb = Get-Process pocketbase -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$PSScriptRoot\pocketbase\*" }
+if ($pb) {
+    Write-Host "  • Arrêt de PocketBase (PID: $(($pb | ForEach-Object { $_.Id }) -join ', '))..."
+    $pb | Stop-Process -Force -ErrorAction SilentlyContinue
     $StoppedAnything = $true
 }
 

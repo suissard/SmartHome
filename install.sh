@@ -27,6 +27,8 @@ OLLAMA_CHOICE="auto"     # auto (selon le .env, avec confirmation) | install | u
 OLLAMA_REMOTE_HOST=""
 OLLAMA_PULL=""           # modèles choisis dans l'assistant (sinon déduits du .env)
 DOWNLOAD_MODELS=true
+ACCOUNTS=""              # true | false (comptes PocketBase de la PWA) ; vide : selon AUTH_PROVIDER du .env
+ASK_ACCOUNTS=true
 ASSUME_YES=false
 NO_MENU=false
 WIZARD_RAN=false
@@ -45,6 +47,8 @@ Usage : ./install.sh [options]
   --no-system-deps  Ne pas installer les paquets système (apt, dnf, pacman, zypper, brew)
   --no-ollama       Ne pas installer Ollama ni télécharger de modèle LLM
   --no-models       Ne télécharger aucun modèle (openWakeWord, Whisper, Ollama)
+  --accounts        Comptes utilisateurs de la PWA (PocketBase téléchargé, AUTH_PROVIDER=pocketbase)
+  --no-accounts     Ne pas poser la question des comptes (le .env décide)
   --no-menu         Pas de questions pas à pas : options ci-dessus et .env
   -y, --yes         Répondre oui à toutes les questions (implique --no-menu)
   -h, --help        Afficher cette aide
@@ -60,6 +64,8 @@ while [[ $# -gt 0 ]]; do
         --no-system-deps) SYSTEM_DEPS="none" ;;
         --no-ollama) OLLAMA_CHOICE="none" ;;
         --no-models) DOWNLOAD_MODELS=false ;;
+        --accounts) ACCOUNTS=true ;;
+        --no-accounts) ASK_ACCOUNTS=false ;;
         --no-menu) NO_MENU=true ;;
         -y|--yes) ASSUME_YES=true ;;
         -h|--help) usage; exit 0 ;;
@@ -131,7 +137,7 @@ run_wizard() {
         --pkg-manager "$PKG_MANAGER" --host "${GATEWAY_BIND:-0.0.0.0}" \
         --system-deps "$([[ $SYSTEM_DEPS != none ]] && echo true || echo false)" \
         --ollama "$([[ $OLLAMA_CHOICE != none ]] && echo true || echo false)" \
-        --models "$DOWNLOAD_MODELS" --service "$WITH_SERVICE")" || status=$?
+        --models "$DOWNLOAD_MODELS" --service "$WITH_SERVICE" --accounts "$ASK_ACCOUNTS")" || status=$?
     case "$status" in
         0) ;;
         1) exit 0 ;;   # « Annuler » dans le récapitulatif
@@ -151,6 +157,7 @@ run_wizard() {
             WITH_SERVICE) WITH_SERVICE="$value" ;;
             GATEWAY_BIND) GATEWAY_BIND="$value" ;;
             PROFILE) PROFILE="$value" ;;
+            ACCOUNTS) [[ -n "$value" ]] && ACCOUNTS="$value" ;;
         esac
     done <<<"$plan"
     WIZARD_RAN=true
@@ -166,7 +173,7 @@ echo "${C_CYAN}🚀 Installation de SmartHome ($([[ $MODE == server ]] && echo "
 
 # --- 1. Paquets système ------------------------------------------------------
 install_system_deps() {
-    step "1/7 Paquets système"
+    step "1/8 Paquets système"
     if [[ "$SYSTEM_DEPS" == "none" ]]; then
         info "Ignoré."
         return
@@ -230,7 +237,7 @@ find_python() {
 }
 
 setup_venv() {
-    step "2/7 Environnement Python"
+    step "2/8 Environnement Python"
     find_python
     info "Interpréteur : $PYTHON_BIN ($("$PYTHON_BIN" --version 2>&1))"
     if [[ ! -x "$VENV_DIR/bin/python" ]]; then
@@ -241,7 +248,7 @@ setup_venv() {
     fi
     VPY="$VENV_DIR/bin/python"
 
-    step "3/7 Dépendances Python"
+    step "3/8 Dépendances Python"
     "$VPY" -m pip install --upgrade pip wheel
     "$VPY" -m pip install -r requirements.txt || die "Échec de pip install -r requirements.txt."
     ok "Dépendances installées."
@@ -273,7 +280,7 @@ setting() {
 }
 
 setup_env() {
-    step "4/7 Configuration"
+    step "4/8 Configuration"
     if [[ ! -f "$ENV_FILE" ]]; then
         cp .env.example "$ENV_FILE"
         chmod 600 "$ENV_FILE"
@@ -310,7 +317,7 @@ setup_env() {
 
 # --- 5. Modèles locaux (openWakeWord, Whisper) -------------------------------
 download_local_models() {
-    step "5/7 Modèles locaux"
+    step "5/8 Modèles locaux"
     if ! $DOWNLOAD_MODELS; then
         info "Ignoré (modèles téléchargés au premier lancement)."
         return
@@ -339,7 +346,7 @@ download_local_models() {
 ollama_up() { curl -fsS --max-time 3 "$1/api/tags" >/dev/null 2>&1; }
 
 setup_ollama() {
-    step "6/7 Ollama (LLM local)"
+    step "6/8 Ollama (LLM local)"
     if [[ "$OLLAMA_CHOICE" == "none" ]]; then
         info "Ignoré."
         return
@@ -407,9 +414,41 @@ setup_ollama() {
     done
 }
 
-# --- 7. Lanceur & service ----------------------------------------------------
+# --- 7. Comptes utilisateurs (PocketBase) ------------------------------------
+setup_accounts() {
+    step "7/8 Comptes utilisateurs (PocketBase)"
+    if [[ "$ACCOUNTS" == "true" ]]; then
+        set_env AUTH_PROVIDER pocketbase
+    elif [[ "$ACCOUNTS" == "false" && "$(setting AUTH_PROVIDER)" == "pocketbase" ]]; then
+        set_env AUTH_PROVIDER none
+    fi
+    if [[ "$(setting AUTH_PROVIDER)" != "pocketbase" ]]; then
+        ok "Désactivés : le jeton de la passerelle donne l'accès (AUTH_PROVIDER=none)."
+        return
+    fi
+
+    # Les comptes servent à la PWA : passerelle active, jeton maître (accès administrateur) obligatoire hors loopback
+    if [[ "$MODE" != "server" && "$(setting GATEWAY_ENABLED)" != "True" ]]; then
+        set_env GATEWAY_ENABLED true
+        ok "Passerelle activée (GATEWAY_ENABLED=true)."
+    fi
+    if [[ -z "$(setting GATEWAY_AUTH_TOKEN)" ]]; then
+        set_env GATEWAY_AUTH_TOKEN "$("$VPY" -c 'import secrets; print(secrets.token_hex(32))')"
+        ok "Jeton administrateur généré (GATEWAY_AUTH_TOKEN dans .env)."
+    fi
+
+    "$VPY" -m core.pocketbase install || { warn "PocketBase non installé : relancez ./install.sh ou .venv/bin/python -m core.pocketbase install."; return; }
+    if [[ ! -d "$ROOT_DIR/pocketbase/pb_data" && -t 0 ]] && ! $ASSUME_YES && confirm "Créer maintenant le compte administrateur de PocketBase ?"; then
+        "$VPY" -m core.pocketbase admin || warn "Compte non créé : .venv/bin/python -m core.pocketbase admin"
+    elif [[ ! -d "$ROOT_DIR/pocketbase/pb_data" ]]; then
+        info "Compte administrateur à créer : .venv/bin/python -m core.pocketbase admin"
+    fi
+    ok "SmartHome lance PocketBase lui-même. Comptes du foyer : $(setting POCKETBASE_URL)/_/ (collection users, champ role)."
+}
+
+# --- 8. Lanceur & service ----------------------------------------------------
 setup_service() {
-    step "7/7 Lancement"
+    step "8/8 Lancement"
     chmod +x "$ROOT_DIR/start.sh" 2>/dev/null || true
     if ! $WITH_SERVICE; then
         info "Pas de démarrage automatique (relancez l'installation ou option --service pour l'ajouter)."
@@ -474,6 +513,7 @@ setup_venv
 setup_env
 download_local_models
 setup_ollama
+setup_accounts
 setup_service
 
 echo
