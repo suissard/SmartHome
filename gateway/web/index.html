@@ -101,6 +101,28 @@
       <p class="meta">Session : <code id="session-id">—</code></p>
       <p class="meta">Connecté : <span id="user-name">—</span></p>
 
+      <!-- Profil d'un compte utilisateur (prénom et consignes ajoutés au prompt de ses conversations) -->
+      <section class="block" id="profile" aria-labelledby="profile-title" hidden>
+        <h3 id="profile-title">Mon profil</h3>
+        <label for="profile-name">Prénom</label>
+        <input id="profile-name" type="text" maxlength="80" autocomplete="given-name">
+        <label for="profile-instructions">Consignes pour l'assistant</label>
+        <textarea id="profile-instructions" rows="3" maxlength="1000" aria-describedby="profile-help"
+                  placeholder="Ex : tutoie-moi, réponses courtes, explique les termes techniques"></textarea>
+        <p id="profile-help" class="meta">Elles changent le ton des réponses, pas ce que vous avez le droit de faire.</p>
+        <div id="profile-voice-field" hidden>
+          <label for="profile-voice">Voix de l'assistant</label>
+          <div class="row">
+            <select id="profile-voice"></select>
+            <button type="button" id="profile-voice-play">Écouter</button>
+          </div>
+        </div>
+        <div class="actions">
+          <button type="button" id="profile-save" class="primary">Enregistrer le profil</button>
+        </div>
+        <p id="profile-msg" class="meta" role="status"></p>
+      </section>
+
       <section class="block admin-only" aria-labelledby="model-title">
         <h3 id="model-title">Modèle</h3>
         <p id="model-current" class="meta">—</p>

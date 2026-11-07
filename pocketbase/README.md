@@ -32,7 +32,14 @@ puis `AUTH_PROVIDER=pocketbase` dans `.env`.
 - **Données** : `pocketbase/pb_data/` (non versionné, à sauvegarder). Journal : `pocketbase/pocketbase.log`.
 - **Schéma** : `pb_migrations/` (versionné) est appliqué au lancement ; `--automigrate=false` empêche l'interface
   d'écrire de nouvelles migrations dans le projet. La migration ajoute le champ `role` (`admin`, `member`, `guest`)
-  à la collection `users`, ferme l'inscription libre et interdit de changer son propre rôle.
+  à la collection `users`, ferme l'inscription libre et interdit de changer son propre rôle ; une seconde ajoute
+  `instructions` (consignes personnelles).
+- **Profil** : chacun modifie son prénom et ses consignes dans la PWA (Réglages → Mon profil). Ils sont ajoutés au
+  prompt système de ses conversations (`AUTH_USER_PROMPT`, `AUTH_USER_INSTRUCTIONS_PROMPT`) et ne changent que le ton :
+  les outils permis restent ceux du rôle.
+- **Voix** : chacun choisit aussi sa voix parmi les voix Piper de `voices/` (bouton « Écouter » pour l'essayer).
+  Ajouter une voix = déposer son `.onnx` et son `.onnx.json` dans `voices/`. Avec `TTS_PROVIDER=ollama` ou
+  `openrouter`, le choix n'est pas proposé. Champ `voice` ajouté par une troisième migration.
 - **Comptes du foyer** : interface `http://127.0.0.1:8090/_/` (collection `users`, champ `role`), depuis la machine
   elle-même (sur un serveur sans écran : `ssh -L 8090:127.0.0.1:8090 serveur`).
 - **État** : `.venv/bin/python -m core.pocketbase` ; vérifier un compte : `.venv/bin/python core/users.py`.

@@ -15,6 +15,8 @@ Routes :
                         {"type": "forget", "turns", "role"?} | {"type": "edit_answer", "turn", "text", "forget"?}
                         {"type": "confirm_response", "id", "accepted": bool} | {"type": "stop"} | {"type": "reset"}
                         | {"type": "ping"}
+                        Profil du compte connecté : {"type": "update_profile", "name", "instructions", "voice"?}
+                        | {"type": "preview_voice", "voice"} (phrase d'essai renvoyée en {"type": "voice_preview", "data"})
                         Paramètres (voir core/settings_store.py) : {"type": "get_settings"} | {"type": "list_models", "provider"?: nom}
                         | {"type": "update_settings", "values": {VARIABLE: valeur}} | {"type": "restart"}
     serveur -> client : {"type": "ready", "session", "user", "tools", "audio", "confirm_timeout", "llm"} puis les événements du cœur
@@ -25,6 +27,7 @@ Routes :
                         ou {"type": "audio", ...} en un bloc, et {"type": "done"} à la fin de chaque demande.
                         Paramètres : {"type": "settings", "groups", "llm"} | {"type": "models", "models", "error"?}
                         | {"type": "settings_saved", "changed", "restart", "overridden", "llm"} | {"type": "settings_error", "message"}
+                        | {"type": "profile_saved", "user"} | {"type": "profile_error", "message"}
                         ; "settings_changed" est diffusé à tous les clients après une modification,
                         "restarting" juste avant un redémarrage demandé par un client.
                         Paramètres, liste des modèles et redémarrage sont réservés aux rôles AUTH_ADMIN_ROLES.
@@ -160,7 +163,7 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
             print(f"❓ [GATEWAY {session.id}] Demande de confirmation envoyée (id={request_id}) : « {question} »")
             if core.tts and not getattr(core.tts, "passthrough", False):
                 try:
-                    res = core.tts.synthesize(question)
+                    res = core.tts.synthesize(question, voice=core.session_voice(session.id))
                     if res:
                         samples, sr = res
                         if len(samples) > 0:
@@ -202,7 +205,7 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
             def send_chunk(samples, sample_rate):
                 push({"type": "audio_chunk", "seq": next(seq), "format": "wav",
                       "data": base64.b64encode(to_wav_bytes(samples, sample_rate)).decode()})
-            return SpeechPipeline(core.tts, sink=send_chunk)
+            return SpeechPipeline(core.tts, sink=send_chunk, voice=core.session_voice(session.id))
 
         def run_request(text, audio, speak, turn, forget) -> Reply:
             speech = streamed_speech() if speak and core.settings.TTS_STREAMING else None
@@ -243,6 +246,44 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
                                             message.get("forget") or ())
             except Exception as e:
                 push({"type": "error", "message": f"Historique non modifié : {e}"})
+
+        async def handle_profile(message: dict):
+            """Prénom et consignes du compte, enregistrés dans l'annuaire avec le jeton du compte lui-même."""
+            nonlocal user
+            if not directory.enabled or not user.has_profile:
+                push({"type": "profile_error", "message": "Profil disponible seulement avec un compte utilisateur."})
+                return
+            voice = str(message.get("voice", user.voice) or "")
+            if voice and voice not in {v["id"] for v in core.voices()}:
+                push({"type": "profile_error", "message": f"Voix « {voice} » non installée sur cette machine."})
+                return
+            try:
+                updated = await asyncio.to_thread(directory.update_profile, user, message.get("name", ""),
+                                                  message.get("instructions", ""), voice)
+                core.set_session_user(session.id, updated)
+                user = updated
+                print(f"👤 [GATEWAY {session.id}] Profil de {user.name} mis à jour")
+                push({"type": "profile_saved", "user": user.public(core.settings)})
+            except (ValueError, AuthError, DirectoryUnavailable) as e:
+                push({"type": "profile_error", "message": str(e)})
+            except Exception as e:
+                print(f"⚠️ [GATEWAY {session.id}] Profil non enregistré : {e!r}")
+                push({"type": "profile_error", "message": f"Profil non enregistré : {e}"})
+
+        async def handle_voice_preview(message: dict):
+            """Phrase d'essai dans une voix installée, pour la choisir (jouée même si la réponse vocale est coupée)."""
+            voice = str(message.get("voice") or "")
+            if voice and voice not in {v["id"] for v in core.voices()}:
+                push({"type": "profile_error", "message": f"Voix « {voice} » non installée sur cette machine."})
+                return
+            try:
+                samples, rate = await asyncio.to_thread(core.tts.synthesize, core.settings.TTS_VOICE_PREVIEW_TEXT,
+                                                        voice or None)
+                if len(samples):
+                    push({"type": "voice_preview", "voice": voice, "format": "wav",
+                          "data": base64.b64encode(to_wav_bytes(samples, rate)).decode()})
+            except Exception as e:
+                push({"type": "profile_error", "message": f"Écoute impossible : {e}"})
 
         async def handle_settings(message: dict):
             """Lecture / modification des paramètres et liste des modèles (appels bloquants hors de la boucle)."""
@@ -286,6 +327,9 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
             "session": session.id,
             "user": {**user.public(s), **({"token": user.token} if user.token else {})},
             "accounts": directory.enabled,
+            "profile_max": s.AUTH_INSTRUCTIONS_MAX_CHARS,
+            # Voix au choix du profil (Piper : voices/) ; vide si le fournisseur TTS n'en propose pas
+            "voices": core.voices() if user.has_profile else [],
             # Outils permis à cet utilisateur (son rôle)
             "tools": [t.name for t in session.conversation.tools.all()],
             # Réglages utiles au client (détection de fin de phrase côté navigateur, délai de confirmation)
@@ -383,6 +427,11 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
                     push({"type": "reset_done"})
                 elif kind in ("forget", "edit_answer"):
                     task = asyncio.create_task(handle_history(message))
+                    tasks.add(task)
+                    task.add_done_callback(tasks.discard)
+                elif kind in ("update_profile", "preview_voice"):
+                    task = asyncio.create_task(
+                        handle_profile(message) if kind == "update_profile" else handle_voice_preview(message))
                     tasks.add(task)
                     task.add_done_callback(tasks.discard)
                 elif kind in ("get_settings", "update_settings", "list_models"):

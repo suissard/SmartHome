@@ -13,6 +13,7 @@ Le micro de l'ordinateur n'identifie pas la voix : il utilise le compte fixe « 
 
 import json
 import sys
+from string import Template
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -36,10 +37,20 @@ class User:
     role: str
     # Jeton de l'annuaire, renvoyé au client pour ses prochaines connexions (jamais le mot de passe)
     token: str = ""
+    # Consignes personnelles (ton, longueur des réponses...), ajoutées au prompt système de ses sessions
+    instructions: str = ""
+    # Voix de synthèse choisie (identifiant de TextToSpeech.voices() ; vide : voix par défaut)
+    voice: str = ""
+
+    @property
+    def has_profile(self) -> bool:
+        """Compte de l'annuaire (le jeton maître et le micro n'ont ni prénom ni consignes à eux)."""
+        return self.id not in (ADMIN_USER_ID, LOCAL_USER_ID)
 
     def public(self, settings: Settings) -> dict:
-        """Ce que le client peut savoir de lui-même (affichage, boutons réservés aux administrateurs)."""
-        return {"id": self.id, "name": self.name, "role": self.role, "admin": is_admin(self, settings)}
+        """Ce que le client peut savoir de lui-même (affichage, boutons réservés aux administrateurs, profil)."""
+        return {"id": self.id, "name": self.name, "role": self.role, "admin": is_admin(self, settings),
+                "instructions": self.instructions, "voice": self.voice, "profile": self.has_profile}
 
 
 class AuthError(Exception):
@@ -70,6 +81,28 @@ def local_user(settings: Optional[Settings] = None) -> User:
 def is_admin(user: Optional[User], settings: Optional[Settings] = None) -> bool:
     s = settings or get_settings()
     return user is not None and user.role in s.AUTH_ADMIN_ROLES
+
+
+def user_prompt(user: Optional[User], settings: Optional[Settings] = None) -> str:
+    """Lignes ajoutées au prompt système pour ce compte : à qui l'assistant parle, et ses préférences.
+    Les consignes ne changent que le style : les droits restent ceux du rôle (ToolPolicy, vérifiés côté serveur)."""
+    if user is None or not user.has_profile:
+        return ""
+    s = settings or get_settings()
+    values = {"NAME": user.name, "INSTRUCTIONS": user.instructions}
+    lines = [Template(s.AUTH_USER_PROMPT).safe_substitute(values).strip()]
+    if user.instructions:
+        lines.append(Template(s.AUTH_USER_INSTRUCTIONS_PROMPT).safe_substitute(values).strip())
+    return "\n".join(line for line in lines if line)
+
+
+def clean_profile(name: str, instructions: str, settings: Optional[Settings] = None) -> tuple[str, str]:
+    """Prénom et consignes saisis dans la PWA : espaces superflus retirés, longueur bornée."""
+    s = settings or get_settings()
+    name = " ".join(str(name or "").split())[:80]
+    if not name:
+        raise ValueError("Le prénom ne peut pas être vide.")
+    return name, str(instructions or "").strip()[:s.AUTH_INSTRUCTIONS_MAX_CHARS]
 
 
 def tool_policy(user: Optional[User], settings: Optional[Settings] = None) -> Optional[ToolPolicy]:
@@ -103,6 +136,11 @@ class UserDirectory:
         """Vérifie un jeton de compte et en renvoie un neuf. Lève AuthError ou DirectoryUnavailable."""
         raise NotImplementedError
 
+    def update_profile(self, user: User, name: str, instructions: str, voice: str = "") -> User:
+        """Enregistre le prénom, les consignes et la voix du compte (avec ses propres droits, jamais ceux d'un admin).
+        La voix doit avoir été validée par l'appelant (voix installées sur cette machine)."""
+        raise NotImplementedError
+
 
 USER_DIRECTORIES: ProviderRegistry[UserDirectory] = ProviderRegistry("annuaire")
 
@@ -121,6 +159,9 @@ class NoDirectory(UserDirectory):
     def refresh(self, token: str) -> User:
         raise AuthError("Les comptes utilisateurs sont désactivés (AUTH_PROVIDER=none) : utilisez le jeton.")
 
+    def update_profile(self, user: User, name: str, instructions: str, voice: str = "") -> User:
+        raise AuthError("Les comptes utilisateurs sont désactivés (AUTH_PROVIDER=none).")
+
 
 @USER_DIRECTORIES.register("pocketbase", "pb")
 class PocketBaseDirectory(UserDirectory):
@@ -134,19 +175,21 @@ class PocketBaseDirectory(UserDirectory):
         collection = urllib.parse.quote(self.settings.POCKETBASE_USERS_COLLECTION, safe="")
         return f"{self.settings.POCKETBASE_URL.rstrip('/')}/api/collections/{collection}/{action}"
 
-    def _post(self, action: str, body: Optional[dict] = None, token: str = "") -> dict:
+    def _post(self, action: str, body: Optional[dict] = None, token: str = "", method: str = "POST",
+              not_found_is_refusal: bool = False) -> dict:
+        """`not_found_is_refusal` : pour un enregistrement, PocketBase répond 404 quand la règle d'accès refuse."""
         headers = {"Content-Type": "application/json"}
         if token:
             headers["Authorization"] = token
         request = urllib.request.Request(
-            self._url(action), data=json.dumps(body or {}).encode(), headers=headers, method="POST"
+            self._url(action), data=json.dumps(body or {}).encode(), headers=headers, method=method
         )
         try:
             with urllib.request.urlopen(request, timeout=self.settings.POCKETBASE_TIMEOUT) as response:
                 return json.loads(response.read() or b"{}")
         except urllib.error.HTTPError as e:
             e.close()
-            if e.code in (400, 401, 403):
+            if e.code in (400, 401, 403) or (e.code == 404 and not_found_is_refusal):
                 raise AuthError("Identifiants refusés.") from e
             if e.code == 404:
                 raise DirectoryUnavailable(
@@ -161,11 +204,15 @@ class PocketBaseDirectory(UserDirectory):
         token = data.get("token") or ""
         if not record.get("id") or not token:
             raise DirectoryUnavailable("Réponse de PocketBase inattendue (ni compte ni jeton).")
+        return self._from_record(record, token)
+
+    def _from_record(self, record: dict, token: str) -> User:
         # Un compte de l'annuaire ne peut jamais prendre l'identité réservée du jeton maître ou du micro
         user_id = f"pb_{record['id']}"
         name = record.get("name") or record.get("username") or record.get("email") or record["id"]
         role = str(record.get("role") or self.settings.AUTH_DEFAULT_ROLE).strip().lower()
-        return User(user_id, str(name), role, token)
+        instructions = str(record.get("instructions") or "")[:self.settings.AUTH_INSTRUCTIONS_MAX_CHARS]
+        return User(user_id, str(name), role, token, instructions, str(record.get("voice") or "")[:100])
 
     def login(self, identity: str, password: str) -> User:
         if not identity or not password:
@@ -176,6 +223,21 @@ class PocketBaseDirectory(UserDirectory):
         if not token:
             raise AuthError("Jeton de compte manquant.")
         return self._user(self._post("auth-refresh", token=token))
+
+    def update_profile(self, user: User, name: str, instructions: str, voice: str = "") -> User:
+        if not user.has_profile or not user.token:
+            raise AuthError("Ce compte n'a pas de profil modifiable.")
+        name, instructions = clean_profile(name, instructions, self.settings)
+        record_id = urllib.parse.quote(user.id.removeprefix("pb_"), safe="")
+        # Jeton du compte lui-même : la règle de la collection lui interdit de toucher à son rôle
+        try:
+            record = self._post(f"records/{record_id}", {"name": name, "instructions": instructions, "voice": voice},
+                                token=user.token, method="PATCH", not_found_is_refusal=True)
+        except AuthError as e:
+            raise AuthError("Profil refusé par PocketBase (session expirée ? reconnectez-vous).") from e
+        if not record.get("id"):
+            raise DirectoryUnavailable("Réponse de PocketBase inattendue (compte absent).")
+        return self._from_record(record, user.token)
 
 
 def create_directory(settings: Optional[Settings] = None) -> UserDirectory:

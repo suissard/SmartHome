@@ -10,7 +10,9 @@ const ui = {
   mic: $("mic"), voiceStop: $("voice-stop"), textForm: $("text-form"), text: $("text"),
   setup: $("setup"), setupForm: $("setup-form"), token: $("token"), setupError: $("setup-error"),
   accountFields: $("account-fields"), identity: $("identity"), password: $("password"), tokenHelp: $("token-help"),
-  userName: $("user-name"),
+  userName: $("user-name"), profile: $("profile"), profileName: $("profile-name"),
+  profileInstructions: $("profile-instructions"), profileSave: $("profile-save"), profileMsg: $("profile-msg"),
+  profileVoiceField: $("profile-voice-field"), profileVoice: $("profile-voice"), profileVoicePlay: $("profile-voice-play"),
   restartConfirm: $("restart-confirm"),
   msgMenu: $("msg-menu"), msgPreview: $("msg-preview"), msgRelaunch: $("msg-relaunch"), msgEdit: $("msg-edit"), msgMenuNote: $("msg-menu-note"),
   msgEditor: $("msg-editor"), msgEditorTitle: $("msg-editor-title"), msgEditorText: $("msg-editor-text"), msgEditorSave: $("msg-editor-save"),
@@ -333,6 +335,8 @@ function handleEvent(event) {
       store.set("session", event.session);
       ui.sessionId.textContent = event.session;
       applyUser(event.user, event.accounts);
+      if (event.profile_max) ui.profileInstructions.maxLength = event.profile_max;
+      fillVoices(event.voices || [], event.user?.voice || "");
       showModel(event.llm);
       refreshControls();
       if (state.restarting) {
@@ -447,6 +451,17 @@ function handleEvent(event) {
       break;
     case "settings_saved":
       onSettingsSaved(event);
+      break;
+    case "profile_saved":
+      applyUser(event.user, state.accounts);
+      setMessage(ui.profileMsg, "Profil enregistré : pris en compte dès votre prochaine demande.", "ok");
+      break;
+    case "voice_preview":
+      // Jouée même si la réponse vocale est coupée sur cet appareil : c'est une demande explicite
+      enqueueAudio(event.data);
+      break;
+    case "profile_error":
+      setMessage(ui.profileMsg, event.message, "error");
       break;
     case "settings_error":
       setMessage(ui.advanced.open ? ui.advancedMsg : ui.modelMsg, event.message, "error");
@@ -993,12 +1008,29 @@ ui.confirm.addEventListener("close", () => {
 });
 
 // ---- Connexion & réglages ----
+// Voix au choix du compte : « par défaut » (celle de l'ordinateur) puis les voix installées
+function fillVoices(voices, selected) {
+  ui.profileVoiceField.hidden = voices.length === 0;
+  ui.profileVoice.replaceChildren();
+  const fallback = voices.find((v) => v.default);
+  ui.profileVoice.append(new Option(`Par défaut${fallback ? ` (${fallback.label})` : ""}`, ""));
+  for (const voice of voices) ui.profileVoice.append(new Option(voice.label, voice.id));
+  ui.profileVoice.value = voices.some((v) => v.id === selected) ? selected : "";
+}
+
 // Compte connecté : jeton renouvelé à mémoriser, nom affiché, outils d'administration masqués sinon
 function applyUser(user, accounts) {
   state.accounts = Boolean(accounts);
   if (user?.token) store.set("userToken", user.token);
   ui.userName.textContent = user ? `${user.name} (${user.role})` : "—";
   state.admin = !user || Boolean(user.admin);
+  // Prénom et consignes : seulement pour un compte de l'annuaire (pas le jeton administrateur)
+  ui.profile.hidden = !user?.profile;
+  if (user?.profile) {
+    ui.profileName.value = user.name;
+    ui.profileInstructions.value = user.instructions || "";
+    if ([...ui.profileVoice.options].some((o) => o.value === (user.voice || ""))) ui.profileVoice.value = user.voice || "";
+  }
   document.body.classList.toggle("not-admin", !state.admin);
 }
 
@@ -1057,6 +1089,17 @@ ui.resetConfirm?.addEventListener("close", () => {
 });
 
 ui.newChatBtn?.addEventListener("click", promptResetConversation);
+
+ui.profileSave.addEventListener("click", () => {
+  setMessage(ui.profileMsg, "Enregistrement…");
+  const voice = ui.profileVoiceField.hidden ? {} : { voice: ui.profileVoice.value };
+  send({ type: "update_profile", name: ui.profileName.value, instructions: ui.profileInstructions.value, ...voice });
+});
+
+ui.profileVoicePlay.addEventListener("click", () => {
+  unlockAudio();
+  send({ type: "preview_voice", voice: ui.profileVoice.value });
+});
 
 $("settings-btn").addEventListener("click", () => {
   ui.settings.showModal();

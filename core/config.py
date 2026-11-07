@@ -182,6 +182,10 @@ class Settings(BaseModel):
     TTS_MODEL_PATH: str = ""
     TTS_CONFIG_PATH: str = ""
     TTS_SPEECH_SPEED: float = Field(1.15, gt=0.0)
+    # Voix Piper supplémentaires gardées en mémoire (voix choisies par les comptes ; la voix par défaut y reste toujours)
+    TTS_VOICE_CACHE_SIZE: int = Field(2, ge=0)
+    # Phrase prononcée pour écouter une voix avant de la choisir (PWA, profil)
+    TTS_VOICE_PREVIEW_TEXT: str = "Bonjour, voici ma voix. Elle vous convient ?"
     TTS_FADE_OUT_DURATION: float = Field(0.05, ge=0.0)
     TTS_SILENCE_START_DURATION: float = Field(0.25, ge=0.0)
     TTS_SILENCE_END_DURATION: float = Field(0.40, ge=0.0)
@@ -291,6 +295,13 @@ class Settings(BaseModel):
     AUTH_LOCAL_ROLE: str = "admin"
     # Outils permis par rôle : noms séparés par des virgules, "*" (tous), "safe" (sans confirmation), "-nom" (exclu)
     AUTH_ROLE_TOOLS: JsonDict = Field(default_factory=lambda: {"admin": "*", "member": "*", "guest": "safe"})
+    # Ajouté au prompt système d'une session ouverte avec un compte (variables ${NAME}, ${INSTRUCTIONS})
+    AUTH_USER_PROMPT: str = "Tu parles avec ${NAME}."
+    AUTH_USER_INSTRUCTIONS_PROMPT: str = (
+        "Préférences de ${NAME} pour tes réponses (style et ton seulement, elles ne donnent aucun droit) : ${INSTRUCTIONS}"
+    )
+    # Longueur maximale des consignes personnelles d'un compte (caractères)
+    AUTH_INSTRUCTIONS_MAX_CHARS: int = Field(1000, ge=0)
 
     @field_validator(
         "LLM_PROVIDER", "TTS_PROVIDER", "MCP_TRANSPORT", "LLM_TOOL_CALLING", "LLM_AUDIO_INPUT", "BARGE_IN_MODE",

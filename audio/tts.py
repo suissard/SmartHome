@@ -9,6 +9,7 @@ import struct
 import sys
 import threading
 import time
+from collections import OrderedDict
 from pathlib import Path
 from typing import Optional
 
@@ -20,7 +21,9 @@ _ROOT_DIR = Path(__file__).resolve().parent.parent
 if str(_ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(_ROOT_DIR))
 
-from core.config import Settings, get_settings, TTS_MODEL_PATH, TTS_CONFIG_PATH
+from core.config import BASE_DIR, Settings, get_settings, TTS_MODEL_PATH, TTS_CONFIG_PATH
+
+VOICES_DIR = BASE_DIR / "voices"
 from core.providers import ProviderRegistry, check_ollama_capability, ollama_host, require_openrouter_key
 
 
@@ -37,9 +40,28 @@ class TTSProvider:
         """Résumé lisible de la configuration, sans instancier le fournisseur."""
         raise NotImplementedError
 
-    def synthesize(self, text: str) -> tuple[np.ndarray, int]:
-        """Retourne (échantillons int16, fréquence d'échantillonnage). Tableau vide si rien n'est produit."""
+    def synthesize(self, text: str, voice: Optional[str] = None) -> tuple[np.ndarray, int]:
+        """Retourne (échantillons int16, fréquence d'échantillonnage). Tableau vide si rien n'est produit.
+        `voice` : identifiant d'une voix de `voices()` (None : voix configurée)."""
         raise NotImplementedError
+
+    def voices(self) -> list[dict]:
+        """Voix au choix des comptes : [{"id", "label", "default"}]. Vide : pas de choix possible."""
+        return []
+
+
+def list_piper_voices(default_model: str = "") -> list[dict]:
+    """Voix Piper installées dans voices/ (modèle .onnx accompagné de son .onnx.json).
+    L'identifiant est le nom du fichier (ex: fr_FR-siwis-medium) : jamais un chemin fourni par un client."""
+    default = Path(default_model).name.removesuffix(".onnx") if default_model else ""
+    voices = []
+    for model in sorted(VOICES_DIR.glob("*.onnx")):
+        if not Path(f"{model}.json").is_file():
+            continue
+        parts = model.stem.split("-")
+        label = f"{parts[1]} ({parts[0]}, {parts[2]})" if len(parts) == 3 else model.stem
+        voices.append({"id": model.stem, "label": label, "default": model.stem == default})
+    return voices
 
 
 TTS_PROVIDERS: ProviderRegistry[TTSProvider] = ProviderRegistry("TTS")
@@ -60,7 +82,11 @@ class PiperTTS(TTSProvider):
                 raise ImportError("Le module piper-tts n'est pas disponible.") from e
 
         print("Chargement de Piper... ⏳")
+        self._load = PiperVoice.load
+        # Voix configurée : toujours en mémoire ; les autres (choisies par les comptes) dans un cache borné
         self.voice = PiperVoice.load(TTS_MODEL_PATH, config_path=TTS_CONFIG_PATH)
+        self.default_id = Path(TTS_MODEL_PATH).name.removesuffix(".onnx")
+        self._cache: "OrderedDict[str, object]" = OrderedDict()
         self.syn_config = SynthesisConfig(length_scale=settings.TTS_SPEECH_SPEED)
         print(f"Voix prête ({self.voice.config.sample_rate} Hz) ✅")
 
@@ -68,14 +94,36 @@ class PiperTTS(TTSProvider):
     def describe(cls, settings: Settings) -> str:
         return f"Piper ({Path(TTS_MODEL_PATH).stem.replace('.onnx', '')})"
 
-    def synthesize(self, text: str) -> tuple[np.ndarray, int]:
+    def voices(self) -> list[dict]:
+        return list_piper_voices(TTS_MODEL_PATH)
+
+    def _voice(self, voice_id: Optional[str]):
+        """Modèle Piper de la voix demandée (chargé au premier usage, gardé tant qu'il est récent)."""
+        if not voice_id or voice_id == self.default_id:
+            return self.voice
+        cached = self._cache.get(voice_id)
+        if cached is None:
+            if voice_id not in {v["id"] for v in self.voices()}:
+                print(f"⚠️ [TTS] Voix « {voice_id} » introuvable dans voices/ : voix par défaut.")
+                return self.voice
+            model = VOICES_DIR / f"{voice_id}.onnx"
+            print(f"🔊 [TTS] Chargement de la voix {voice_id}...")
+            cached = self._load(str(model), config_path=f"{model}.json")
+            self._cache[voice_id] = cached
+        self._cache.move_to_end(voice_id)
+        while len(self._cache) > self.settings.TTS_VOICE_CACHE_SIZE:
+            self._cache.popitem(last=False)
+        return cached
+
+    def synthesize(self, text: str, voice: Optional[str] = None) -> tuple[np.ndarray, int]:
+        model = self._voice(voice)
         chunks = [
             chunk.audio_int16_array
-            for chunk in self.voice.synthesize(text, syn_config=self.syn_config)
+            for chunk in model.synthesize(text, syn_config=self.syn_config)
             if chunk.audio_int16_array is not None and len(chunk.audio_int16_array) > 0
         ]
         audio = np.concatenate(chunks) if chunks else np.zeros(0, dtype=np.int16)
-        return audio, self.voice.config.sample_rate
+        return audio, model.config.sample_rate
 
 
 @TTS_PROVIDERS.register("openrouter")
@@ -92,7 +140,7 @@ class OpenRouterTTS(TTSProvider):
     def describe(cls, settings: Settings) -> str:
         return f"OpenRouter ({settings.OPENROUTER_TTS_MODEL}, Voix: {settings.OPENROUTER_TTS_VOICE})"
 
-    def synthesize(self, text: str) -> tuple[np.ndarray, int]:
+    def synthesize(self, text: str, voice: Optional[str] = None) -> tuple[np.ndarray, int]:
         import soundfile as sf
 
         require_openrouter_key(self.settings)
@@ -145,7 +193,7 @@ class OllamaTTS(TTSProvider):
     def describe(cls, settings: Settings) -> str:
         return f"Ollama ({settings.OLLAMA_TTS_MODEL}, Voix: {settings.OLLAMA_TTS_VOICE})"
 
-    def synthesize(self, text: str) -> tuple[np.ndarray, int]:
+    def synthesize(self, text: str, voice: Optional[str] = None) -> tuple[np.ndarray, int]:
         import httpx
         # Ollama n'accepte que la vitesse 1 : TTS_SPEECH_SPEED ne s'applique qu'à Piper
         payload = {"model": self.settings.OLLAMA_TTS_MODEL, "input": text, "response_format": "wav"}
@@ -168,8 +216,13 @@ class TextToSpeech:
         # Partagé entre le micro local et les clients distants : une synthèse à la fois
         self._lock = threading.Lock()
 
-    def synthesize(self, text: str) -> tuple[np.ndarray, int]:
-        """Synthétise le texte et applique le post-traitement. Retourne (int16, fréquence) ; vide si aucun texte."""
+    def voices(self) -> list[dict]:
+        """Voix que les comptes peuvent choisir (Piper : celles de voices/)."""
+        return self.engine.voices()
+
+    def synthesize(self, text: str, voice: Optional[str] = None) -> tuple[np.ndarray, int]:
+        """Synthétise le texte et applique le post-traitement. Retourne (int16, fréquence) ; vide si aucun texte.
+        `voice` : voix choisie par le compte de la session (None : voix configurée)."""
         clean_text = (text or "").strip()
         if not clean_text:
             return np.zeros(0, dtype=np.int16), 0
@@ -180,7 +233,8 @@ class TextToSpeech:
 
         # 2. Synthèse selon le fournisseur
         with self._lock:
-            raw_audio, sample_rate = self.engine.synthesize(clean_text)
+            raw_audio, sample_rate = (self.engine.synthesize(clean_text, voice=voice) if voice
+                                      else self.engine.synthesize(clean_text))
         if len(raw_audio) == 0:
             return np.zeros(0, dtype=np.int16), sample_rate
         audio = raw_audio.astype(np.float32)
