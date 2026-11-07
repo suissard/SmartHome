@@ -225,5 +225,59 @@ class TestPocketBaseDirectory(unittest.TestCase):
             PocketBaseDirectory(Settings(POCKETBASE_URL="http://127.0.0.1:9", MCP_CLIENT_ENABLED=False)).login("a", "b")
 
 
+class TestPocketBaseLauncher(unittest.TestCase):
+    """core/pocketbase.py : nom d'archive, vérification de l'archive, conditions de lancement (sans vrai binaire)."""
+
+    def test_asset_name(self):
+        import core.pocketbase as pb
+        with mock.patch.object(pb.sys, "platform", "linux"), mock.patch.object(pb.platform, "machine", return_value="x86_64"):
+            self.assertEqual(pb.asset_name("0.40.6"), "pocketbase_0.40.6_linux_amd64.zip")
+        with mock.patch.object(pb.sys, "platform", "win32"), mock.patch.object(pb.platform, "machine", return_value="ARM64"):
+            self.assertEqual(pb.asset_name("0.40.6"), "pocketbase_0.40.6_windows_arm64.zip")
+        with mock.patch.object(pb.platform, "machine", return_value="mips"), self.assertRaises(RuntimeError):
+            pb.asset_name("0.40.6")
+
+    def test_install_rejects_bad_checksum(self):
+        import hashlib, io, tempfile, zipfile
+        import core.pocketbase as pb
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr(pb.binary_path().name, b"binaire")
+        archive = buf.getvalue()
+        name = pb.asset_name("9.9.9")
+        s = Settings(POCKETBASE_VERSION="9.9.9", MCP_CLIENT_ENABLED=False)
+
+        def fake_download(digest):
+            return lambda url: f"{digest}  {name}\n".encode() if url.endswith("checksums.txt") else archive
+
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(pb, "PB_DIR", Path(tmp)), \
+                mock.patch.object(pb, "binary_path", return_value=Path(tmp) / "pocketbase"), \
+                mock.patch.object(pb, "installed_version", return_value=None):
+            with mock.patch.object(pb, "_download", fake_download("0" * 64)), self.assertRaises(RuntimeError):
+                pb.install(s)
+            self.assertFalse((Path(tmp) / "pocketbase").exists())
+            with mock.patch.object(pb, "_download", fake_download(hashlib.sha256(archive).hexdigest())):
+                target = pb.install(s)
+            self.assertEqual(target.read_bytes(), b"binaire")
+
+    def test_ensure_running_conditions(self):
+        import core.pocketbase as pb
+        base = dict(MCP_CLIENT_ENABLED=False, AUTH_PROVIDER="pocketbase")
+        with mock.patch.object(pb.subprocess, "Popen") as popen:
+            self.assertIsNone(pb.ensure_running(Settings(MCP_CLIENT_ENABLED=False)))  # comptes désactivés
+            self.assertIsNone(pb.ensure_running(Settings(**base, POCKETBASE_AUTOSTART=False)))
+            with mock.patch.object(pb, "is_running", return_value=True):
+                self.assertIsNone(pb.ensure_running(Settings(**base)))  # déjà lancé : réutilisé
+            with mock.patch.object(pb, "is_running", return_value=False):
+                self.assertIsNone(pb.ensure_running(Settings(**base, POCKETBASE_URL="http://nas.local:8090")))
+            popen.assert_not_called()
+
+    def test_serve_command(self):
+        import core.pocketbase as pb
+        cmd = pb.serve_command(Settings(POCKETBASE_URL="http://127.0.0.1:8091", MCP_CLIENT_ENABLED=False))
+        self.assertEqual(cmd[1:4], ["serve", "--http", "127.0.0.1:8091"])
+        self.assertIn("--automigrate=false", cmd)
+
+
 if __name__ == "__main__":
     unittest.main()

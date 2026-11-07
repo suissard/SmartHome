@@ -11,6 +11,7 @@ une ligne `CLÉ=valeur` par réglage, lu par le script d'installation :
     MODE=desktop|server          SYSTEM_DEPS=all|base|none     OLLAMA=install|use|remote|none
     OLLAMA_HOST=<url>            OLLAMA_PULL=<modèles,séparés> DOWNLOAD_MODELS=true|false
     WITH_SERVICE=true|false      GATEWAY_BIND=<adresse>        PROFILE=<nom ou vide>
+    ACCOUNTS=true|false          (comptes utilisateurs de la PWA avec PocketBase)
 
 Code de sortie : 0 plan validé, 1 installation annulée, 130 interruption (q / Ctrl+C).
 """
@@ -147,7 +148,7 @@ def ollama_reachable(host: str) -> bool:
 
 class InstallWizard:
     STEPS = ["step_mode", "step_profile", "step_ollama", "step_ollama_models", "step_packages",
-             "step_models", "step_host", "step_service"]
+             "step_models", "step_host", "step_accounts", "step_service"]
 
     def __init__(self, args):
         self.args = args
@@ -163,6 +164,7 @@ class InstallWizard:
         self.download_models = False
         self.service = args.service
         self.gateway_bind = args.host
+        self.accounts = effective_values(None).get("AUTH_PROVIDER", "none").lower() in ("pocketbase", "pb")
         self.summary: dict[str, str] = {}
 
     # ---- Étapes applicables ----
@@ -177,6 +179,8 @@ class InstallWizard:
             return self.args.models
         if step == "step_host":
             return self.mode == "server"
+        if step == "step_accounts":
+            return self.args.accounts
         if step == "step_service":
             return self.platform != "darwin"
         return True
@@ -316,6 +320,15 @@ class InstallWizard:
         answered("Écoute", self.gateway_bind)
         self.summary["Écoute de la passerelle"] = self.gateway_bind
 
+    def step_accounts(self):
+        self.accounts = self.ask("step_accounts", "Comptes utilisateurs pour l'interface web (téléphones, navigateurs) ?", [
+            Option("Non, un seul jeton", False, "Comme avant : le jeton de la passerelle (QR code) donne l'accès complet"),
+            Option("Oui, un compte par personne", True,
+                   "PocketBase (téléchargé et lancé par SmartHome) : rôles admin / membre / invité"),
+        ], 1 if self.accounts else 0).value
+        answered("Comptes", "un par personne (PocketBase)" if self.accounts else "jeton unique")
+        self.summary["Comptes"] = "un par personne (PocketBase)" if self.accounts else "jeton unique"
+
     def step_service(self):
         how = {"windows": "Tâche planifiée à l'ouverture de session",
                "linux": "Service systemd " + ("système" if self.mode == "server" else "utilisateur")}[self.platform]
@@ -372,6 +385,7 @@ class InstallWizard:
             "WITH_SERVICE": "true" if self.service and self.applies("step_service") else "false",
             "GATEWAY_BIND": self.gateway_bind if self.mode == "server" else "",
             "PROFILE": self.profile or "",
+            "ACCOUNTS": ("true" if self.accounts else "false") if self.args.accounts else "",
         }
 
 
@@ -388,6 +402,7 @@ def parse_args(argv=None):
     parser.add_argument("--ollama", type=flag, default=True)
     parser.add_argument("--models", type=flag, default=True)
     parser.add_argument("--service", type=flag, default=False)
+    parser.add_argument("--accounts", type=flag, default=True)
     return parser.parse_args(argv)
 
 

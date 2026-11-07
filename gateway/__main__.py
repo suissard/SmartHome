@@ -13,6 +13,7 @@ if str(_ROOT_DIR) not in sys.path:
 from core.assistant import AssistantCore
 from core.config import get_settings
 from core.pairing import print_pairing
+from core.pocketbase import ensure_running
 from core.profiles import warn_shadowed_profile
 from core.restart import restart_if_requested
 from core.security import require_token_for_host
@@ -30,6 +31,8 @@ def main():
         hub = get_mcp_hub()
         hub.connect_all()
 
+    # Comptes de la PWA (AUTH_PROVIDER=pocketbase) : annuaire lancé avec la passerelle s'il ne tourne pas déjà
+    pocketbase = ensure_running(s)
     core = AssistantCore(s)
     tools = core.tools.all()
     auth = "jeton requis" if s.GATEWAY_AUTH_TOKEN else "sans jeton (loopback uniquement)"
@@ -47,6 +50,8 @@ def main():
     finally:
         if hub:
             hub.disconnect_all()
+        if pocketbase:
+            pocketbase.stop()
     restart_if_requested()
 
 

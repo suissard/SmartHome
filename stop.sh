@@ -67,7 +67,8 @@ system_service_exists() {
 }
 
 get_local_pids() {
-    pgrep -f "(${ROOT_DIR}/.venv/bin/python|${ROOT_DIR}/main\.py)" 2>/dev/null || true
+    # Python de SmartHome et PocketBase lancé par lui (comptes utilisateurs), orphelin après un arrêt forcé
+    pgrep -f "(${ROOT_DIR}/.venv/bin/python|${ROOT_DIR}/main\.py|${ROOT_DIR}/pocketbase/pocketbase serve)" 2>/dev/null || true
 }
 
 if [[ "$SHOW_STATUS_ONLY" == true ]]; then

@@ -195,8 +195,12 @@ def main():
     print(f"  • Hub MCP       : {mcp_info}")
 
     gateway = None
+    pocketbase = None
     if settings.GATEWAY_ENABLED:
         require_token_for_host(settings.GATEWAY_HOST, settings.GATEWAY_AUTH_TOKEN, "GATEWAY", "GATEWAY_AUTH_TOKEN")
+        # Comptes de la PWA (AUTH_PROVIDER=pocketbase) : annuaire lancé avec SmartHome s'il ne tourne pas déjà
+        from core.pocketbase import ensure_running
+        pocketbase = ensure_running(settings)
         from gateway.app import start_in_thread
         gateway, _ = start_in_thread(core, settings)
         auth = "jeton requis" if settings.GATEWAY_AUTH_TOKEN else "loopback, sans jeton"
@@ -282,6 +286,8 @@ def main():
     finally:
         if gateway:
             gateway.should_exit = True
+        if pocketbase:
+            pocketbase.stop()
         if mcp_hub and MCP_CLIENT_ENABLED:
             mcp_hub.disconnect_all()
         if ducker.enabled:

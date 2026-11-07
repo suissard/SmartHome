@@ -9,19 +9,33 @@ Le micro de l'ordinateur n'identifie pas la voix : il utilise le compte fixe « 
 
 ## Mise en place
 
-1. Télécharger le binaire PocketBase (>= 0.23) pour votre système depuis https://github.com/pocketbase/pocketbase/releases
-   et le placer dans ce dossier (`pocketbase/pocketbase`, ou `pocketbase.exe` sous Windows).
-2. Lancer PocketBase **sur cette machine uniquement** (il n'a pas à être joignable depuis le réseau) :
+Le plus simple : `./install.sh` (ou `install.ps1`) et répondre « Oui, un compte par personne » à la question des comptes.
+Le script règle `.env` (`AUTH_PROVIDER=pocketbase`, passerelle active, jeton administrateur), télécharge
+PocketBase `POCKETBASE_VERSION` (archive officielle, somme SHA-256 vérifiée) et propose de créer le compte administrateur.
+Options sans question : `./install.sh --accounts` (`-Accounts` sous Windows).
 
-   ```bash
-   ./pocketbase/pocketbase serve --http 127.0.0.1:8090 --dir pocketbase/pb_data --migrationsDir pocketbase/pb_migrations
-   ```
+À la main :
 
-   La migration ajoute le champ `role` (`admin`, `member`, `guest`) à la collection `users` et ferme l'inscription libre.
-3. Créer le compte administrateur PocketBase (lien affiché au premier lancement), puis les comptes du foyer
-   dans l'interface `http://127.0.0.1:8090/_/` (collection `users`, champ `role`).
-4. Dans `.env` : `AUTH_PROVIDER=pocketbase` (et `POCKETBASE_URL` si besoin), puis redémarrer SmartHome.
-5. Vérifier un compte sans démarrer l'assistant : `python core/users.py`.
+```bash
+.venv/bin/python -m core.pocketbase install   # binaire dans pocketbase/
+.venv/bin/python -m core.pocketbase admin     # compte administrateur de PocketBase
+```
+
+puis `AUTH_PROVIDER=pocketbase` dans `.env`.
+
+## Fonctionnement
+
+- **Lancement** : au démarrage de la passerelle (`main.py` avec `GATEWAY_ENABLED=true`, ou `python -m gateway`),
+  si `POCKETBASE_URL` est locale et ne répond pas, SmartHome lance `pocketbase/pocketbase serve` et l'arrête en quittant
+  (`POCKETBASE_AUTOSTART=false` pour le gérer vous-même). Un PocketBase déjà en marche est réutilisé.
+  `./stop.sh` / `stop.ps1` arrêtent aussi un PocketBase resté orphelin.
+- **Données** : `pocketbase/pb_data/` (non versionné, à sauvegarder). Journal : `pocketbase/pocketbase.log`.
+- **Schéma** : `pb_migrations/` (versionné) est appliqué au lancement ; `--automigrate=false` empêche l'interface
+  d'écrire de nouvelles migrations dans le projet. La migration ajoute le champ `role` (`admin`, `member`, `guest`)
+  à la collection `users`, ferme l'inscription libre et interdit de changer son propre rôle.
+- **Comptes du foyer** : interface `http://127.0.0.1:8090/_/` (collection `users`, champ `role`), depuis la machine
+  elle-même (sur un serveur sans écran : `ssh -L 8090:127.0.0.1:8090 serveur`).
+- **État** : `.venv/bin/python -m core.pocketbase` ; vérifier un compte : `.venv/bin/python core/users.py`.
 
 `GATEWAY_AUTH_TOKEN` reste obligatoire pour un accès depuis le réseau : il reste l'accès administrateur
 (appairage par QR code, serveur MCP, `python -m gateway.client`). Sur une passerelle locale sans jeton,

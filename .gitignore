@@ -25,3 +25,5 @@ __pycache__/
 pocketbase/pocketbase
 pocketbase/pocketbase.exe
 pocketbase/pb_data/
+pocketbase/pocketbase.log
+pocketbase/*.tmp

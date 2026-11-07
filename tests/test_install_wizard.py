@@ -71,34 +71,35 @@ class InstallWizardTest(unittest.TestCase):
         return w.plan()
 
     def test_local_profile_installs_ollama_and_its_model(self):
-        plan = self.run_wizard(wizard(), "desktop", "local-decision", "install", "all", True, False, "go")
+        plan = self.run_wizard(wizard(), "desktop", "local-decision", "install", "all", True, False, False, "go")
         self.assertEqual(plan["OLLAMA"], "install")
         self.assertEqual(plan["OLLAMA_PULL"], "nimble")
         self.assertEqual((plan["SYSTEM_DEPS"], plan["DOWNLOAD_MODELS"], plan["PROFILE"]), ("all", "true", "local-decision"))
 
     def test_cloud_profile_does_not_need_ollama(self):
-        plan = self.run_wizard(wizard(), "desktop", "cloud", "none", "base", True, False, "go")
+        plan = self.run_wizard(wizard(), "desktop", "cloud", "none", "base", True, False, False, "go")
         self.assertEqual((plan["OLLAMA"], plan["OLLAMA_PULL"]), ("none", ""))
 
     def test_profile_later_asks_which_ollama_model(self):
-        plan = self.run_wizard(wizard(), "desktop", None, "use", ["gemma4:12b"], "none", True, True, "go",
+        plan = self.run_wizard(wizard(), "desktop", None, "use", ["gemma4:12b"], "none", True, False, True, "go",
                                installed=True)
         self.assertEqual((plan["OLLAMA"], plan["OLLAMA_PULL"], plan["PROFILE"]), ("use", "gemma4:12b", ""))
         self.assertEqual(plan["WITH_SERVICE"], "true")
 
     def test_server_asks_listening_address(self):
         # Profil cloud sur un serveur : ni mot-clé ni Whisper, aucune question sur les modèles
-        plan = self.run_wizard(wizard(), "server", "cloud", "none", "base", "127.0.0.1", False, "go")
-        self.assertEqual((plan["MODE"], plan["GATEWAY_BIND"]), ("server", "127.0.0.1"))
+        plan = self.run_wizard(wizard(), "server", "cloud", "none", "base", "127.0.0.1", True, False, "go")
+        self.assertEqual((plan["MODE"], plan["GATEWAY_BIND"], plan["ACCOUNTS"]), ("server", "127.0.0.1", "true"))
 
     def test_disabled_questions_are_skipped(self):
-        w = wizard("--system-deps", "false", "--ollama", "false", "--models", "false")
+        w = wizard("--system-deps", "false", "--ollama", "false", "--models", "false", "--accounts", "false")
         plan = self.run_wizard(w, "desktop", "mix", False, "go")
         self.assertEqual((plan["SYSTEM_DEPS"], plan["OLLAMA"], plan["DOWNLOAD_MODELS"]), ("none", "none", "false"))
+        self.assertEqual(plan["ACCOUNTS"], "")  # question retirée : le .env décide
 
     def test_go_back_returns_to_previous_question(self):
         # ← à la question Ollama (3e question) : retour au choix du profil
-        fake = answers("desktop", "cloud", "local-lfm", "install", "all", True, False, "go")
+        fake = answers("desktop", "cloud", "local-lfm", "install", "all", True, False, False, "go")
         state = {"calls": 0}
 
         def choose_with_back(title, options, index=0, can_go_back=False):

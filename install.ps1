@@ -21,6 +21,8 @@ param(
     [switch]$NoSystemDeps,    # Ne rien installer via winget (Python, Ollama)
     [switch]$NoOllama,        # Ne pas installer Ollama ni télécharger de modèle LLM
     [switch]$NoModels,        # Ne télécharger aucun modèle
+    [switch]$Accounts,        # Comptes utilisateurs de la PWA (PocketBase téléchargé, AUTH_PROVIDER=pocketbase)
+    [switch]$NoAccounts,      # Ne pas poser la question des comptes (le .env décide)
     [switch]$NoMenu,          # Pas de questions pas à pas
     [switch]$Yes              # Répondre oui à toutes les questions (implique -NoMenu)
 )
@@ -59,7 +61,7 @@ function Invoke-Checked {
 Write-Host "🚀 Installation de SmartHome ($Mode — Windows)" -ForegroundColor Cyan
 
 # --- 1. Python -----------------------------------------------------------------
-Step "1/7 Python"
+Step "1/8 Python"
 
 function Test-Python($exe, [string[]]$prefix = @()) {
     try {
@@ -100,13 +102,15 @@ $OllamaRemoteHost = ""
 $OllamaPull = @()
 $ProfileName = ""
 $WizardRan = $false
+$AccountsChoice = if ($Accounts) { "true" } else { "" }   # true | false | vide (selon AUTH_PROVIDER du .env)
 
 if (-Not $Yes -and -Not $NoMenu -and -Not [Console]::IsInputRedirected) {
     $flag = { param($b) if ($b) { "true" } else { "false" } }
     $wizardArgs = $PyArgs + @("core\install_wizard.py", "--platform", "windows",
         "--mode", $(if ($Server) { "server" } else { "desktop" }), "--host", $GatewayHost,
         "--system-deps", (& $flag (-Not $NoSystemDeps)), "--ollama", (& $flag (-Not $NoOllama)),
-        "--models", (& $flag (-Not $NoModels)), "--service", (& $flag $Service))
+        "--models", (& $flag (-Not $NoModels)), "--service", (& $flag $Service),
+        "--accounts", (& $flag (-Not $NoAccounts)))
     $plan = & $PyExe @wizardArgs
     switch ($LASTEXITCODE) {
         0 { }
@@ -125,6 +129,7 @@ if (-Not $Yes -and -Not $NoMenu -and -Not [Console]::IsInputRedirected) {
             "WITH_SERVICE" { $Service = [switch]($value -eq "true") }
             "GATEWAY_BIND" { if ($value) { $GatewayHost = $value } }
             "PROFILE" { $ProfileName = $value }
+            "ACCOUNTS" { if ($value) { $AccountsChoice = $value } }
         }
     }
     $WizardRan = $true
@@ -134,7 +139,7 @@ if (-Not $Yes -and -Not $NoMenu -and -Not [Console]::IsInputRedirected) {
 }
 
 # --- 2. Environnement virtuel --------------------------------------------------
-Step "2/7 Environnement Python"
+Step "2/8 Environnement Python"
 if (-Not (Test-Path $VenvPy)) {
     Invoke-Checked $PyExe ($PyArgs + @("-m", "venv", ".venv")) "Création du venv impossible."
     Ok "Environnement .venv créé."
@@ -143,13 +148,13 @@ if (-Not (Test-Path $VenvPy)) {
 }
 
 # --- 3. Dépendances Python -----------------------------------------------------
-Step "3/7 Dépendances Python"
+Step "3/8 Dépendances Python"
 Invoke-Checked $VenvPy @("-m", "pip", "install", "--upgrade", "pip", "wheel") "Mise à jour de pip impossible."
 Invoke-Checked $VenvPy @("-m", "pip", "install", "-r", "requirements.txt") "Échec de pip install -r requirements.txt."
 Ok "Dépendances installées."
 
 # --- 4. Configuration (.env) ---------------------------------------------------
-Step "4/7 Configuration"
+Step "4/8 Configuration"
 
 function Get-Setting($name) {
     # Valeur validée par core/config.py (variables d'environnement > .env > défauts).
@@ -200,7 +205,7 @@ $null = Get-Setting "LLM_PROVIDER"
 Ok "Configuration valide."
 
 # --- 5. Modèles locaux ---------------------------------------------------------
-Step "5/7 Modèles locaux"
+Step "5/8 Modèles locaux"
 if ($NoModels) {
     Info "Ignoré (-NoModels)."
 } else {
@@ -223,7 +228,7 @@ if ((Get-Setting "TTS_PROVIDER") -eq "piper") {
 }
 
 # --- 6. Ollama -----------------------------------------------------------------
-Step "6/7 Ollama (LLM local)"
+Step "6/8 Ollama (LLM local)"
 
 function Test-Ollama($url) {
     try { Invoke-RestMethod -Uri "$url/api/tags" -TimeoutSec 3 | Out-Null; return $true } catch { return $false }
@@ -276,8 +281,43 @@ if ($OllamaChoice -eq "none") {
     }
 }
 
-# --- 7. Démarrage automatique --------------------------------------------------
-Step "7/7 Lancement"
+# --- 7. Comptes utilisateurs (PocketBase) ------------------------------------------
+Step "7/8 Comptes utilisateurs (PocketBase)"
+if ($AccountsChoice -eq "true") {
+    Set-EnvValue "AUTH_PROVIDER" "pocketbase"
+} elseif ($AccountsChoice -eq "false" -and (Get-Setting "AUTH_PROVIDER") -eq "pocketbase") {
+    Set-EnvValue "AUTH_PROVIDER" "none"
+}
+if ((Get-Setting "AUTH_PROVIDER") -ne "pocketbase") {
+    Ok "Désactivés : le jeton de la passerelle donne l'accès (AUTH_PROVIDER=none)."
+} else {
+    # Les comptes servent à la PWA : passerelle active, jeton maître (accès administrateur) obligatoire hors loopback
+    if (-Not $Server -and (Get-Setting "GATEWAY_ENABLED") -ne "True") {
+        Set-EnvValue "GATEWAY_ENABLED" "true"
+        Ok "Passerelle activée (GATEWAY_ENABLED=true)."
+    }
+    if (-Not (Get-Setting "GATEWAY_AUTH_TOKEN")) {
+        $token = & $VenvPy -c "import secrets; print(secrets.token_hex(32))"
+        Set-EnvValue "GATEWAY_AUTH_TOKEN" "$token".Trim()
+        Ok "Jeton administrateur généré (GATEWAY_AUTH_TOKEN dans .env)."
+    }
+    & $VenvPy -m core.pocketbase install
+    if ($LASTEXITCODE -ne 0) {
+        Warn "PocketBase non installé : relancez install.ps1 ou .venv\Scripts\python -m core.pocketbase install."
+    } else {
+        $pbData = Join-Path $PSScriptRoot "pocketbase\pb_data"
+        if (-Not (Test-Path $pbData) -and -Not $Yes -and -Not [Console]::IsInputRedirected -and (Confirm-Action "Créer maintenant le compte administrateur de PocketBase ?")) {
+            & $VenvPy -m core.pocketbase admin
+            if ($LASTEXITCODE -ne 0) { Warn "Compte non créé : .venv\Scripts\python -m core.pocketbase admin" }
+        } elseif (-Not (Test-Path $pbData)) {
+            Info "Compte administrateur à créer : .venv\Scripts\python -m core.pocketbase admin"
+        }
+        Ok "SmartHome lance PocketBase lui-même. Comptes du foyer : $(Get-Setting 'POCKETBASE_URL')/_/ (collection users, champ role)."
+    }
+}
+
+# --- 8. Démarrage automatique --------------------------------------------------
+Step "8/8 Lancement"
 if (-Not $Service) {
     Info "Pas de démarrage automatique (option -Service pour l'ajouter)."
 } else {
