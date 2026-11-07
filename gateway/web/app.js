@@ -1139,18 +1139,22 @@ $("model-apply").addEventListener("click", () => {
 
 function onSettingsSaved(event) {
   showModel(event.llm);
-  const target = ui.advanced.open ? ui.advancedMsg : ui.modelMsg;
+  delete ui.advancedForm.dataset.dirty;
+
+  // Fermer la fenêtre de paramètres et revenir sur la conversation
+  if (ui.advanced.open) ui.advanced.close();
+  if (ui.settings.open) ui.settings.close();
+  $("settings-btn")?.focus();
+
   if (!event.changed.length) {
-    setMessage(target, "Aucun changement.");
+    showToast("Paramètres : aucun changement.", "info", 3000);
     return;
   }
   const label = (name) => fieldByName(name)?.label || name;
-  const parts = ["Enregistré."];
+  const parts = ["Paramètres enregistrés."];
   if (event.restart.length) parts.push(`Au prochain démarrage : ${event.restart.map(label).join(", ")}.`);
-  $("advanced-restart").hidden = !event.restart.length;
   if (event.overridden.length) parts.push(`Attention, une variable d'environnement reste prioritaire : ${event.overridden.join(", ")}.`);
-  setMessage(target, parts.join(" "), "ok");
-  delete ui.advancedForm.dataset.dirty;
+  showToast(parts.join(" "), "ok", 5000);
 }
 
 function fieldByName(name) {
@@ -1181,7 +1185,7 @@ function renderAdvanced() {
 // Valeur en cours de saisie dans le formulaire (sinon valeur enregistrée)
 function formValue(name) {
   if (name === "LLM_MODE") {
-    const list = String(formValue("LLM_DECISION_MODELS")).toLowerCase().split(",").map((m) => m.trim());
+    const list = String(formValue("LLM_DECISION_MODELS") || "").toLowerCase().split(",").map((m) => m.trim());
     return formValue("LLM_PROVIDER") === "ollama" && isDecisionModel(formValue("OLLAMA_MODEL"), list) ? "decision" : "language";
   }
   const input = ui.advancedFields.querySelector(`[data-name="${name}"]`);
@@ -1196,7 +1200,13 @@ function applyVisibility() {
     for (const wrap of fields) {
       const when = wrap.dataset.when && JSON.parse(wrap.dataset.when);
       wrap.hidden = Boolean(when) && !when.some((rule) =>
-        Object.entries(rule).every(([name, allowed]) => allowed.includes(formValue(name))));
+        Object.entries(rule).every(([name, allowed]) => {
+          const val = formValue(name);
+          if (allowed.includes(val)) return true;
+          if (typeof val === "boolean" && (allowed.includes(String(val)) || allowed.includes(val ? 1 : 0))) return true;
+          if (val !== null && val !== undefined && allowed.map(String).includes(String(val))) return true;
+          return false;
+        }));
     }
     group.hidden = fields.every((wrap) => wrap.hidden);
   }
@@ -1326,13 +1336,15 @@ function renderField(field) {
     }
   }
   input.dataset.name = field.name;
-  input.addEventListener("input", () => {
+  const onFieldChange = () => {
     let changed = true;
     try { changed = readField(field, input) !== undefined; } catch { /* JSON en cours de saisie */ }
     wrap.classList.toggle("changed", changed);
     ui.advancedForm.dataset.dirty = "1";
     applyVisibility();
-  });
+  };
+  input.addEventListener("input", onFieldChange);
+  input.addEventListener("change", onFieldChange);
   if (field.help) {
     const help = document.createElement("p");
     help.className = "help";

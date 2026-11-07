@@ -29,19 +29,45 @@ LIVE, RESTART = True, False
 
 # (titre, [(variable, libellé, appliqué immédiatement ?)])
 EDITABLE_GROUPS: list[tuple[str, list[tuple[str, str, bool]]]] = [
-    ("Modèle de langage", [
-        ("LLM_PROVIDER", "Fournisseur", LIVE),
+    ("1. Entrée Audio & Détection", [
+        ("WAKEWORD_THRESHOLD", "Sensibilité du mot-clé (0-1)", RESTART),
+        ("VAD_ENGINE", "Moteur de détection vocale (VAD)", RESTART),
+        ("VAD_SPEECH_THRESHOLD", "Probabilité de voix Silero", RESTART),
+        ("VOICE_THRESHOLD", "Seuil d'énergie sonore", RESTART),
+        ("SILENCE_DURATION", "Silence de fin de phrase (s)", RESTART),
+        ("MAX_SPEECH_DURATION", "Durée maximale de parole (s)", RESTART),
+        ("BARGE_IN_MODE", "Interruption (barge-in)", RESTART),
+        ("BARGE_IN_VOICE_THRESHOLD", "Seuil de voix (mode interruption voice)", RESTART),
+        ("BARGE_IN_MIN_DURATION", "Durée de voix pour couper (s)", RESTART),
+        ("FEEDBACK_WAKEWORD_TYPE", "Signal au mot-clé", RESTART),
+        ("FEEDBACK_WAKEWORD_SOUND", "Son au mot-clé", RESTART),
+        ("FEEDBACK_WAKEWORD_TEXT", "Phrase au mot-clé", RESTART),
+    ]),
+    ("2. Écoute & Transcription (STT)", [
+        ("STT_PROVIDER", "Fournisseur de transcription", RESTART),
+        ("STT_FALLBACK_PROVIDER", "Transcription de repli (si le LLM ne gère pas l'audio)", LIVE),
+        ("WHISPER_MODEL", "Modèle Whisper", RESTART),
+        ("WHISPER_BEAM_SIZE", "Beam size Whisper", RESTART),
+        ("WHISPER_VAD_FILTER", "Filtre VAD Whisper", RESTART),
+        ("OLLAMA_STT_MODEL", "Modèle STT Ollama", RESTART),
+        ("OPENROUTER_STT_MODEL", "Modèle STT OpenRouter", RESTART),
+    ]),
+    ("3. Cerveau & Intelligence (LLM)", [
+        ("LLM_PROVIDER", "Fournisseur LLM", LIVE),
         ("OPENROUTER_API_KEY", "Clé API OpenRouter", LIVE),
         ("OLLAMA_MODEL", "Modèle Ollama", LIVE),
-        ("LLM_DECISION_MODELS", "Modèles de décision", LIVE),
         ("OPENROUTER_MODEL", "Modèle OpenRouter", LIVE),
+        ("LLM_AUDIO_INPUT", "Mode direct : envoyer l'audio au LLM", LIVE),
+        ("LLM_DECISION_MODELS", "Modèles de décision reconnus", LIVE),
         ("LLM_SYSTEM_PROMPT", "Prompt système", LIVE),
         ("LLM_INJECT_DATETIME", "Date et heure dans le prompt", LIVE),
         ("LLM_THINK", "Réflexion (thinking)", LIVE),
         ("LLM_HISTORY_MESSAGES", "Messages gardés en mémoire", LIVE),
         ("LLM_TOOL_CALLING", "Appel d'outils", LIVE),
         ("LLM_MAX_TOOL_ROUNDS", "Allers-retours d'outils max.", LIVE),
-        ("LLM_AUDIO_INPUT", "Envoyer l'audio au modèle (mode direct)", LIVE),
+        ("CONVERSATION_END_PHRASES", "Phrases de fin de conversation", LIVE),
+        ("CONVERSATION_END_FILLERS", "Mots ignorés autour de la fin", LIVE),
+        ("FOLLOW_UP_TIMEOUT", "Écoute active après réponse (s)", RESTART),
     ]),
     ("Modèle de décision", [
         ("LLM_DECISION_PROMPT", "Question de choix de la commande", LIVE),
@@ -53,53 +79,36 @@ EDITABLE_GROUPS: list[tuple[str, list[tuple[str, str, bool]]]] = [
         ("LLM_DECISION_UNKNOWN_TEXT", "Réponse : rien compris", LIVE),
         ("LLM_DECISION_TIMEOUT", "Délai maximal (s)", LIVE),
     ]),
-    ("Conversation", [
-        ("CONVERSATION_END_PHRASES", "Phrases de fin de conversation", LIVE),
-        ("CONVERSATION_END_FILLERS", "Mots ignorés autour", LIVE),
-        ("FOLLOW_UP_TIMEOUT", "Écoute après une réponse (s)", RESTART),
+    ("4. Actions & Domotique", [
+        ("ACTIONS_ENABLED", "Actions système", LIVE),
+        ("ACTIONS_OPEN_ALLOWED_APPS", "Applications autorisées", RESTART),
+        ("ACTIONS_CONFIRM_DANGEROUS", "Confirmer les actions sensibles", LIVE),
+        ("ACTIONS_CONFIRM_TIMEOUT", "Délai de confirmation vocale (s)", RESTART),
+        ("ACTIONS_CONFIRM_PROMPT", "Question de confirmation vocale", LIVE),
     ]),
-    ("Voix", [
-        ("TTS_PROVIDER", "Fournisseur", RESTART),
+    ("5. Synthèse Vocale (TTS)", [
+        ("TTS_PROVIDER", "Moteur de voix", RESTART),
         ("TTS_VOICE", "Voix Piper", RESTART),
         ("OLLAMA_TTS_MODEL", "Modèle vocal Ollama", RESTART),
         ("OLLAMA_TTS_VOICE", "Voix Ollama", RESTART),
         ("OPENROUTER_TTS_MODEL", "Modèle vocal OpenRouter", RESTART),
         ("OPENROUTER_TTS_VOICE", "Voix OpenRouter", RESTART),
-        ("TTS_SPEECH_SPEED", "Vitesse", RESTART),
+        ("TTS_SPEECH_SPEED", "Vitesse de parole", RESTART),
         ("TTS_STREAMING", "Parler phrase par phrase", LIVE),
         ("TTS_STREAM_MIN_CHARS", "Longueur minimale d'un morceau", LIVE),
+        ("TTS_SILENCE_START_DURATION", "Silence avant parole (anti-coupure HDMI/DAC)", RESTART),
     ]),
-    ("Écoute", [
-        ("STT_PROVIDER", "Transcription", RESTART),
-        ("STT_FALLBACK_PROVIDER", "Transcription de repli (mode direct)", LIVE),
-        ("OLLAMA_STT_MODEL", "Modèle de transcription Ollama", RESTART),
-        ("OPENROUTER_STT_MODEL", "Modèle de transcription OpenRouter", RESTART),
-        ("WHISPER_MODEL", "Modèle Whisper", RESTART),
-        ("WHISPER_BEAM_SIZE", "Beam size Whisper", RESTART),
-        ("VOICE_THRESHOLD", "Seuil de voix", RESTART),
-        ("SILENCE_DURATION", "Silence de fin de phrase (s)", RESTART),
-        ("MAX_SPEECH_DURATION", "Durée maximale de parole (s)", RESTART),
-        ("VAD_ENGINE", "Détection de la parole", RESTART),
-        ("VAD_SPEECH_THRESHOLD", "Probabilité de voix", RESTART),
-        ("WAKEWORD_THRESHOLD", "Seuil du mot-clé", RESTART),
-        ("BARGE_IN_MODE", "Interruption (barge-in)", RESTART),
-    ]),
-    ("Retours sonores", [
-        ("FEEDBACK_WAKEWORD_TYPE", "Au mot-clé", RESTART),
-        ("FEEDBACK_WAKEWORD_TEXT", "Phrase au mot-clé", RESTART),
-        ("FEEDBACK_RESPONSE_END_TYPE", "En fin de réponse", RESTART),
-        ("FEEDBACK_TIMEOUT_TYPE", "À la mise en veille", RESTART),
+    ("6. Restitution & Environnement Audio", [
+        ("MEDIA_PAUSE_ENABLED", "Mettre les médias en pause (MPRIS)", RESTART),
+        ("DUCKING_ENABLED", "Atténuation sonore des autres applis (Ducking)", RESTART),
+        ("DUCKING_VOLUME_PERCENT", "Volume atténué (%)", RESTART),
+        ("FEEDBACK_RESPONSE_END_TYPE", "Signal en fin de réponse", RESTART),
+        ("FEEDBACK_RESPONSE_END_SOUND", "Son en fin de réponse", RESTART),
+        ("FEEDBACK_RESPONSE_END_TEXT", "Phrase en fin de réponse", RESTART),
+        ("FEEDBACK_TIMEOUT_TYPE", "Signal à la mise en veille", RESTART),
+        ("FEEDBACK_TIMEOUT_SOUND", "Son à la mise en veille", RESTART),
         ("FEEDBACK_TIMEOUT_TEXT", "Phrase de mise en veille", RESTART),
-        ("FEEDBACK_SOUND_VOLUME", "Volume des sons", RESTART),
-        ("DUCKING_ENABLED", "Baisser les autres sons", RESTART),
-        ("DUCKING_VOLUME_PERCENT", "Volume des autres sons (%)", RESTART),
-        ("MEDIA_PAUSE_ENABLED", "Mettre les médias en pause pendant l'échange", RESTART),
-    ]),
-    ("Actions", [
-        ("ACTIONS_ENABLED", "Actions système", LIVE),
-        ("ACTIONS_CONFIRM_DANGEROUS", "Confirmer les actions dangereuses", LIVE),
-        ("ACTIONS_CONFIRM_TIMEOUT", "Délai de confirmation vocale (s)", RESTART),
-        ("ACTIONS_OPEN_ALLOWED_APPS", "Applications autorisées", RESTART),
+        ("FEEDBACK_SOUND_VOLUME", "Volume des effets sonores", RESTART),
     ]),
 ]
 
@@ -116,6 +125,23 @@ def _stt_engine(name: str) -> list[dict]:
 
 
 VISIBLE_WHEN: dict[str, list[dict]] = {
+    # 1. Entrée Audio & Détection
+    "VAD_SPEECH_THRESHOLD": [{"VAD_ENGINE": ["silero"]}],
+    "VOICE_THRESHOLD": [{"VAD_ENGINE": ["energy"]}],
+    "BARGE_IN_VOICE_THRESHOLD": [{"BARGE_IN_MODE": ["voice"]}],
+    "BARGE_IN_MIN_DURATION": [{"BARGE_IN_MODE": ["voice"]}],
+    "FEEDBACK_WAKEWORD_SOUND": [{"FEEDBACK_WAKEWORD_TYPE": ["sound"]}],
+    "FEEDBACK_WAKEWORD_TEXT": [{"FEEDBACK_WAKEWORD_TYPE": ["phrase"]}],
+
+    # 2. STT
+    "STT_FALLBACK_PROVIDER": [{"STT_PROVIDER": _DIRECT_STT}],
+    "WHISPER_MODEL": _stt_engine("whisper"),
+    "WHISPER_BEAM_SIZE": _stt_engine("whisper"),
+    "WHISPER_VAD_FILTER": _stt_engine("whisper"),
+    "OLLAMA_STT_MODEL": _stt_engine("ollama"),
+    "OPENROUTER_STT_MODEL": _stt_engine("openrouter"),
+
+    # 3. LLM
     "OLLAMA_MODEL": [{"LLM_PROVIDER": ["ollama"]}],
     "OPENROUTER_MODEL": [{"LLM_PROVIDER": ["openrouter"]}],
     "OPENROUTER_API_KEY": [
@@ -124,11 +150,6 @@ VISIBLE_WHEN: dict[str, list[dict]] = {
         {"STT_PROVIDER": _DIRECT_STT, "STT_FALLBACK_PROVIDER": ["openrouter"]},
         {"TTS_PROVIDER": ["openrouter"]},
     ],
-    "LLM_SYSTEM_PROMPT": _LANGUAGE_MODEL,
-    "LLM_INJECT_DATETIME": _LANGUAGE_MODEL,
-    "LLM_THINK": _LANGUAGE_MODEL,
-    "LLM_TOOL_CALLING": _LANGUAGE_MODEL,
-    "LLM_MAX_TOOL_ROUNDS": _LANGUAGE_MODEL,
     "LLM_AUDIO_INPUT": [{"STT_PROVIDER": _DIRECT_STT, "LLM_MODE": ["language"]}],
     "LLM_DECISION_MODELS": _DECISION_MODEL,
     "LLM_DECISION_PROMPT": _DECISION_MODEL,
@@ -139,6 +160,19 @@ VISIBLE_WHEN: dict[str, list[dict]] = {
     "LLM_DECISION_REFUSED_TEMPLATE": _DECISION_MODEL,
     "LLM_DECISION_UNKNOWN_TEXT": _DECISION_MODEL,
     "LLM_DECISION_TIMEOUT": _DECISION_MODEL,
+    "LLM_SYSTEM_PROMPT": _LANGUAGE_MODEL,
+    "LLM_INJECT_DATETIME": _LANGUAGE_MODEL,
+    "LLM_THINK": _LANGUAGE_MODEL,
+    "LLM_TOOL_CALLING": _LANGUAGE_MODEL,
+    "LLM_MAX_TOOL_ROUNDS": _LANGUAGE_MODEL,
+
+    # 4. Actions
+    "ACTIONS_OPEN_ALLOWED_APPS": [{"ACTIONS_ENABLED": [True]}],
+    "ACTIONS_CONFIRM_DANGEROUS": [{"ACTIONS_ENABLED": [True]}],
+    "ACTIONS_CONFIRM_TIMEOUT": [{"ACTIONS_ENABLED": [True], "ACTIONS_CONFIRM_DANGEROUS": [True]}],
+    "ACTIONS_CONFIRM_PROMPT": [{"ACTIONS_ENABLED": [True], "ACTIONS_CONFIRM_DANGEROUS": [True]}],
+
+    # 5. TTS
     "TTS_VOICE": [{"TTS_PROVIDER": ["piper"]}],
     "OLLAMA_TTS_MODEL": [{"TTS_PROVIDER": ["ollama"]}],
     "OLLAMA_TTS_VOICE": [{"TTS_PROVIDER": ["ollama"]}],
@@ -146,18 +180,14 @@ VISIBLE_WHEN: dict[str, list[dict]] = {
     "OPENROUTER_TTS_VOICE": [{"TTS_PROVIDER": ["openrouter"]}],
     "TTS_SPEECH_SPEED": [{"TTS_PROVIDER": ["piper", "openrouter"]}],  # Ollama : vitesse 1 seulement
     "TTS_STREAM_MIN_CHARS": [{"TTS_STREAMING": [True]}],
-    "STT_FALLBACK_PROVIDER": [{"STT_PROVIDER": _DIRECT_STT}],
-    "OLLAMA_STT_MODEL": _stt_engine("ollama"),
-    "OPENROUTER_STT_MODEL": _stt_engine("openrouter"),
-    "WHISPER_MODEL": _stt_engine("whisper"),
-    "WHISPER_BEAM_SIZE": _stt_engine("whisper"),
-    "VAD_SPEECH_THRESHOLD": [{"VAD_ENGINE": ["silero"]}],
-    "FEEDBACK_WAKEWORD_TEXT": [{"FEEDBACK_WAKEWORD_TYPE": ["phrase"]}],
-    "FEEDBACK_TIMEOUT_TEXT": [{"FEEDBACK_TIMEOUT_TYPE": ["phrase"]}],
-    # La pause des médias remplace le ducking (voir main.py)
+
+    # 6. Restitution & Environnement
     "DUCKING_ENABLED": [{"MEDIA_PAUSE_ENABLED": [False]}],
     "DUCKING_VOLUME_PERCENT": [{"MEDIA_PAUSE_ENABLED": [False], "DUCKING_ENABLED": [True]}],
-    "ACTIONS_CONFIRM_TIMEOUT": [{"ACTIONS_CONFIRM_DANGEROUS": [True]}],
+    "FEEDBACK_RESPONSE_END_SOUND": [{"FEEDBACK_RESPONSE_END_TYPE": ["sound"]}],
+    "FEEDBACK_RESPONSE_END_TEXT": [{"FEEDBACK_RESPONSE_END_TYPE": ["phrase"]}],
+    "FEEDBACK_TIMEOUT_SOUND": [{"FEEDBACK_TIMEOUT_TYPE": ["sound"]}],
+    "FEEDBACK_TIMEOUT_TEXT": [{"FEEDBACK_TIMEOUT_TYPE": ["phrase"]}],
 }
 
 EDITABLE: dict[str, tuple[str, bool]] = {name: (label, live) for _, fields in EDITABLE_GROUPS for name, label, live in fields}

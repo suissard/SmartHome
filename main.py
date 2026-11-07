@@ -115,14 +115,15 @@ def main():
         AudioDucker.reset_all()
         return
 
+    settings = get_settings()
     print("Initialisation des composants... ⏳")
     detector = WakeWordDetector()
-    transcriber = VoiceTranscriber()
-    tts = TextToSpeech()
-    feedback = FeedbackManager(tts=tts)
+    transcriber = VoiceTranscriber(settings)
+    tts = TextToSpeech(settings)
+    feedback = FeedbackManager(tts=tts, settings=settings)
     media_pauser = MediaPauser()
     # La pause des médias suffit : baisser le son en plus est redondant et laisse des volumes bridés
-    ducker = AudioDucker(enabled=get_settings().DUCKING_ENABLED and not media_pauser.enabled)
+    ducker = AudioDucker(enabled=settings.DUCKING_ENABLED and not media_pauser.enabled)
     mcp_hub = get_mcp_hub() if MCP_CLIENT_ENABLED else None
 
     # Connexion aux serveurs MCP configurés
@@ -149,7 +150,6 @@ def main():
         frames_per_buffer=CHUNK
     )
 
-    settings = get_settings()
     # Cœur partagé entre le micro local et les clients distants (mêmes modèles chargés une seule fois)
     core = AssistantCore(settings, stt=transcriber.stt, tts=tts)
     local = core.open_session(LOCAL_SESSION, persistent=True)

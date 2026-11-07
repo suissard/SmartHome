@@ -185,7 +185,15 @@ class TextToSpeech:
             return np.zeros(0, dtype=np.int16), sample_rate
         audio = raw_audio.astype(np.float32)
 
-        # 3. Fondu de sortie (fade-out anti-claquements)
+        # 3. Fondu d'entrée (fade-in 10ms anti-clics / offset DC initial)
+        fade_in_len = min(int(sample_rate * 0.01), len(audio))
+        if fade_in_len > 0:
+            fade_in_curve = np.linspace(0.0, 1.0, fade_in_len)
+            if audio.ndim > 1:
+                fade_in_curve = fade_in_curve[:, np.newaxis]
+            audio[:fade_in_len] *= fade_in_curve
+
+        # 4. Fondu de sortie (fade-out anti-claquements)
         fade_len = int(sample_rate * self.settings.TTS_FADE_OUT_DURATION)
         if 0 < fade_len < len(audio):
             fade_curve = np.linspace(1.0, 0.0, fade_len)
@@ -193,7 +201,7 @@ class TextToSpeech:
                 fade_curve = fade_curve[:, np.newaxis]
             audio[-fade_len:] *= fade_curve
 
-        # 4. Tampons de silence au début et à la fin
+        # 5. Tampons de silence au début et à la fin
         pad_shape = audio.shape[1:]
         silence_start = np.zeros((int(sample_rate * self.settings.TTS_SILENCE_START_DURATION), *pad_shape), dtype=np.float32)
         silence_end = np.zeros((int(sample_rate * self.settings.TTS_SILENCE_END_DURATION), *pad_shape), dtype=np.float32)

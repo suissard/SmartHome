@@ -296,10 +296,12 @@ if (-Not $Service) {
 Write-Host "`n✅ SmartHome est installé." -ForegroundColor Green
 if ($Server) {
     Write-Host "  • Lancer la passerelle : .\start.ps1 -Server"
+    Write-Host "  • Arrêter             : .\stop.ps1"
     Write-Host "  • Jeton des clients    : GATEWAY_AUTH_TOKEN dans .env"
     Write-Host "  • Pare-feu : autorisez le port $(Get-Setting 'GATEWAY_PORT') (ou utilisez Tailscale, voir docs\MISE_EN_SERVICE.md)"
 } else {
     Write-Host "  • Lancer l'assistant : .\start.ps1"
+    Write-Host "  • Arrêter            : .\stop.ps1"
     Write-Host "  • Choisir le micro   : AUDIO_INPUT_DEVICE_INDEX dans .env"
 }
 Warn "Les actions système (volume, verrouillage, applications...) sont des scripts bash prévus pour Linux : sous Windows, elles échoueront tant qu'elles ne sont pas portées."

@@ -197,6 +197,7 @@ systemctl --user enable --now smarthome
 ```
 
 Journal en direct : `journalctl --user -u smarthome -f`. Service *utilisateur* (et non système) : il a ainsi accès au son de votre session.
+Pour arrêter l'assistant à tout moment : `./stop.sh` (ou `systemctl --user stop smarthome`).
 
 ---
 

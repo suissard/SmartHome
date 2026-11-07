@@ -2,6 +2,7 @@ import os
 import sys
 import time
 from pathlib import Path
+from typing import Optional
 import numpy as np
 import sounddevice as sd
 
@@ -11,6 +12,8 @@ if str(_ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(_ROOT_DIR))
 
 from core.config import (
+    Settings,
+    get_settings,
     AUDIO_OUTPUT_DEVICE_INDEX,
     FEEDBACK_WAKEWORD_TYPE,
     FEEDBACK_WAKEWORD_TEXT,
@@ -153,23 +156,25 @@ class FeedbackManager:
     pour les événements du cycle de vie de la conversation.
     """
 
-    def __init__(self, tts=None, output_device=AUDIO_OUTPUT_DEVICE_INDEX, volume=FEEDBACK_SOUND_VOLUME):
+    def __init__(self, tts=None, output_device=None, volume=None, settings: Optional[Settings] = None):
+        s = settings or get_settings()
+        self.settings = s
         self.tts = tts
-        self.output_device = output_device
-        self.volume = volume
+        self.output_device = s.AUDIO_OUTPUT_DEVICE_INDEX if output_device is None else output_device
+        self.volume = s.FEEDBACK_SOUND_VOLUME if volume is None else volume
 
         # Configuration des 3 événements clés
-        self.wakeword_type = FEEDBACK_WAKEWORD_TYPE.lower().strip()
-        self.wakeword_text = FEEDBACK_WAKEWORD_TEXT
-        self.wakeword_sound = FEEDBACK_WAKEWORD_SOUND
+        self.wakeword_type = s.FEEDBACK_WAKEWORD_TYPE.lower().strip()
+        self.wakeword_text = s.FEEDBACK_WAKEWORD_TEXT
+        self.wakeword_sound = s.FEEDBACK_WAKEWORD_SOUND
 
-        self.response_end_type = FEEDBACK_RESPONSE_END_TYPE.lower().strip()
-        self.response_end_sound = FEEDBACK_RESPONSE_END_SOUND
-        self.response_end_text = FEEDBACK_RESPONSE_END_TEXT
+        self.response_end_type = s.FEEDBACK_RESPONSE_END_TYPE.lower().strip()
+        self.response_end_sound = s.FEEDBACK_RESPONSE_END_SOUND
+        self.response_end_text = s.FEEDBACK_RESPONSE_END_TEXT
 
-        self.timeout_type = FEEDBACK_TIMEOUT_TYPE.lower().strip()
-        self.timeout_text = FEEDBACK_TIMEOUT_TEXT
-        self.timeout_sound = FEEDBACK_TIMEOUT_SOUND
+        self.timeout_type = s.FEEDBACK_TIMEOUT_TYPE.lower().strip()
+        self.timeout_text = s.FEEDBACK_TIMEOUT_TEXT
+        self.timeout_sound = s.FEEDBACK_TIMEOUT_SOUND
 
     def play_sound(self, sound_target: str, volume: float = None):
         """Joue un son (soit procédural par nom, soit depuis un fichier WAV)."""

@@ -213,6 +213,8 @@ Cinq profils prêts à l'emploi dans `profiles/` ; ils surchargent `.env` (les s
 ./start.sh --setup              # configuration pas à pas : quelques questions, crée le profil perso
 ./start.sh --no-menu            # pas de menu : reprend le dernier profil choisi (hybrid la première fois)
 ./start.sh --profile cloud      # ou SMARTHOME_PROFILE=cloud, ou python main.py --profile cloud
+./stop.sh                       # arrête le service systemd et tout processus SmartHome actif
+./stop.sh --status              # vérifie l'état d'exécution
 python -m core.profiles         # liste les profils
 ```
 

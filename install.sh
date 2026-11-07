@@ -477,12 +477,37 @@ setup_ollama
 setup_service
 
 echo
-echo "${C_GREEN}✅ SmartHome est installé.${C_RESET}"
-if [[ "$MODE" == "server" ]]; then
-    echo "  • Lancer la passerelle : ./start.sh --server"
-    echo "  • Jeton des clients    : GATEWAY_AUTH_TOKEN dans .env"
-    echo "  • Accès HTTPS (micro du téléphone) : docs/MISE_EN_SERVICE.md, étape 3 (Tailscale)"
+if $WITH_SERVICE; then
+    echo "${C_GREEN}🚀 SmartHome est installé et actif via systemd.${C_RESET}"
+    echo "  • Il tourne en arrière-plan et se relancera automatiquement au démarrage du PC."
+    if [[ "$MODE" == "server" ]]; then
+        echo "  • Suivre les logs en direct : sudo journalctl -u smarthome -f"
+        echo "  • Arrêter / Contrôler       : ./stop.sh (ou sudo systemctl status|stop|restart smarthome)"
+    else
+        echo "  • Suivre l'activité en direct : journalctl --user -u smarthome -f"
+        echo "  • Arrêter / Contrôler         : ./stop.sh (ou systemctl --user status|stop|restart smarthome)"
+    fi
 else
-    echo "  • Lancer l'assistant : ./start.sh"
-    echo "  • Choisir le micro   : AUDIO_INPUT_DEVICE_INDEX dans .env (liste : .venv/bin/python -c \"import sounddevice; print(sounddevice.query_devices())\")"
+    echo "${C_GREEN}✅ SmartHome est installé.${C_RESET}"
+    if [[ "$MODE" == "server" ]]; then
+        echo "  • Lancer la passerelle : ./start.sh --server"
+        echo "  • Jeton des clients    : GATEWAY_AUTH_TOKEN dans .env"
+        echo "  • Accès HTTPS (micro du téléphone) : docs/MISE_EN_SERVICE.md, étape 3 (Tailscale)"
+    else
+        echo "  • Lancer l'assistant : ./start.sh"
+        echo "  • Choisir le micro   : AUDIO_INPUT_DEVICE_INDEX dans .env (liste : .venv/bin/python -c \"import sounddevice; print(sounddevice.query_devices())\")"
+    fi
+    # Proposition de lancement immédiat si exécuté dans un terminal interactif
+    if [[ -t 0 && -t 1 ]]; then
+        echo
+        read -r -p "Voulez-vous lancer SmartHome maintenant (./start.sh) ? [O/n] " answer || true
+        if [[ -z "$answer" || "$answer" =~ ^[oOyY] ]]; then
+            echo "🚀 Lancement de SmartHome..."
+            if [[ "$MODE" == "server" ]]; then
+                exec "$ROOT_DIR/start.sh" --server
+            else
+                exec "$ROOT_DIR/start.sh"
+            fi
+        fi
+    fi
 fi

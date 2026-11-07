@@ -183,7 +183,7 @@ class Settings(BaseModel):
     TTS_CONFIG_PATH: str = ""
     TTS_SPEECH_SPEED: float = Field(1.15, gt=0.0)
     TTS_FADE_OUT_DURATION: float = Field(0.05, ge=0.0)
-    TTS_SILENCE_START_DURATION: float = Field(0.10, ge=0.0)
+    TTS_SILENCE_START_DURATION: float = Field(0.25, ge=0.0)
     TTS_SILENCE_END_DURATION: float = Field(0.40, ge=0.0)
     # Parler phrase par phrase pendant que le LLM génère la suite (au lieu d'attendre la réponse complète)
     TTS_STREAMING: EnvBool = True
