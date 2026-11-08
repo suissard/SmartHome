@@ -107,10 +107,11 @@ Exemples de comportement attendu :
                 return False
         return cmd_def.execute(args, dry_run=dry_run)
 
-    def process_response(self, response_text: str, dry_run: bool = False, confirm=None, policy=None) -> str:
+    def process_response(self, response_text: str, dry_run: bool = False, confirm=None, policy=None, on_action=None) -> str:
         """Point d'entrée principal pour traiter une réponse LLM :
         1. Extrait et exécute les actions détectées.
         2. Retourne le texte purifié prêt pour la synthèse vocale (TTS).
+        3. Notifie `on_action` pour chaque action exécutée (ou refusée).
         """
         if not self.enabled:
             return response_text
@@ -118,10 +119,30 @@ Exemples de comportement attendu :
         cleaned_text, actions = self.extract_actions(response_text)
 
         for act in actions:
-            if not self._allowed(act["definition"], policy):
+            cmd_def: BaseAction = act["definition"]
+            tool_name = cmd_def.tool_name
+            raw_args = act.get("args", "")
+            args_dict = {"raw": raw_args} if raw_args else {}
+            if not self._allowed(cmd_def, policy):
                 print(f"⛔ [ACTIONS] [{act['tag']}] ignoré : non permis pour cet utilisateur.")
+                if on_action:
+                    on_action({
+                        "name": tool_name,
+                        "arguments": args_dict,
+                        "executed": False,
+                        "output": "Action non permise",
+                        "tag": act.get("tag", "")
+                    })
                 continue
-            self.execute_action(act, dry_run=dry_run, confirm=confirm)
+            ok = self.execute_action(act, dry_run=dry_run, confirm=confirm)
+            if on_action:
+                on_action({
+                    "name": tool_name,
+                    "arguments": args_dict,
+                    "executed": bool(ok),
+                    "output": "",
+                    "tag": act.get("tag", "")
+                })
 
         return cleaned_text
 

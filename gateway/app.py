@@ -104,7 +104,12 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
         raise AuthError("Identifiant et mot de passe requis." if directory.enabled else "Jeton manquant ou invalide.")
 
     async def health(request: Request):
-        return JSONResponse({"status": "ok", "service": "smarthome-gateway"})
+        return JSONResponse({
+            "status": "ok",
+            "service": "smarthome-gateway",
+            "accounts": directory.enabled,
+            "auth_required": bool(token),
+        })
 
     async def ask(request: Request):
         try:
@@ -249,6 +254,25 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
             except Exception as e:
                 push({"type": "error", "message": f"Historique non modifié : {e}"})
 
+        async def handle_conversations(message: dict):
+            """Gestion des différentes conversations (liste, chargement, suppression)."""
+            kind = message["type"]
+            try:
+                if kind == "list_conversations":
+                    convs = await asyncio.to_thread(core.list_conversations, session.id)
+                    push({"type": "conversations_list", "conversations": convs})
+                elif kind == "load_conversation":
+                    cid = str(message.get("conversation_id", "")).strip()
+                    client_msgs = message.get("messages")
+                    msgs = await asyncio.to_thread(core.load_conversation, session.id, cid, client_msgs)
+                    push({"type": "conversation_loaded", "conversation_id": cid, "history": msgs})
+                elif kind == "delete_conversation":
+                    cid = str(message.get("conversation_id", "")).strip()
+                    ok = await asyncio.to_thread(core.delete_conversation, session.id, cid)
+                    push({"type": "conversation_deleted", "conversation_id": cid, "success": ok})
+            except Exception as e:
+                push({"type": "error", "message": f"Erreur conversation : {e}"})
+
         async def handle_profile(message: dict):
             """Prénom et consignes du compte, enregistrés dans l'annuaire avec le jeton du compte lui-même."""
             nonlocal user
@@ -334,6 +358,7 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
             "type": "ready",
             "history": history,
             "session": session.id,
+            "conversation_id": session.conversation_id,
             "user": {**user.public(s), **({"token": user.token} if user.token else {})},
             "accounts": directory.enabled,
             "profile_max": s.AUTH_INSTRUCTIONS_MAX_CHARS,
@@ -430,10 +455,14 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
                     core.cancel(session.id)
                     for speech in list(speeches):
                         speech.interrupt()
-                elif kind == "reset":
-                    print(f"🔄 [GATEWAY {session.id}] Réinitialisation de la conversation (reset)")
+                elif kind in ("reset", "new_conversation"):
+                    print(f"🔄 [GATEWAY {session.id}] Nouvelle conversation (reset)")
                     core.reset(session.id)
-                    push({"type": "reset_done"})
+                    push({"type": "reset_done", "conversation_id": session.conversation_id})
+                elif kind in ("list_conversations", "load_conversation", "delete_conversation"):
+                    task = asyncio.create_task(handle_conversations(message))
+                    tasks.add(task)
+                    task.add_done_callback(tasks.discard)
                 elif kind in ("forget", "edit_answer"):
                     task = asyncio.create_task(handle_history(message))
                     tasks.add(task)

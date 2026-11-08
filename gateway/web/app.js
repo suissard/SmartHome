@@ -5,18 +5,30 @@ import { Recorder, toBase64 } from "./recorder.js";
 
 const $ = (id) => document.getElementById(id);
 const ui = {
-  log: $("log"), empty: $("empty"), status: $("status"), liveAnnouncer: $("live-announcer"), toast: $("toast"),
+  log: $("log"), empty: $("empty"), emptyContent: $("empty-content"),
+  authBanner: $("auth-banner"), authBannerBtn: $("auth-banner-btn"),
+  status: $("status"), loginBtn: $("login-btn"),
+  liveAnnouncer: $("live-announcer"), toast: $("toast"),
   scrollBottomBtn: $("scroll-bottom-btn"), newChatBtn: $("new-chat-btn"), resetConfirm: $("reset-confirm"),
+  convToggleBtn: $("conv-toggle-btn"), convDrawer: $("conv-drawer"), convBackdrop: $("conv-backdrop"),
+  convCloseBtn: $("conv-close-btn"), convNewBtn: $("conv-new-btn"), convSearch: $("conv-search"),
+  convList: $("conv-list"), convEmpty: $("conv-empty"), convCount: $("conv-count"),
+  convSyncBadge: $("conv-sync-badge"), convActiveTitle: $("conv-active-title"),
+  convDeleteConfirm: $("conv-delete-confirm"), convDeleteDesc: $("conv-delete-desc"),
   mic: $("mic"), voiceStop: $("voice-stop"), textForm: $("text-form"), text: $("text"),
   setup: $("setup"), setupForm: $("setup-form"), token: $("token"), setupError: $("setup-error"),
-  accountFields: $("account-fields"), identity: $("identity"), password: $("password"), tokenHelp: $("token-help"),
+  setupCloseBtn: $("setup-close-btn"), setupCancelBtn: $("setup-cancel-btn"),
+  setupTabAccount: $("setup-tab-account"), setupTabToken: $("setup-tab-token"),
+  accountFields: $("account-fields"), tokenFields: $("token-fields"),
+  identity: $("identity"), password: $("password"), tokenHelp: $("token-help"),
   userName: $("user-name"), profile: $("profile"), profileName: $("profile-name"),
   profileInstructions: $("profile-instructions"), profileSave: $("profile-save"), profileMsg: $("profile-msg"),
   profileVoiceField: $("profile-voice-field"), profileVoice: $("profile-voice"), profileVoicePlay: $("profile-voice-play"),
   restartConfirm: $("restart-confirm"),
   msgMenu: $("msg-menu"), msgPreview: $("msg-preview"), msgRelaunch: $("msg-relaunch"), msgEdit: $("msg-edit"), msgMenuNote: $("msg-menu-note"),
   msgEditor: $("msg-editor"), msgEditorTitle: $("msg-editor-title"), msgEditorText: $("msg-editor-text"), msgEditorSave: $("msg-editor-save"),
-  settings: $("settings"), speak: $("speak"), autostop: $("autostop"), sessionId: $("session-id"),
+  settings: $("settings"), settingsLoginBtn: $("settings-login-btn"), logoutBtn: $("logout-btn"),
+  speak: $("speak"), autostop: $("autostop"), sessionId: $("session-id"),
   confirm: $("confirm"), confirmQuestion: $("confirm-question"), confirmBar: $("confirm-bar"), confirmTimerText: $("confirm-timer-text"), confirmMicBtn: $("confirm-mic-btn"), confirmVoiceStatus: $("confirm-voice-status"),
   modelBadge: $("model-badge"), modelCurrent: $("model-current"), modelOllama: $("model-ollama"),
   modelSelect: $("model-select"), modelDecision: $("model-decision"), modelMsg: $("model-msg"),
@@ -28,10 +40,23 @@ const store = {
   get(key, fallback = null) {
     try { return localStorage.getItem(`smarthome.${key}`) ?? fallback; } catch { return fallback; }
   },
+  getJSON(key, fallback = null) {
+    try {
+      const raw = localStorage.getItem(`smarthome.${key}`);
+      if (!raw) return fallback;
+      return JSON.parse(raw);
+    } catch { return fallback; }
+  },
   set(key, value) {
     try {
       if (value === null || value === undefined) localStorage.removeItem(`smarthome.${key}`);
-      else localStorage.setItem(`smarthome.${key}`, value);
+      else localStorage.setItem(`smarthome.${key}`, String(value));
+    } catch { /* préférence non persistée */ }
+  },
+  setJSON(key, value) {
+    try {
+      if (value === null || value === undefined) localStorage.removeItem(`smarthome.${key}`);
+      else localStorage.setItem(`smarthome.${key}`, JSON.stringify(value));
     } catch { /* préférence non persistée */ }
   },
 };
@@ -67,6 +92,10 @@ const state = {
   eventTurn: null,         // échange de l'événement en cours de traitement : les bulles créées lui appartiennent
   droppedTurns: new Set(), // échanges effacés : leurs derniers événements sont ignorés
   menuTarget: null,        // bulle visée par le menu d'appui long
+  conversations: [],       // liste des conversations : [{id, title, updated, created, messages, tools, message_count}]
+  currentConversationId: null, // identifiant de la conversation active
+  pendingDeleteConvId: null,   // conversation en attente de suppression
+  currentTurnTools: [],    // outils exécutés lors du tour courant
 };
 
 // ---- Fil de conversation ----
@@ -108,31 +137,87 @@ function formatActionSignature(name, args = {}) {
   return `${name}(${formatted})`;
 }
 
+const TOOL_ICONS = {
+  volume: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/></svg>`,
+  mute: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3 3 4.27l4.73 4.73H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4 9.91 6.09 12 8.18V4z"/></svg>`,
+  unmute: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z"/></svg>`,
+  media: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/></svg>`,
+  media_play_pause: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l6 4.5-6 4.5z"/></svg>`,
+  media_next: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 18 8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>`,
+  media_prev: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6h2v12H6zm3.5 6 8.5 6V6z"/></svg>`,
+  open: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 19H5V5h7V3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14c1.1 0 2-.9 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z"/></svg>`,
+  open_app: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 19H5V5h7V3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14c1.1 0 2-.9 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z"/></svg>`,
+  close: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>`,
+  close_app: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>`,
+  lock: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z"/></svg>`,
+  screen_off: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 3H3c-1.11 0-2 .89-2 2v12a2 2 0 0 0 2 2h5v2h8v-2h5c1.1 0 1.99-.9 1.99-2L23 5a2 2 0 0 0-2-2zm0 14H3V5h18v12z"/></svg>`,
+  brightness: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 8.69V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12 20 8.69zM12 18c-3.31 0-6-2.69-6-6s2.69-6 6-6 6 2.69 6 6-2.69 6-6 6zm0-10c-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4-1.79-4-4-4z"/></svg>`,
+  screenshot: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4z"/><path d="M9 2 7.17 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2h-3.17L15 2H9zm3 15c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5z"/></svg>`,
+  shutdown: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 3h-2v10h2V3zm4.83 2.17-1.42 1.42A6.92 6.92 0 0 1 19 12c0 3.87-3.13 7-7 7A6.995 6.995 0 0 1 7.58 6.58L6.17 5.17A8.932 8.932 0 0 0 3 12a9 9 0 0 0 18 0c0-2.74-1.23-5.18-3.17-6.83z"/></svg>`,
+  reboot: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17.65 6.35A7.958 7.958 0 0 0 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0 1 12 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>`,
+  timer: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 1H9v2h6V1zm-4 13h2V8h-2v6zm8.03-6.61 1.42-1.42c-.43-.51-.9-.99-1.41-1.41l-1.42 1.42C16.07 4.74 14.12 4 12 4c-4.97 0-9 4.03-9 9s4.02 9 9 9 9-4.03 9-9c0-2.12-.74-4.07-1.97-5.61zM12 20c-3.87 0-7-3.13-7-7s3.13-7 7-7 7 3.13 7 7-3.13 7-7 7z"/></svg>`,
+  system_info: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7 14h-2v-4h2v4zm0-6h-2V7h2v4z"/></svg>`,
+  audio_output: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 0 0-9 9v7c0 1.66 1.34 3 3 3h3v-8H5v-2c0-3.87 3.13-7 7-7s7 3.13 7 7v2h-4v8h3c1.66 0 3-1.34 3-3v-7a9 9 0 0 0-9-9z"/></svg>`,
+  sleep: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12.3 2a10 10 0 0 0-1.9 20 10.04 10.04 0 0 0 9.6-7.2A8 8 0 0 1 12.3 2z"/></svg>`,
+  notify: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.89 2 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/></svg>`,
+  default: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>`
+};
+
+function getToolIcon(name) {
+  const key = (name || "").toLowerCase().trim();
+  return TOOL_ICONS[key] || TOOL_ICONS[key.replace(/_action$/, "")] || TOOL_ICONS.default;
+}
+
 function formatActionLabel(name, args = {}, executed = true) {
   let label = "";
-  switch (name) {
-    case "volume":
-      label = args.level !== undefined ? `Volume réglé à ${args.level} %` : "Réglage du volume";
+  const key = (name || "").toLowerCase();
+  const rawArg = typeof args === "string" ? args : (args?.raw ?? "");
+  switch (key) {
+    case "volume": {
+      const lvl = args?.level ?? (rawArg && !isNaN(rawArg) ? rawArg : null);
+      if (lvl !== null && lvl !== undefined) label = `Volume réglé à ${lvl} %`;
+      else if (rawArg === "up" || rawArg === "+") label = "Volume augmenté";
+      else if (rawArg === "down" || rawArg === "-") label = "Volume diminué";
+      else label = "Réglage du volume";
       break;
+    }
     case "mute":
-      label = args.action === "unmute" ? "Son réactivé" : "Son coupé";
+      label = (args?.action === "unmute" || rawArg === "unmute") ? "Son réactivé" : "Son coupé";
+      break;
+    case "unmute":
+      label = "Son réactivé";
       break;
     case "media":
-      label = args.action === "play" ? "Lecture reprise" :
-              args.action === "pause" ? "Musique en pause" :
-              args.action === "next" ? "Piste suivante" :
-              args.action === "previous" ? "Piste précédente" :
-              (args.action ? `Média : ${args.action}` : "Contrôle des médias");
+    case "media_play_pause": {
+      const act = args?.action || rawArg;
+      label = act === "play" ? "Lecture reprise" :
+              act === "pause" ? "Musique en pause" :
+              act === "next" ? "Piste suivante" :
+              act === "prev" || act === "previous" ? "Piste précédente" :
+              "Contrôle des médias";
+      break;
+    }
+    case "media_next":
+      label = "Piste suivante";
+      break;
+    case "media_prev":
+      label = "Piste précédente";
       break;
     case "notify":
-      label = args.message ? `Notification : ${args.message}` : "Notification envoyée";
+      label = (args?.message || rawArg) ? `Notification : ${args?.message || rawArg}` : "Notification envoyée";
       break;
-    case "open_app":
-      label = `Application ouverte : ${args.app || "inconnue"}`;
+    case "open":
+    case "open_app": {
+      const app = args?.app || rawArg || "inconnue";
+      label = `Application ouverte : ${app}`;
       break;
-    case "close_app":
-      label = `Application fermée : ${args.app || "inconnue"}`;
+    }
+    case "close":
+    case "close_app": {
+      const app = args?.app || rawArg || "inconnue";
+      label = `Application fermée : ${app}`;
       break;
+    }
     case "shutdown":
       label = "Extinction de l'ordinateur";
       break;
@@ -145,9 +230,14 @@ function formatActionLabel(name, args = {}, executed = true) {
     case "screen_off":
       label = "Écran éteint";
       break;
-    case "brightness":
-      label = args.level !== undefined ? `Luminosité fixée à ${args.level} %` : "Réglage de la luminosité";
+    case "brightness": {
+      const lvl = args?.level ?? (rawArg && !isNaN(rawArg) ? rawArg : null);
+      if (lvl !== null && lvl !== undefined) label = `Luminosité fixée à ${lvl} %`;
+      else if (rawArg === "up") label = "Luminosité augmentée";
+      else if (rawArg === "down") label = "Luminosité diminuée";
+      else label = "Réglage de la luminosité";
       break;
+    }
     case "screenshot":
       label = "Capture d'écran enregistrée";
       break;
@@ -157,12 +247,16 @@ function formatActionLabel(name, args = {}, executed = true) {
     case "sleep":
       label = "Assistant mis en veille";
       break;
-    case "timer":
-      label = args.seconds ? `Minuteur : ${args.seconds} s` : "Minuteur programmé";
+    case "timer": {
+      const s = args?.seconds || rawArg;
+      label = s ? `Minuteur : ${s} s` : "Minuteur programmé";
       break;
-    case "audio_output":
-      label = args.sink ? `Sortie audio : ${args.sink}` : "Sortie audio modifiée";
+    }
+    case "audio_output": {
+      const sink = args?.sink || rawArg;
+      label = sink ? `Sortie audio : ${sink}` : "Sortie audio modifiée";
       break;
+    }
     default: {
       const clean = name.replace(/_/g, " ");
       label = `Action : ${clean}`;
@@ -172,24 +266,43 @@ function formatActionLabel(name, args = {}, executed = true) {
   return executed ? label : `${label} — non exécutée`;
 }
 
-function addToolChip(event) {
+function createToolPastille(tool, turn = null) {
   const el = document.createElement("div");
-  el.className = `tool ${event.executed ? "ok" : "refused"}`;
-  if (state.eventTurn) el.dataset.turn = state.eventTurn;
-  const label = formatActionLabel(event.name, event.arguments, event.executed);
-  const signature = formatActionSignature(event.name, event.arguments);
-  const icon = event.executed ? "✓" : "✕";
+  const isOk = tool.executed !== false;
+  el.className = `tool-pastille ${isOk ? "ok" : "refused"}`;
+  if (turn) el.dataset.turn = turn;
 
-  // Texte visible : strictement le libellé en français naturel, sans signature technique
-  el.innerHTML = `<span class="tool-icon" aria-hidden="true">${icon}</span> <span class="tool-text">${escapeHtml(label)}</span>`;
+  const label = formatActionLabel(tool.name, tool.arguments, isOk);
+  const signature = formatActionSignature(tool.name, tool.arguments);
+  const iconSvg = getToolIcon(tool.name);
+  const statusIcon = isOk
+    ? `<svg class="pastille-status-icon ok" viewBox="0 0 24 24"><path d="M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>`
+    : `<svg class="pastille-status-icon refused" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>`;
 
-  // Détail technique : accessible uniquement au survol (title) et aux lecteurs d'écran (aria-label)
-  const detail = event.output ? `${signature} → ${event.output}` : signature;
+  el.innerHTML = `
+    <span class="pastille-tool-icon" aria-hidden="true">${iconSvg}</span>
+    <span class="pastille-label">${escapeHtml(label)}</span>
+    <span class="pastille-status" aria-hidden="true">${statusIcon}</span>
+  `;
+
+  const detail = tool.output ? `${signature} → ${tool.output}` : signature;
   el.title = detail;
-  el.setAttribute("aria-label", `${label} (${signature})${event.output ? `. Résultat : ${event.output}` : ""}`);
+  el.setAttribute("aria-label", `${label} (${signature})${tool.output ? `. Résultat : ${tool.output}` : ""}`);
 
+  el.addEventListener("click", () => {
+    showToast(`${signature}${tool.output ? ` : ${tool.output}` : ""}`, isOk ? "ok" : "error");
+  });
+
+  return el;
+}
+
+function addToolChip(event) {
+  const el = createToolPastille(event, state.eventTurn);
   ui.log.append(el);
   scrollDown();
+
+  state.currentTurnTools.push(event);
+  recordToolInCurrentConversation(event);
 }
 
 function setStatus(stateName, label) {
@@ -238,6 +351,19 @@ function refreshControls() {
   const enabled = state.ready;
   ui.text.disabled = !enabled;
   ui.mic.disabled = !enabled;
+  if (ui.loginBtn) ui.loginBtn.hidden = enabled;
+  if (ui.status) {
+    ui.status.classList.toggle("interactive", !enabled);
+    ui.status.title = enabled ? "Connecté à SmartHome" : "État de la connexion (cliquer pour se connecter)";
+  }
+  if (ui.authBanner) ui.authBanner.hidden = enabled;
+  if (ui.emptyContent) ui.emptyContent.hidden = !enabled;
+  if (ui.settingsLoginBtn) {
+    ui.settingsLoginBtn.textContent = enabled ? "Changer de compte / jeton" : "Se connecter";
+  }
+  if (ui.logoutBtn) {
+    ui.logoutBtn.hidden = !enabled;
+  }
   if (enabled) {
     if (state.busy) {
       setStatus("busy", "Réflexion…");
@@ -304,13 +430,14 @@ function connect() {
       const hadCredentials = Boolean(store.get("token") || store.get("userToken") || state.authTried);
       store.set("userToken", null);
       state.authTried = false;
-      openSetup(hadCredentials ? (state.authError || "Identifiants refusés par la passerelle.") : "");
+      openSetup(hadCredentials ? (state.authError || "Identifiants refusés par la passerelle.") : "Veuillez vous authentifier.");
       state.authError = "";
       return;
     }
     if (e.code === 4403) {
       setStatus("offline", "Jeton requis");
       addBubble("error", "Accès distant refusé : la passerelle n'a pas de jeton (GATEWAY_AUTH_TOKEN). Configurez-en un sur l'ordinateur.");
+      openSetup("Jeton requis pour l'accès distant (GATEWAY_AUTH_TOKEN).");
       return;
     }
     setStatus("offline", state.restarting ? "Redémarrage…" : "Hors ligne");
@@ -334,15 +461,62 @@ function handleEvent(event) {
       state.confirmTimeout = event.confirm_timeout || 20;
       store.set("session", event.session);
       ui.sessionId.textContent = event.session;
+      if (event.conversation_id) state.currentConversationId = event.conversation_id;
       applyUser(event.user, event.accounts);
       if (event.profile_max) ui.profileInstructions.maxLength = event.profile_max;
       fillVoices(event.voices || [], event.user?.voice || "");
       renderHistory(event.history || []);
       showModel(event.llm);
       refreshControls();
+      send({ type: "list_conversations" });
+      updateActiveConversationUI();
       if (state.restarting) {
         state.restarting = false;
         showToast("SmartHome a redémarré", "ok");
+      }
+      break;
+    case "conversations_list":
+      if (event.conversations && Array.isArray(event.conversations)) {
+        for (const sConv of event.conversations) {
+          const local = state.conversations.find((c) => c.id === sConv.id);
+          if (local) {
+            local.title = sConv.title || local.title;
+            local.updated = sConv.updated || local.updated;
+            local.last_message = sConv.last_message || local.last_message;
+            if (sConv.tools) local.tools = [...new Set([...(local.tools || []), ...sConv.tools])];
+          } else {
+            state.conversations.push(sConv);
+          }
+        }
+        state.conversations.sort((a, b) => new Date(b.updated || b.created || 0) - new Date(a.updated || a.created || 0));
+        saveConversations();
+        renderConvList(ui.convSearch ? ui.convSearch.value : "");
+      }
+      break;
+    case "conversation_loaded":
+      if (event.conversation_id) {
+        state.currentConversationId = event.conversation_id;
+        renderHistory(event.history || []);
+        const conv = getCurrentConversation();
+        conv.messages = event.history || [];
+        saveConversations();
+        updateActiveConversationUI();
+      }
+      break;
+    case "conversation_created":
+      if (event.conversation_id) {
+        state.currentConversationId = event.conversation_id;
+        state.currentTurnTools = [];
+        ui.log.querySelectorAll(".msg, .tool, .tool-pastille").forEach((el) => el.remove());
+        ui.empty.hidden = false;
+        updateActiveConversationUI();
+      }
+      break;
+    case "conversation_deleted":
+      if (event.conversation_id) {
+        state.conversations = state.conversations.filter((c) => c.id !== event.conversation_id);
+        saveConversations();
+        renderConvList(ui.convSearch ? ui.convSearch.value : "");
       }
       break;
     case "restarting":
@@ -358,6 +532,7 @@ function handleEvent(event) {
       } else {
         addBubble("user", event.text);
       }
+      recordMessageInCurrentConversation("user", event.text, state.eventTurn);
       break;
     case "token":
       if (!state.botBubble) {
@@ -394,10 +569,19 @@ function handleEvent(event) {
       break;
     case "response":
       finishBotBubble(event.text);
+      if (event.tools && Array.isArray(event.tools)) {
+        for (const t of event.tools) {
+          if (!state.currentTurnTools.some((x) => x.name === t.name)) {
+            addToolChip(t);
+          }
+        }
+      }
+      recordMessageInCurrentConversation("assistant", event.text, state.eventTurn, state.currentTurnTools);
+      state.currentTurnTools = [];
       if (event.end_conversation) {
         const el = document.createElement("div");
-        el.className = "tool";
-        el.textContent = "💤 Conversation terminée";
+        el.className = "tool-pastille";
+        el.innerHTML = `<span class="pastille-tool-icon" aria-hidden="true">${TOOL_ICONS.sleep}</span><span class="pastille-label">Conversation terminée</span>`;
         ui.log.append(el);
         scrollDown();
       }
@@ -432,8 +616,11 @@ function handleEvent(event) {
       refreshControls();
       break;
     case "reset_done":
-      ui.log.querySelectorAll(".msg, .tool").forEach((el) => el.remove());
+      ui.log.querySelectorAll(".msg, .tool, .tool-pastille").forEach((el) => el.remove());
       ui.empty.hidden = false;
+      if (event.conversation_id) state.currentConversationId = event.conversation_id;
+      state.currentTurnTools = [];
+      updateActiveConversationUI();
       break;
     case "settings":
       state.settings = event.groups;
@@ -507,14 +694,305 @@ function interruptAssistant() {
   if (state.busy || speaking) send({ type: "stop" });
 }
 
-// Conversation en cours renvoyée par le serveur (rechargement de la page, autre appareil, historique du compte) :
-// affichée seulement si l'écran est vide (une simple reconnexion garde les bulles déjà là)
-function renderHistory(messages) {
-  if (!messages.length || ui.log.querySelector(".msg")) return;
-  for (const message of messages) {
-    const el = addBubble(message.role === "user" ? "user" : "bot", message.content);
-    if (message.turn) el.dataset.turn = message.turn;
+// ---- Gestion des Conversations & Historique ----
+
+function generateConvId() {
+  return "conv_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 8);
+}
+
+function formatConvDate(dateStr) {
+  if (!dateStr) return "";
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return "";
+  const now = new Date();
+  const diffMs = now - d;
+  const diffMins = Math.floor(diffMs / 60000);
+  if (diffMins < 1) return "À l'instant";
+  if (diffMins < 60) return `Il y a ${diffMins} min`;
+
+  const isToday = d.toDateString() === now.toDateString();
+  if (isToday) {
+    return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   }
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  if (d.toDateString() === yesterday.toDateString()) {
+    return "Hier";
+  }
+  return d.toLocaleDateString([], { day: "numeric", month: "short" });
+}
+
+function toggleConvDrawer(open) {
+  if (!ui.convDrawer) return;
+  const shouldOpen = open !== undefined ? Boolean(open) : !ui.convDrawer.classList.contains("open");
+  ui.convDrawer.classList.toggle("open", shouldOpen);
+  ui.convDrawer.setAttribute("aria-hidden", String(!shouldOpen));
+  if (ui.convBackdrop) {
+    ui.convBackdrop.hidden = !shouldOpen;
+    ui.convBackdrop.classList.toggle("open", shouldOpen);
+  }
+  if (shouldOpen && ui.convSearch) {
+    ui.convSearch.value = "";
+    renderConvList();
+    ui.convSearch.focus();
+  }
+}
+
+function saveConversations() {
+  store.setJSON("conversations", state.conversations);
+}
+
+function getCurrentConversation() {
+  if (!state.currentConversationId) {
+    state.currentConversationId = generateConvId();
+  }
+  let conv = state.conversations.find((c) => c.id === state.currentConversationId);
+  if (!conv) {
+    conv = {
+      id: state.currentConversationId,
+      title: "Nouvelle conversation",
+      created: new Date().toISOString(),
+      updated: new Date().toISOString(),
+      messages: [],
+      tools: [],
+      messageCount: 0,
+    };
+    state.conversations.unshift(conv);
+    saveConversations();
+  }
+  return conv;
+}
+
+function updateActiveConversationUI() {
+  const conv = state.conversations.find((c) => c.id === state.currentConversationId);
+  const title = conv?.title || (ui.log.querySelector(".msg") ? "Conversation" : "");
+  if (ui.convActiveTitle) {
+    ui.convActiveTitle.textContent = title && title !== "Nouvelle conversation" ? title : "";
+  }
+  renderConvList(ui.convSearch ? ui.convSearch.value : "");
+}
+
+function renderConvList(filterText = "") {
+  if (!ui.convList) return;
+  const filter = filterText.toLowerCase().trim();
+  const filtered = state.conversations.filter((c) => {
+    if (!filter) return true;
+    return (
+      (c.title || "").toLowerCase().includes(filter) ||
+      (c.last_message || "").toLowerCase().includes(filter) ||
+      (c.tools || []).some((t) => t.toLowerCase().includes(filter))
+    );
+  });
+
+  ui.convList.replaceChildren(
+    ...filtered.map((conv) => {
+      const li = document.createElement("li");
+      li.className = `conv-item ${conv.id === state.currentConversationId ? "active" : ""}`;
+      li.tabIndex = 0;
+      li.dataset.id = conv.id;
+
+      const top = document.createElement("div");
+      top.className = "conv-item-top";
+
+      const title = document.createElement("span");
+      title.className = "conv-item-title";
+      title.textContent = conv.title || "Nouvelle conversation";
+
+      const date = document.createElement("span");
+      date.className = "conv-item-date";
+      date.textContent = formatConvDate(conv.updated || conv.created);
+
+      const delBtn = document.createElement("button");
+      delBtn.className = "conv-item-delete";
+      delBtn.type = "button";
+      delBtn.setAttribute("aria-label", "Supprimer cette conversation");
+      delBtn.title = "Supprimer";
+      delBtn.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>`;
+      delBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        confirmDeleteConversation(conv.id, conv.title);
+      });
+
+      top.append(title, date, delBtn);
+
+      const snippet = document.createElement("div");
+      snippet.className = "conv-item-snippet";
+      snippet.textContent = conv.last_message || "Aucun échange";
+
+      li.append(top, snippet);
+
+      if (conv.tools && conv.tools.length) {
+        const toolsDiv = document.createElement("div");
+        toolsDiv.className = "conv-item-tools";
+        const uniqueTools = [...new Set(conv.tools)].slice(0, 4);
+        for (const t of uniqueTools) {
+          const badge = document.createElement("span");
+          badge.className = "mini-tool-pastille";
+          badge.innerHTML = `${getToolIcon(t)} ${escapeHtml(t)}`;
+          badge.title = t;
+          toolsDiv.append(badge);
+        }
+        li.append(toolsDiv);
+      }
+
+      li.addEventListener("click", () => {
+        selectConversation(conv.id);
+      });
+
+      li.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          selectConversation(conv.id);
+        }
+      });
+
+      return li;
+    })
+  );
+
+  if (ui.convEmpty) {
+    ui.convEmpty.hidden = filtered.length > 0;
+  }
+  if (ui.convCount) {
+    const total = state.conversations.length;
+    ui.convCount.textContent = `${total} conversation${total > 1 ? "s" : ""}`;
+  }
+}
+
+function selectConversation(convId) {
+  if (state.busy) interruptAssistant();
+  state.currentConversationId = convId;
+  const conv = state.conversations.find((c) => c.id === convId);
+  if (conv) {
+    renderHistory(conv.messages || []);
+    send({ type: "load_conversation", conversation_id: convId, messages: conv.messages || [] });
+  }
+  updateActiveConversationUI();
+  if (window.innerWidth <= 600) {
+    toggleConvDrawer(false);
+  }
+}
+
+function startNewConversation() {
+  if (state.busy) interruptAssistant();
+  const newId = generateConvId();
+  state.currentConversationId = newId;
+  state.currentTurnTools = [];
+  ui.log.querySelectorAll(".msg, .tool, .tool-pastille").forEach((el) => el.remove());
+  ui.empty.hidden = false;
+  send({ type: "new_conversation" });
+  updateActiveConversationUI();
+  if (window.innerWidth <= 600) {
+    toggleConvDrawer(false);
+  }
+}
+
+function confirmDeleteConversation(convId, title) {
+  state.pendingDeleteConvId = convId;
+  if (ui.convDeleteDesc) {
+    ui.convDeleteDesc.textContent = `Voulez-vous supprimer définitivement « ${title || "cette conversation"} » et son historique ?`;
+  }
+  if (ui.convDeleteConfirm) {
+    ui.convDeleteConfirm.showModal();
+  } else if (confirm("Supprimer cette conversation ?")) {
+    deleteConversation(convId);
+  }
+}
+
+function deleteConversation(convId) {
+  state.conversations = state.conversations.filter((c) => c.id !== convId);
+  saveConversations();
+  send({ type: "delete_conversation", conversation_id: convId });
+
+  if (state.currentConversationId === convId) {
+    startNewConversation();
+  } else {
+    renderConvList(ui.convSearch ? ui.convSearch.value : "");
+  }
+  showToast("Conversation supprimée", "ok");
+}
+
+function recordMessageInCurrentConversation(role, content, turn, tools = []) {
+  if (!content && !tools.length) return;
+  const conv = getCurrentConversation();
+  conv.updated = new Date().toISOString();
+  if (!conv.messages) conv.messages = [];
+
+  const existingIdx = turn ? conv.messages.findIndex((m) => m.turn === turn && m.role === role) : -1;
+  const msgObj = {
+    role,
+    content: content || "",
+    turn: turn || newTurn(),
+    tools: tools && tools.length ? tools : undefined,
+  };
+
+  if (existingIdx >= 0) {
+    conv.messages[existingIdx] = msgObj;
+  } else {
+    conv.messages.push(msgObj);
+  }
+
+  if (role === "user" && (!conv.title || conv.title === "Nouvelle conversation")) {
+    const rawTitle = content.trim();
+    conv.title = rawTitle.length > 55 ? rawTitle.slice(0, 52) + "…" : rawTitle;
+  }
+  conv.last_message = content || (tools.length ? `[${tools[0].name}]` : "");
+  conv.messageCount = conv.messages.length;
+
+  if (tools && tools.length) {
+    if (!conv.tools) conv.tools = [];
+    for (const t of tools) {
+      const name = t.name || t.tag || "";
+      if (name && !conv.tools.includes(name)) conv.tools.push(name);
+    }
+  }
+
+  state.conversations = [conv, ...state.conversations.filter((c) => c.id !== conv.id)];
+  saveConversations();
+  updateActiveConversationUI();
+}
+
+function recordToolInCurrentConversation(tool) {
+  const conv = getCurrentConversation();
+  if (!conv.tools) conv.tools = [];
+  const name = tool.name || tool.tag || "";
+  if (name && !conv.tools.includes(name)) {
+    conv.tools.push(name);
+    saveConversations();
+    renderConvList(ui.convSearch ? ui.convSearch.value : "");
+  }
+}
+
+function initConversations() {
+  state.conversations = store.getJSON("conversations", []);
+  updateActiveConversationUI();
+}
+
+// Conversation en cours renvoyée par le serveur ou chargée depuis le tiroir :
+function renderHistory(messages) {
+  if (!messages || !messages.length) {
+    ui.empty.hidden = ui.log.querySelector(".msg, .tool, .tool-pastille") !== null;
+    return;
+  }
+  ui.log.querySelectorAll(".msg, .tool, .tool-pastille").forEach((el) => el.remove());
+  for (const message of messages) {
+    if (message.role === "user") {
+      const el = addBubble("user", message.content);
+      if (message.turn) el.dataset.turn = message.turn;
+    } else if (message.role === "assistant") {
+      if (message.tools && Array.isArray(message.tools)) {
+        for (const t of message.tools) {
+          const pastille = createToolPastille(t, message.turn);
+          ui.log.append(pastille);
+        }
+      }
+      if (message.content) {
+        const el = addBubble("bot", message.content);
+        if (message.turn) el.dataset.turn = message.turn;
+      }
+    }
+  }
+  ui.empty.hidden = ui.log.querySelector(".msg, .tool, .tool-pastille") !== null;
   scrollDown(true);
 }
 
@@ -530,6 +1008,7 @@ function sendText(text, forget = []) {
   addBubble("user", text).dataset.turn = turn;
   state.busy += 1;
   refreshControls();
+  recordMessageInCurrentConversation("user", text, turn);
   send({ type: "text", text, speak: ui.speak.checked, turn, forget });
 }
 
@@ -602,7 +1081,7 @@ ui.log.addEventListener("contextmenu", (e) => {
   openMessageMenu(el);
 });
 
-function turnElements(turn, selector = ".msg, .tool") {
+function turnElements(turn, selector = ".msg, .tool, .tool-pastille") {
   return [...ui.log.querySelectorAll(selector)].filter((el) => el.dataset.turn === turn);
 }
 
@@ -632,7 +1111,7 @@ function removeElements(elements) {
     if (el === state.pendingUser) state.pendingUser = null;
     el.remove();
   }
-  ui.empty.hidden = ui.log.querySelector(".msg, .tool") !== null;
+  ui.empty.hidden = ui.log.querySelector(".msg, .tool, .tool-pastille") !== null;
 }
 
 // Efface ces éléments et retourne leurs échanges, à retirer aussi de l'historique du serveur
@@ -646,7 +1125,7 @@ function dropElements(elements) {
 function followingElements(el) {
   const elements = [];
   for (let next = el.nextElementSibling; next; next = next.nextElementSibling) {
-    if (next.matches(".msg, .tool")) elements.push(next);
+    if (next.matches(".msg, .tool, .tool-pastille")) elements.push(next);
   }
   return elements;
 }
@@ -1046,9 +1525,43 @@ function applyUser(user, accounts) {
   document.body.classList.toggle("not-admin", !state.admin);
 }
 
+function setSetupTab(tabName) {
+  state.setupTab = tabName;
+  const isAccount = tabName === "account";
+  ui.setupTabAccount?.classList.toggle("active", isAccount);
+  ui.setupTabAccount?.setAttribute("aria-selected", String(isAccount));
+  ui.setupTabToken?.classList.toggle("active", !isAccount);
+  ui.setupTabToken?.setAttribute("aria-selected", String(!isAccount));
+  if (ui.accountFields) ui.accountFields.hidden = !isAccount;
+  if (ui.tokenFields) ui.tokenFields.hidden = isAccount;
+  if (isAccount) {
+    ui.identity?.focus();
+  } else {
+    ui.token?.focus();
+  }
+}
+
+function updateSetupTabs() {
+  if (ui.setupTabAccount) {
+    ui.setupTabAccount.hidden = state.accounts === false;
+  }
+  let targetTab = state.setupTab;
+  if (!targetTab) {
+    if (state.accounts === false) {
+      targetTab = "token";
+    } else if (state.accounts === true) {
+      targetTab = "account";
+    } else if (store.get("token") && !store.get("userToken")) {
+      targetTab = "token";
+    } else {
+      targetTab = "account";
+    }
+  }
+  setSetupTab(targetTab);
+}
+
 function openSetup(error = "") {
-  ui.accountFields.hidden = !state.accounts;
-  ui.tokenHelp.hidden = state.accounts;
+  updateSetupTabs();
   ui.password.value = "";
   ui.token.value = store.get("token", "");
   ui.setupError.textContent = error;
@@ -1056,15 +1569,36 @@ function openSetup(error = "") {
   if (!ui.setup.open) ui.setup.showModal();
 }
 
-ui.setupForm.addEventListener("submit", () => {
+ui.setupTabAccount?.addEventListener("click", () => setSetupTab("account"));
+ui.setupTabToken?.addEventListener("click", () => setSetupTab("token"));
+ui.setupCloseBtn?.addEventListener("click", () => ui.setup.close());
+ui.setupCancelBtn?.addEventListener("click", () => ui.setup.close());
+
+ui.setupForm.addEventListener("submit", (e) => {
+  e.preventDefault();
   unlockAudio();
-  store.set("token", ui.token.value.trim() || null);
-  const identity = ui.identity.value.trim();
-  if (state.accounts && identity) {
-    state.pendingLogin = { identity, password: ui.password.value };
+  const isAccount = (state.setupTab || "account") === "account";
+  if (isAccount) {
+    const identity = ui.identity.value.trim();
+    const password = ui.password.value;
+    if (!identity || !password) {
+      ui.setupError.textContent = "Veuillez renseigner votre adresse e-mail et votre mot de passe.";
+      ui.setupError.hidden = false;
+      return;
+    }
+    state.pendingLogin = { identity, password };
+    state.authTried = true;
+    store.set("token", null);
+  } else {
+    const tokenVal = ui.token.value.trim();
+    store.set("token", tokenVal || null);
+    store.set("userToken", null);
+    state.pendingLogin = null;
     state.authTried = true;
   }
+  ui.setupError.hidden = true;
   ui.password.value = "";
+  ui.setup.close();
   state.ws?.close();
   connect();
 });
@@ -1081,26 +1615,59 @@ ui.scrollBottomBtn?.addEventListener("click", () => {
 });
 
 function promptResetConversation() {
-  const hasMessages = ui.log.querySelectorAll(".msg, .tool").length > 0;
+  const hasMessages = ui.log.querySelectorAll(".msg, .tool, .tool-pastille").length > 0;
   if (!hasMessages) {
-    send({ type: "reset" });
+    startNewConversation();
     return;
   }
   if (ui.resetConfirm) {
     ui.resetConfirm.showModal();
-  } else if (confirm("Effacer la conversation en cours ?")) {
-    send({ type: "reset" });
+  } else if (confirm("Ouvrir une nouvelle conversation ?")) {
+    startNewConversation();
   }
 }
 
 ui.resetConfirm?.addEventListener("close", () => {
   if (ui.resetConfirm.returnValue === "confirm") {
-    send({ type: "reset" });
-    showToast("Conversation effacée", "ok");
+    startNewConversation();
+    showToast("Nouvelle conversation", "ok");
   }
 });
 
 ui.newChatBtn?.addEventListener("click", promptResetConversation);
+
+ui.convToggleBtn?.addEventListener("click", () => {
+  toggleConvDrawer();
+});
+
+ui.convCloseBtn?.addEventListener("click", () => {
+  toggleConvDrawer(false);
+});
+
+ui.convBackdrop?.addEventListener("click", () => {
+  toggleConvDrawer(false);
+});
+
+ui.convNewBtn?.addEventListener("click", () => {
+  startNewConversation();
+});
+
+ui.convSearch?.addEventListener("input", (e) => {
+  renderConvList(e.target.value);
+});
+
+ui.convDeleteConfirm?.addEventListener("close", () => {
+  if (ui.convDeleteConfirm.returnValue === "confirm" && state.pendingDeleteConvId) {
+    deleteConversation(state.pendingDeleteConvId);
+  }
+  state.pendingDeleteConvId = null;
+});
+
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && ui.convDrawer?.classList.contains("open")) {
+    toggleConvDrawer(false);
+  }
+});
 
 ui.profileSave.addEventListener("click", () => {
   setMessage(ui.profileMsg, "Enregistrement…");
@@ -1130,6 +1697,16 @@ ui.restartConfirm.addEventListener("close", () => {
   if (ui.restartConfirm.returnValue === "confirm") send({ type: "restart" });
   ui.restartConfirm.returnValue = "";
 });
+ui.settingsLoginBtn?.addEventListener("click", () => {
+  ui.settings.close();
+  openSetup();
+});
+ui.loginBtn?.addEventListener("click", () => openSetup());
+ui.status?.addEventListener("click", () => {
+  if (!state.ready) openSetup();
+});
+ui.authBannerBtn?.addEventListener("click", () => openSetup());
+
 $("logout-btn").addEventListener("click", () => {
   store.set("token", null);
   store.set("userToken", null);
@@ -1558,5 +2135,21 @@ if ("serviceWorker" in navigator && window.isSecureContext) {
   }).catch(() => { /* PWA non installable, l'appli fonctionne quand même */ });
 }
 
+async function checkServerHealth() {
+  try {
+    const res = await fetch("/health");
+    if (!res.ok) return;
+    const data = await res.json();
+    if (typeof data.accounts === "boolean") {
+      state.accounts = data.accounts;
+      updateSetupTabs();
+    }
+  } catch {
+    /* Échec silencieux, la tentative WebSocket prendra le relais */
+  }
+}
+
 consumePairingToken();
+initConversations();
+checkServerHealth();
 connect();

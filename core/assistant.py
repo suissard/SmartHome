@@ -313,13 +313,80 @@ class AssistantCore:
                     print(f"📜 [ASSISTANT {session.id}] Conversation de {session.user.name} rechargée "
                           f"({len(messages)} message(s))")
         session.restored = True
+        return self._format_messages_for_client(session)
+
+    def _format_messages_for_client(self, session: Session) -> list[dict]:
         from actions.manager import get_action_manager
         manager = get_action_manager()
         with session.lock:
             messages = list(session.conversation.older) + list(session.conversation.history)
-        return [{"role": m["role"], **({"turn": m["turn"]} if m.get("turn") else {}),
-                 "content": manager.extract_actions(m["content"])[0] if m["role"] == "assistant" else m["content"]}
-                for m in messages if m.get("role") in ("user", "assistant")]
+        result = []
+        for m in messages:
+            if m.get("role") not in ("user", "assistant"):
+                continue
+            entry = {
+                "role": m["role"],
+                **({"turn": m["turn"]} if m.get("turn") else {})
+            }
+            if m["role"] == "assistant":
+                cleaned, acts = manager.extract_actions(m["content"])
+                entry["content"] = cleaned
+                tools = list(m.get("tools") or [])
+                if not tools and acts:
+                    for act in acts:
+                        cmd = act.get("definition")
+                        tools.append({
+                            "name": cmd.tool_name if cmd else act.get("tag", "").lower(),
+                            "arguments": {"raw": act.get("args", "")} if act.get("args") else {},
+                            "executed": True,
+                            "output": "",
+                            "tag": act.get("tag", "")
+                        })
+                if tools:
+                    entry["tools"] = tools
+            else:
+                entry["content"] = m["content"]
+            result.append(entry)
+        return result
+
+    def load_conversation(self, session_id: str, conversation_id: str, client_messages: Optional[list] = None) -> list[dict]:
+        """Bascule la session sur une conversation existante et renvoie ses messages."""
+        session = self.get_session(session_id)
+        if session is None:
+            return []
+        with session.lock:
+            session.conversation.clear()
+            session.conversation_id = conversation_id
+            messages = []
+            if self.history.applies(session.user):
+                _, messages = self.history.load_conversation(session.user, conversation_id)
+            elif client_messages:
+                messages = client_messages
+            session.conversation.older = messages
+            session.conversation._fit_window()
+            session.restored = True
+            print(f"📜 [ASSISTANT {session.id}] Conversation {conversation_id} chargée ({len(messages)} message(s))")
+        return self._format_messages_for_client(session)
+
+    def list_conversations(self, session_id: str) -> list[dict]:
+        """Retourne la liste des conversations du compte."""
+        session = self.get_session(session_id)
+        if session is None or not self.history.applies(session.user):
+            return []
+        return self.history.list_conversations(session.user)
+
+    def delete_conversation(self, session_id: str, conversation_id: str) -> bool:
+        """Supprime une conversation du compte. Si c'est la conversation active, réinitialise la session."""
+        session = self.get_session(session_id)
+        if session is None:
+            return False
+        with session.lock:
+            if session.conversation_id == conversation_id:
+                session.conversation.clear()
+                session.conversation_id = new_conversation_id()
+        if self.history.applies(session.user):
+            self.history.delete_conversation(session.user, conversation_id)
+        return True
 
     def reset(self, session_id: str):
         """Nouvelle conversation : l'historique en mémoire est vidé, l'ancienne conversation reste enregistrée."""
@@ -435,19 +502,32 @@ class AssistantCore:
                 reply.interrupted = True
                 emit("interrupted", sid)
                 return reply
-            conversation = session.conversation
-            self.history.append(session.user, session.conversation_id,
-                                [m for m in conversation.older + conversation.history if m.get("turn") == stored_turn])
-            if splitter:
-                for sentence in splitter.flush():
-                    say(sentence)
 
             # Mode tags (ou tag égaré) : exécution des [ACTION] du texte et nettoyage pour la voix
             reply.text = raw
             if raw and self.settings.ACTIONS_ENABLED:
                 from actions.manager import get_action_manager
+
+                def on_tag_action(tool_info):
+                    emit("tool", sid, **tool_info)
+                    reply.tools.append(tool_info)
+
                 reply.text = get_action_manager().process_response(
-                    raw, confirm=session.conversation.confirm, policy=session.conversation.tool_policy)
+                    raw, confirm=session.conversation.confirm, policy=session.conversation.tool_policy,
+                    on_action=on_tag_action)
+
+            # Associe les outils exécutés au message assistant dans l'historique
+            conversation = session.conversation
+            for m in reversed(conversation.history):
+                if m.get("turn") == stored_turn and m.get("role") == "assistant":
+                    m["tools"] = list(reply.tools)
+                    break
+
+            self.history.append(session.user, session.conversation_id,
+                                [m for m in conversation.older + conversation.history if m.get("turn") == stored_turn])
+            if splitter:
+                for sentence in splitter.flush():
+                    say(sentence)
 
             reply.end_conversation = _asks_to_sleep(raw, reply.tools)
             print(f"📤 [ASSISTANT {sid}] Réponse : « {reply.text} » ({len(reply.tools)} outil(s))")

@@ -349,7 +349,31 @@ class MemoryHistory:
         if not mine:
             return None, []
         conversation = mine[-1]["conversation"]
-        return conversation, [{k: r[k] for k in ("role", "content", "turn")} for r in mine if r["conversation"] == conversation]
+        return conversation, [{k: r[k] for k in ("role", "content", "turn", "tools") if k in r} for r in mine if r["conversation"] == conversation]
+
+    def load_conversation(self, user, conversation_id):
+        mine = [r for r in self.rows if r["user"] == getattr(user, "id", None) and r["conversation"] == conversation_id]
+        return conversation_id, [{k: r[k] for k in ("role", "content", "turn", "tools") if k in r} for r in mine]
+
+    def list_conversations(self, user, limit=300):
+        conv_map = {}
+        for r in self.rows:
+            if r["user"] != getattr(user, "id", None):
+                continue
+            cid = r["conversation"]
+            if cid not in conv_map:
+                conv_map[cid] = {"id": cid, "title": "", "created": "", "updated": "", "message_count": 0, "tools": [], "_msgs": []}
+            conv_map[cid]["message_count"] += 1
+            conv_map[cid]["_msgs"].append(r)
+        res = []
+        for cid, entry in conv_map.items():
+            first_user = next((m.get("content", "") for m in entry.pop("_msgs") if m.get("role") == "user"), "")
+            entry["title"] = first_user or "Nouvelle conversation"
+            res.append(entry)
+        return res
+
+    def delete_conversation(self, user, conversation_id):
+        self.rows = [r for r in self.rows if not (r["user"] == getattr(user, "id", None) and r["conversation"] == conversation_id)]
 
     def append(self, user, conversation, messages):
         if self.applies(user):
@@ -430,6 +454,33 @@ class TestHistory(unittest.TestCase):
             ws.send_json({"type": "auth", "identity": "marie@foyer", "password": "secret"})
             ready = ws.receive_json()
         self.assertEqual([m["content"] for m in ready["history"]], ["Bonjour", "Écho : Bonjour"])
+
+    def test_list_load_delete_conversations(self):
+        core = self.core()
+        session = core.open_session(None, user=self.marie)
+        core.respond(session.id, text="Première conversation", turn="c1_t1")
+        c1_id = session.conversation_id
+
+        core.reset(session.id)
+        c2_id = session.conversation_id
+        core.respond(session.id, text="Deuxième conversation", turn="c2_t1")
+
+        convs = core.list_conversations(session.id)
+        self.assertEqual(len(convs), 2)
+        conv_ids = {c["id"] for c in convs}
+        self.assertIn(c1_id, conv_ids)
+        self.assertIn(c2_id, conv_ids)
+
+        # Basculer vers c1
+        loaded = core.load_conversation(session.id, c1_id)
+        self.assertEqual(session.conversation_id, c1_id)
+        self.assertEqual(loaded[0]["content"], "Première conversation")
+
+        # Supprimer c1
+        core.delete_conversation(session.id, c1_id)
+        convs_after = core.list_conversations(session.id)
+        self.assertEqual(len(convs_after), 1)
+        self.assertEqual(convs_after[0]["id"], c2_id)
 
     def test_filters_reject_unsafe_turns(self):
         from core.history import HistoryStore

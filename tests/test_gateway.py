@@ -163,7 +163,12 @@ class TestGateway(unittest.TestCase):
         self.client = TestClient(create_app(self.core, settings))
 
     def test_health_is_public_and_api_requires_token(self):
-        self.assertEqual(self.client.get("/health").status_code, 200)
+        health_resp = self.client.get("/health")
+        self.assertEqual(health_resp.status_code, 200)
+        health_data = health_resp.json()
+        self.assertEqual(health_data.get("status"), "ok")
+        self.assertTrue(health_data.get("auth_required"))
+        self.assertIn("accounts", health_data)
         self.assertEqual(self.client.post("/api/ask", json={"text": "x"}).status_code, 401)
         r = self.client.post("/api/ask", json={"text": "Bonjour", "speak": True}, headers={"Authorization": f"Bearer {TOKEN}"})
         self.assertEqual(r.status_code, 200)
@@ -379,6 +384,67 @@ class PairingTests(unittest.TestCase):
             self.assertEqual(pairing.tailscale_serve_url(8765), "https://pc.ts.net")
             self.assertEqual(pairing.tailscale_serve_url(9999), "")
             self.assertTrue(pairing.pairing_url(Settings(GATEWAY_AUTH_TOKEN="t")).startswith("https://pc.ts.net/#token="))
+
+
+class ConversationGatewayTests(unittest.TestCase):
+    def test_conversation_websocket_flow(self):
+        core = make_core([])
+        client = TestClient(create_app(core, SETTINGS))
+        with client.websocket_connect("/ws") as ws:
+            ws.send_json({"type": "auth", "token": ""})
+            ready = ws.receive_json()
+            self.assertEqual(ready["type"], "ready")
+            initial_conv_id = ready.get("conversation_id")
+            self.assertTrue(initial_conv_id)
+
+            # Test new_conversation
+            ws.send_json({"type": "new_conversation"})
+            msg = ws.receive_json()
+            self.assertEqual(msg["type"], "reset_done")
+            new_conv_id = msg.get("conversation_id")
+            self.assertTrue(new_conv_id)
+            self.assertNotEqual(initial_conv_id, new_conv_id)
+
+            # Test load_conversation
+            ws.send_json({
+                "type": "load_conversation",
+                "conversation_id": initial_conv_id,
+                "messages": [{"role": "user", "content": "Salut", "turn": "t1"}]
+            })
+            loaded = ws.receive_json()
+            self.assertEqual(loaded["type"], "conversation_loaded")
+            self.assertEqual(loaded["conversation_id"], initial_conv_id)
+            self.assertEqual(len(loaded["history"]), 1)
+            self.assertEqual(loaded["history"][0]["content"], "Salut")
+
+            # Test delete_conversation
+            ws.send_json({"type": "delete_conversation", "conversation_id": initial_conv_id})
+            deleted = ws.receive_json()
+            self.assertEqual(deleted["type"], "conversation_deleted")
+            self.assertEqual(deleted["conversation_id"], initial_conv_id)
+
+    def test_tool_execution_flow(self):
+        volume_tool = Tool("volume", "Régler le volume", {"type": "object"}, lambda args: "OK", danger="safe")
+        core = make_core([volume_tool])
+        client = TestClient(create_app(core, SETTINGS))
+        with client.websocket_connect("/ws") as ws:
+            ws.send_json({"type": "auth", "token": ""})
+            ws.receive_json()
+
+            ws.send_json({"type": "text", "text": "volume", "turn": "t_vol"})
+            events = []
+            while True:
+                msg = ws.receive_json()
+                events.append(msg)
+                if msg["type"] == "done":
+                    break
+
+            tool_events = [e for e in events if e["type"] == "tool"]
+            response_events = [e for e in events if e["type"] == "response"]
+            self.assertTrue(len(tool_events) >= 1)
+            self.assertEqual(tool_events[0]["name"], "volume")
+            self.assertTrue(len(response_events) == 1)
+            self.assertTrue(len(response_events[0]["tools"]) >= 1)
 
 
 if __name__ == "__main__":

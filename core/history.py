@@ -79,7 +79,7 @@ class HistoryStore:
 
     # ---- Lecture (bloquante, à appeler hors de la boucle asyncio) ----
     def load_latest(self, user: User) -> tuple[Optional[str], list[dict]]:
-        """Dernière conversation du compte : (identifiant, messages [{role, content, turn}] dans l'ordre).
+        """Dernière conversation du compte : (identifiant, messages [{role, content, turn, tools}] dans l'ordre).
         (None, []) si le compte n'a encore rien dit ou si PocketBase ne répond pas."""
         if not self.applies(user):
             return None, []
@@ -95,9 +95,78 @@ class HistoryStore:
         except (AuthError, DirectoryUnavailable) as e:
             print(f"⚠️ [HISTORIQUE] Lecture impossible pour {user.name} : {e}")
             return None, []
-        messages = [{"role": r["role"], "content": r.get("content") or "", **({"turn": r["turn"]} if r.get("turn") else {})}
+        messages = [{"role": r["role"], "content": r.get("content") or "",
+                     **({"turn": r["turn"]} if r.get("turn") else {}),
+                     **({"tools": r["tools"]} if r.get("tools") else {})}
                     for r in records if r.get("role") in ("user", "assistant")]
         return conversation, messages
+
+    def load_conversation(self, user: User, conversation_id: str) -> tuple[Optional[str], list[dict]]:
+        """Charge une conversation précise : (identifiant, messages [{role, content, turn, tools}] dans l'ordre)."""
+        if not self.applies(user) or not _SAFE_ID.match(conversation_id):
+            return None, []
+        try:
+            owner = f'user = "{_record_id(user)}"'
+            records = self._list(user, f'{owner} && conversation = "{conversation_id}"')
+        except (AuthError, DirectoryUnavailable) as e:
+            print(f"⚠️ [HISTORIQUE] Lecture conversation {conversation_id} impossible pour {user.name} : {e}")
+            return None, []
+        messages = [{"role": r["role"], "content": r.get("content") or "",
+                     **({"turn": r["turn"]} if r.get("turn") else {}),
+                     **({"tools": r["tools"]} if r.get("tools") else {})}
+                    for r in records if r.get("role") in ("user", "assistant")]
+        return conversation_id, messages
+
+    def list_conversations(self, user: User, limit: int = 300) -> list[dict]:
+        """Liste des conversations du compte : [{id, title, last_message, created, updated, message_count, tools}]."""
+        if not self.applies(user):
+            return []
+        try:
+            owner = f'user = "{_record_id(user)}"'
+            records = self._list(user, owner, sort="-seq", limit=limit)
+        except (AuthError, DirectoryUnavailable) as e:
+            print(f"⚠️ [HISTORIQUE] Liste des conversations impossible pour {user.name} : {e}")
+            return []
+
+        conv_map = {}
+        for r in records:
+            cid = r.get("conversation")
+            if not cid or not _SAFE_ID.match(cid):
+                continue
+            if cid not in conv_map:
+                conv_map[cid] = {
+                    "id": cid,
+                    "title": "",
+                    "last_message": r.get("content") or "",
+                    "created": r.get("created") or "",
+                    "updated": r.get("created") or "",
+                    "message_count": 0,
+                    "tools": [],
+                    "_messages": []
+                }
+            entry = conv_map[cid]
+            entry["message_count"] += 1
+            entry["_messages"].append(r)
+            if r.get("tools") and isinstance(r["tools"], list):
+                for t in r["tools"]:
+                    tname = t.get("name") if isinstance(t, dict) else str(t)
+                    if tname and tname not in entry["tools"]:
+                        entry["tools"].append(tname)
+
+        result = []
+        for cid, entry in conv_map.items():
+            msgs = list(reversed(entry.pop("_messages")))
+            first_user_msg = next((m.get("content", "") for m in msgs if m.get("role") == "user"), "")
+            title = first_user_msg.strip() if first_user_msg else ""
+            if len(title) > 60:
+                title = title[:57] + "…"
+            entry["title"] = title or "Nouvelle conversation"
+            if msgs:
+                entry["created"] = msgs[0].get("created") or entry["created"]
+                entry["updated"] = msgs[-1].get("created") or entry["updated"]
+            result.append(entry)
+
+        return result
 
     # ---- Écritures (en arrière-plan, dans l'ordre) ----
     def _submit(self, label: str, user: User, fn, *args) -> Optional[Future]:
@@ -112,17 +181,49 @@ class HistoryStore:
         return self._writer.submit(run)
 
     def append(self, user: User, conversation: str, messages: Iterable[dict]) -> Optional[Future]:
-        """Ajoute les messages d'un échange terminé ({role, content, turn})."""
+        """Ajoute les messages d'un échange terminé ({role, content, turn, tools})."""
         if not self.applies(user):
             return None
-        rows = [{"user": _record_id(user), "conversation": conversation, "turn": m.get("turn", ""),
-                 "role": m["role"], "content": m.get("content") or "", "seq": self._next_seq()}
-                for m in messages if m.get("role") in ("user", "assistant")]
+        rows = []
+        for m in messages:
+            if m.get("role") not in ("user", "assistant"):
+                continue
+            row = {
+                "user": _record_id(user),
+                "conversation": conversation,
+                "turn": m.get("turn", ""),
+                "role": m["role"],
+                "content": m.get("content") or "",
+                "seq": self._next_seq()
+            }
+            if m.get("tools"):
+                row["tools"] = m["tools"]
+            rows.append(row)
 
         def write(user: User):
             for row in rows:
-                self._request(user, body=row)
+                try:
+                    self._request(user, body=row)
+                except Exception as e:
+                    # En cas de schéma PocketBase sans champ 'tools', on réessaie sans ce champ
+                    if "tools" in row:
+                        row_no_tools = dict(row)
+                        row_no_tools.pop("tools", None)
+                        self._request(user, body=row_no_tools)
+                    else:
+                        raise e
         return self._submit("Échange", user, write)
+
+    def delete_conversation(self, user: User, conversation_id: str) -> Optional[Future]:
+        """Supprime tous les messages d'une conversation."""
+        if not self.applies(user) or not _SAFE_ID.match(conversation_id):
+            return None
+        filter_ = f'user = "{_record_id(user)}" && conversation = "{conversation_id}"'
+
+        def delete(user: User):
+            for record in self._list(user, filter_):
+                self._request(user, f"/{record['id']}", method="DELETE", not_found_is_refusal=True)
+        return self._submit(f"Suppression conversation {conversation_id}", user, delete)
 
     def _turn_filter(self, user: User, conversation: str, turns: Iterable[str], role: Optional[str]) -> Optional[str]:
         turns = [t for t in turns if t and _SAFE_ID.match(t)]
