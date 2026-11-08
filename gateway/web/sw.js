@@ -1,21 +1,22 @@
 // Service worker minimal : rend l'interface installable et disponible au démarrage même si le réseau tarde.
 // Stratégie « réseau d'abord » : la version du serveur est toujours préférée ; seul le squelette est mis en cache.
-const CACHE = "smarthome-shell-v14";
+const CACHE = "smarthome-shell-v18";
 const SHELL = [
   "./",
   "index.html",
-  "style.css",
-  "app.js",
+  "style.css?v=17",
+  "app.js?v=17",
   "recorder.js",
   "recorder-worklet.js",
   "icon.svg",
   "icon-192.png",
   "icon-512.png",
-  "manifest.webmanifest",
+  "manifest.webmanifest?v=17",
 ];
 
 self.addEventListener("install", (event) => {
-  event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(SHELL)).then(() => self.skipWaiting()));
+  self.skipWaiting();
+  event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(SHELL)));
 });
 
 self.addEventListener("activate", (event) => {
@@ -26,14 +27,27 @@ self.addEventListener("activate", (event) => {
   );
 });
 
+self.addEventListener("message", (event) => {
+  if (event.data?.type === "SKIP_WAITING") {
+    self.skipWaiting();
+  }
+});
+
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
-  // Jamais de cache pour l'API, la santé du service ou tout ce qui n'est pas une lecture du squelette
-  if (event.request.method !== "GET" || url.origin !== location.origin || url.pathname.startsWith("/api/") || url.pathname === "/health") {
+  // Jamais de cache pour l'API, la santé du service ou si nocache demandé
+  if (
+    event.request.method !== "GET" ||
+    url.origin !== location.origin ||
+    url.pathname.startsWith("/api/") ||
+    url.pathname === "/health" ||
+    url.searchParams.has("nocache") ||
+    url.searchParams.has("clean")
+  ) {
     return;
   }
   event.respondWith(
-    fetch(event.request)
+    fetch(event.request, { cache: "no-cache" })
       .then((response) => {
         const copy = response.clone();
         caches.open(CACHE).then((cache) => cache.put(event.request, copy));

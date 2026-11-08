@@ -39,6 +39,8 @@ EDITABLE_GROUPS: list[tuple[str, list[tuple[str, str, bool]]]] = [
         ("BARGE_IN_MODE", "Interruption (barge-in)", RESTART),
         ("BARGE_IN_VOICE_THRESHOLD", "Seuil de voix (mode interruption voice)", RESTART),
         ("BARGE_IN_MIN_DURATION", "Durée de voix pour couper (s)", RESTART),
+        ("REMOTE_VOICE_SLEEP", "Veille quand le micro du téléphone est utilisé", RESTART),
+        ("REMOTE_VOICE_HOLD", "Délai de garde après le micro du téléphone (s)", RESTART),
         ("FEEDBACK_WAKEWORD_TYPE", "Signal au mot-clé", RESTART),
         ("FEEDBACK_WAKEWORD_SOUND", "Son au mot-clé", RESTART),
         ("FEEDBACK_WAKEWORD_TEXT", "Phrase au mot-clé", RESTART),
@@ -85,6 +87,8 @@ EDITABLE_GROUPS: list[tuple[str, list[tuple[str, str, bool]]]] = [
         ("ACTIONS_CONFIRM_DANGEROUS", "Confirmer les actions sensibles", LIVE),
         ("ACTIONS_CONFIRM_TIMEOUT", "Délai de confirmation vocale (s)", RESTART),
         ("ACTIONS_CONFIRM_PROMPT", "Question de confirmation vocale", LIVE),
+        # Seul le modèle est modifiable ici : la commande de l'agent reste dans .env (un admin n'est pas superadmin)
+        ("ACTIONS_AGENT_MODEL", "Modèle de l'agent créateur de commandes", LIVE),
     ]),
     ("5. Synthèse Vocale (TTS)", [
         ("TTS_PROVIDER", "Moteur de voix", RESTART),
@@ -130,6 +134,7 @@ VISIBLE_WHEN: dict[str, list[dict]] = {
     "VOICE_THRESHOLD": [{"VAD_ENGINE": ["energy"]}],
     "BARGE_IN_VOICE_THRESHOLD": [{"BARGE_IN_MODE": ["voice"]}],
     "BARGE_IN_MIN_DURATION": [{"BARGE_IN_MODE": ["voice"]}],
+    "REMOTE_VOICE_HOLD": [{"REMOTE_VOICE_SLEEP": [True]}],
     "FEEDBACK_WAKEWORD_SOUND": [{"FEEDBACK_WAKEWORD_TYPE": ["sound"]}],
     "FEEDBACK_WAKEWORD_TEXT": [{"FEEDBACK_WAKEWORD_TYPE": ["phrase"]}],
 
@@ -349,6 +354,21 @@ def save_changes(settings: Settings, names: list[str], env_file: Path = ENV_FILE
     others = [name for name in names if name not in from_profile]
     if others:
         save_to_env(settings, others, env_file)
+
+
+# Cœur qui applique les changements demandés par l'assistant lui-même (actions/modules/assistant_settings.py).
+# Conservé ici et non dans le module d'action, que le registre d'actions peut recharger.
+_owner = None
+
+
+def set_owner(core):
+    """Installé par AssistantCore : ses update_settings() et bus d'événements servent aux outils de l'assistant."""
+    global _owner
+    _owner = core
+
+
+def get_owner():
+    return _owner
 
 
 def overridden_by_environment(names: list[str]) -> list[str]:

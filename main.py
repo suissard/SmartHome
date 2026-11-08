@@ -31,6 +31,7 @@ from llm.providers import LLM_PROVIDERS
 from actions import get_all_commands
 from core.assistant import AssistantCore, Reply
 from core.mcp_hub import get_mcp_hub
+from core.remote_voice import RemoteVoiceGuard
 from core.restart import restart_if_requested
 from core.security import require_token_for_host
 from core.users import local_user
@@ -68,7 +69,7 @@ def _print_event(event):
         print(f"\n{tag} ❓ {event.data['question']} (en attente du client)")
 
 
-def run_local_turn(core, speech, stream, mic_lock, barge_in, user_input) -> Reply:
+def run_local_turn(core, speech, stream, mic_lock, barge_in, user_input, remote=None) -> Reply:
     """Traite une demande vocale locale. Le traitement tourne dans un thread pendant que ce thread-ci continue
     de lire le micro : l'utilisateur peut ainsi interrompre l'assistant pendant qu'il réfléchit ou parle."""
     streaming = core.settings.TTS_STREAMING
@@ -95,6 +96,16 @@ def run_local_turn(core, speech, stream, mic_lock, barge_in, user_input) -> Repl
             continue
         with mic_lock:
             data = stream.read(CHUNK, exception_on_overflow=False)
+        if remote is not None and remote.active():
+            # On parle maintenant au téléphone : réponse locale abandonnée et retour en veille
+            core.cancel(LOCAL_SESSION)
+            speech.interrupt()
+            worker.join(timeout=30)
+            speech.wait(timeout=2)
+            reply = result.get("reply") or Reply(LOCAL_SESSION)
+            reply.interrupted = True
+            reply.end_conversation = True
+            return reply
         if barge_in.process(np.frombuffer(data, dtype=np.int16)):
             print("\n✋ Interruption : je vous écoute.")
             core.cancel(LOCAL_SESSION)
@@ -159,6 +170,9 @@ def main():
     speech = SpeechPipeline(tts, output_device=settings.AUDIO_OUTPUT_DEVICE_INDEX)
     mic_lock = threading.Lock()
     barge_in = BargeInDetector(settings, detector)
+    # Micro du téléphone utilisé : l'ordinateur entend la même voix mais doit rester en veille
+    remote = RemoteVoiceGuard(core.events, LOCAL_SESSION, hold=settings.REMOTE_VOICE_HOLD,
+                              enabled=settings.REMOTE_VOICE_SLEEP and settings.GATEWAY_ENABLED)
     # Les actions dangereuses demandées au micro (extinction, outils MCP destructeurs...) sont confirmées à la voix
     local.conversation.confirm = VoiceConfirmer(
         tts, transcriber, stream, settings, local.conversation, speak=speech.say_and_wait, mic_lock=mic_lock
@@ -217,6 +231,11 @@ def main():
             chunk = np.frombuffer(data, dtype=np.int16)
             detected, score = detector.process_chunk(chunk)
 
+            if detected and remote.active():
+                print(f"\n📱 Mot-clé ignoré ({detector.model_name}, score {score:.2f}) : conversation en cours sur un client distant")
+                detector.oww.reset()
+                continue
+
             if detected:
                 print(f"\n🎯 Mot-clé détecté ({detector.model_name}, score {score:.2f})")
                 # 1. Atténuation immédiate des autres sources audio (musique, vidéos, etc.)
@@ -231,8 +250,15 @@ def main():
                     while in_conversation:
                         user_input, elapsed_t, _ = transcriber.record_and_transcribe(
                             stream,
-                            timeout_silence=FOLLOW_UP_TIMEOUT
+                            timeout_silence=FOLLOW_UP_TIMEOUT,
+                            should_stop=remote.active,
                         )
+
+                        if remote.active():
+                            # On parle au téléphone : l'ordinateur se tait et repasse directement en veille
+                            print("\n📱 Conversation reprise sur un client distant : mise en veille.")
+                            in_conversation = False
+                            continue
 
                         if user_input:
                             if isinstance(user_input, bytes):
@@ -243,10 +269,14 @@ def main():
                             print("🤖 : ", end="", flush=True)
 
                             # 2. Réponse : actions exécutées et voix jouée au fil de la génération, interruptible
-                            reply = run_local_turn(core, speech, stream, mic_lock, barge_in, user_input)
+                            reply = run_local_turn(core, speech, stream, mic_lock, barge_in, user_input, remote)
                             print()
 
                             # 3. Fin de conversation demandée (« au revoir », outil sleep) : retour en veille
+                            if reply.end_conversation and remote.active():
+                                print("\n📱 Conversation reprise sur un client distant : mise en veille.")
+                                in_conversation = False
+                                continue
                             if reply.end_conversation:
                                 print("💤 Fin de conversation demandée.")
                                 # Le LLM a déjà pris congé à voix haute : un simple son suffit
@@ -284,6 +314,7 @@ def main():
     except KeyboardInterrupt:
         print("\nArrêt de l'assistant.")
     finally:
+        remote.close()
         if gateway:
             gateway.should_exit = True
         if pocketbase:

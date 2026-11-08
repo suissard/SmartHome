@@ -100,9 +100,14 @@ Exemples de comportement attendu :
         """Exécute l'action en déléguant son exécution à son propre script embarqué."""
         cmd_def: BaseAction = action["definition"]
         args = action.get("args", "")
-        if cmd_def.danger == "confirm" and not dry_run:
+        if (cmd_def.danger == "confirm" or cmd_def.force_confirm) and not dry_run:
             from core.tools import request_confirmation
-            if not request_confirmation(cmd_def.description, handler=confirm):
+            try:
+                question = cmd_def.confirm_text(args or "") or cmd_def.description
+            except ValueError as e:
+                print(f"⛔ [ACTIONS] [{cmd_def.tag}] refusé : {e}")
+                return False
+            if not request_confirmation(question, handler=confirm, force=cmd_def.force_confirm):
                 print(f"⛔ [ACTIONS] [{cmd_def.tag}] annulé (non confirmé).")
                 return False
         return cmd_def.execute(args, dry_run=dry_run)

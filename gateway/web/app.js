@@ -7,7 +7,11 @@ const $ = (id) => document.getElementById(id);
 const ui = {
   log: $("log"), empty: $("empty"), emptyContent: $("empty-content"),
   authBanner: $("auth-banner"), authBannerBtn: $("auth-banner-btn"),
+  authBannerHost: $("auth-banner-host"), authBannerMode: $("auth-banner-mode"),
   status: $("status"), loginBtn: $("login-btn"),
+  updatePill: $("update-pill"), updatePillText: $("update-pill-text"),
+  adminBtn: $("admin-btn"), connPill: $("conn-pill"),
+  connPillAvatar: $("conn-pill-avatar"), connPillName: $("conn-pill-name"), connPillRole: $("conn-pill-role"),
   liveAnnouncer: $("live-announcer"), toast: $("toast"),
   scrollBottomBtn: $("scroll-bottom-btn"), newChatBtn: $("new-chat-btn"), resetConfirm: $("reset-confirm"),
   convToggleBtn: $("conv-toggle-btn"), convDrawer: $("conv-drawer"), convBackdrop: $("conv-backdrop"),
@@ -18,12 +22,34 @@ const ui = {
   mic: $("mic"), voiceStop: $("voice-stop"), textForm: $("text-form"), text: $("text"),
   setup: $("setup"), setupForm: $("setup-form"), token: $("token"), setupError: $("setup-error"),
   setupCloseBtn: $("setup-close-btn"), setupCancelBtn: $("setup-cancel-btn"),
+  setupServerDot: $("setup-server-dot"), setupServerInfo: $("setup-server-info"),
   setupTabAccount: $("setup-tab-account"), setupTabToken: $("setup-tab-token"),
   accountFields: $("account-fields"), tokenFields: $("token-fields"),
   identity: $("identity"), password: $("password"), tokenHelp: $("token-help"),
-  userName: $("user-name"), profile: $("profile"), profileName: $("profile-name"),
+  userName: $("user-name"),
+  connAvatar: $("conn-avatar"), connDot: $("conn-dot"), connRoleBadge: $("conn-role-badge"),
+  connUserEmail: $("conn-user-email"), connStateLabel: $("conn-state-label"),
+  connAuthType: $("conn-auth-type"), connToolsInfo: $("conn-tools-info"),
+  connRepoInfo: $("conn-repo-info"), connVersionInfo: $("conn-version-info"),
+  connUpdateBtn: $("conn-update-btn"), connAdminBtn: $("conn-admin-btn"),
+  versionTagLabel: $("version-tag-label"),
+  updateDialog: $("update-dialog"), updateDialogBadge: $("update-dialog-badge"),
+  updateCloseBtn: $("update-close-btn"), updateFooterClose: $("update-footer-close"),
+  updateRepoName: $("update-repo-name"), updateBranchName: $("update-branch-name"),
+  updateRepoLink: $("update-repo-link"),
+  updateLocalSha: $("update-local-sha"), updateLocalMsg: $("update-local-msg"),
+  updateRemoteSha: $("update-remote-sha"), updateRemoteMsg: $("update-remote-msg"),
+  updateStatusMsg: $("update-status-msg"), updateApplyBtn: $("update-apply-btn"),
+  updateCheckBtn: $("update-check-btn"),
+  profile: $("profile"), profileName: $("profile-name"),
   profileInstructions: $("profile-instructions"), profileSave: $("profile-save"), profileMsg: $("profile-msg"),
   profileVoiceField: $("profile-voice-field"), profileVoice: $("profile-voice"), profileVoicePlay: $("profile-voice-play"),
+  adminDialog: $("admin-dialog"), adminCloseBtn: $("admin-close-btn"), adminFooterClose: $("admin-footer-close"),
+  pbUrlDisplay: $("pb-url-display"), pbSuperEmail: $("pb-super-email"), pbDashboardLink: $("pb-dashboard-link"),
+  pbUsersCount: $("pb-users-count"), pbUsersRefresh: $("pb-users-refresh"), pbUsersList: $("pb-users-list"),
+  pbCreateGroup: $("pb-create-group"), pbCreateForm: $("pb-create-form"),
+  pbNewName: $("pb-new-name"), pbNewRole: $("pb-new-role"), pbNewEmail: $("pb-new-email"), pbNewPassword: $("pb-new-password"),
+  pbAdminMsg: $("pb-admin-msg"), adminOpenAdvanced: $("admin-open-advanced"), adminOpenRestart: $("admin-open-restart"),
   restartConfirm: $("restart-confirm"),
   msgMenu: $("msg-menu"), msgPreview: $("msg-preview"), msgRelaunch: $("msg-relaunch"), msgEdit: $("msg-edit"), msgMenuNote: $("msg-menu-note"),
   msgEditor: $("msg-editor"), msgEditorTitle: $("msg-editor-title"), msgEditorText: $("msg-editor-text"), msgEditorSave: $("msg-editor-save"),
@@ -96,7 +122,33 @@ const state = {
   currentConversationId: null, // identifiant de la conversation active
   pendingDeleteConvId: null,   // conversation en attente de suppression
   currentTurnTools: [],    // outils exécutés lors du tour courant
+  superadmin: false,       // superadmin référencé sur PocketBase (_superusers)
+  user: null,              // profil de l'utilisateur connecté
+  tools: [],               // outils autorisés pour l'utilisateur courant
+  pocketbaseUrl: "http://127.0.0.1:8090", // URL de PocketBase
+  pbUsers: [],             // liste des comptes PocketBase (superadmin)
+  versionInfo: null,       // informations de version locale vs dépôt GitHub
 };
+
+// ---- Synchronisation de la hauteur visible (évite que la barre de saisie en bas sorte de l'écran) ----
+function syncViewportHeight() {
+  const candidates = [window.innerHeight];
+  if (document.documentElement?.clientHeight > 0) {
+    candidates.push(document.documentElement.clientHeight);
+  }
+  if (window.visualViewport?.height > 0) {
+    candidates.push(Math.round(window.visualViewport.height));
+  }
+  const visibleHeight = Math.max(280, Math.min(...candidates.filter((v) => Number.isFinite(v) && v > 0)));
+  document.documentElement.style.setProperty("--app-height", `${visibleHeight}px`);
+}
+syncViewportHeight();
+window.addEventListener("resize", syncViewportHeight, { passive: true });
+window.addEventListener("orientationchange", syncViewportHeight, { passive: true });
+if (window.visualViewport) {
+  window.visualViewport.addEventListener("resize", syncViewportHeight, { passive: true });
+  window.visualViewport.addEventListener("scroll", syncViewportHeight, { passive: true });
+}
 
 // ---- Fil de conversation ----
 function isNearBottom(threshold = 60) {
@@ -308,6 +360,8 @@ function addToolChip(event) {
 function setStatus(stateName, label) {
   ui.status.dataset.state = stateName;
   ui.status.textContent = label;
+  if (ui.connDot) ui.connDot.dataset.state = stateName;
+  if (ui.connStateLabel) ui.connStateLabel.textContent = label;
 }
 
 function isSpeaking() {
@@ -352,9 +406,14 @@ function refreshControls() {
   ui.text.disabled = !enabled;
   ui.mic.disabled = !enabled;
   if (ui.loginBtn) ui.loginBtn.hidden = enabled;
+  if (ui.connPill) ui.connPill.hidden = !enabled;
+  if (ui.adminBtn) ui.adminBtn.hidden = !(enabled && state.superadmin);
+  if (ui.connAdminBtn) ui.connAdminBtn.hidden = !(enabled && state.superadmin);
   if (ui.status) {
-    ui.status.classList.toggle("interactive", !enabled);
-    ui.status.title = enabled ? "Connecté à SmartHome" : "État de la connexion (cliquer pour se connecter)";
+    ui.status.classList.add("interactive");
+    ui.status.title = enabled
+      ? "Connecté — cliquer pour voir les informations de connexion"
+      : "État de la connexion (cliquer pour se connecter)";
   }
   if (ui.authBanner) ui.authBanner.hidden = enabled;
   if (ui.emptyContent) ui.emptyContent.hidden = !enabled;
@@ -451,6 +510,11 @@ function send(message) {
   if (state.ws?.readyState === WebSocket.OPEN) state.ws.send(JSON.stringify(message));
 }
 
+// Micro ouvert / fermé : l'ordinateur, qui entend la même voix, ignore alors son mot-clé et reste en veille
+function announceMic(active) {
+  send({ type: "listening", active });
+}
+
 // ---- Événements du cœur ----
 function handleEvent(event) {
   switch (event.type) {
@@ -459,16 +523,20 @@ function handleEvent(event) {
       state.reconnectDelay = 1000;
       state.audioConfig = event.audio;
       state.confirmTimeout = event.confirm_timeout || 20;
+      state.tools = event.tools || [];
+      if (event.pocketbase_url) state.pocketbaseUrl = event.pocketbase_url;
       store.set("session", event.session);
       ui.sessionId.textContent = event.session;
       if (event.conversation_id) state.currentConversationId = event.conversation_id;
-      applyUser(event.user, event.accounts);
+      applyUser(event.user, event.accounts, state.tools, state.pocketbaseUrl);
+      if (event.version) applyVersionInfo(event.version);
       if (event.profile_max) ui.profileInstructions.maxLength = event.profile_max;
       fillVoices(event.voices || [], event.user?.voice || "");
       renderHistory(event.history || []);
       showModel(event.llm);
       refreshControls();
       send({ type: "list_conversations" });
+      send({ type: "check_update" });
       updateActiveConversationUI();
       if (state.restarting) {
         state.restarting = false;
@@ -522,8 +590,14 @@ function handleEvent(event) {
     case "restarting":
       state.restarting = true;
       state.reconnectDelay = 1000;
-      for (const dialog of [ui.settings, ui.advanced]) if (dialog.open) dialog.close();
+      for (const dialog of [ui.settings, ui.advanced, ui.adminDialog, ui.updateDialog]) if (dialog?.open) dialog.close();
       showToast("Redémarrage de SmartHome…", "ok");
+      break;
+    case "version_info":
+      applyVersionInfo(event);
+      break;
+    case "update_applied":
+      onUpdateApplied(event);
       break;
     case "transcript":
       if (state.pendingUser) {
@@ -559,6 +633,7 @@ function handleEvent(event) {
         if (state.recorder) {
           state.recorder.stop();
           state.recorder = null;
+          announceMic(false);
         }
         delete ui.confirm.dataset.requestId;
         ui.confirm.close(event.accepted ? "yes" : "no");
@@ -641,8 +716,28 @@ function handleEvent(event) {
       onSettingsSaved(event);
       break;
     case "profile_saved":
-      applyUser(event.user, state.accounts);
+      applyUser(event.user, state.accounts, state.tools, state.pocketbaseUrl);
       setMessage(ui.profileMsg, "Profil enregistré : pris en compte dès votre prochaine demande.", "ok");
+      break;
+    case "pb_users":
+      state.pbUsers = event.users || [];
+      if (event.pocketbase_url) state.pocketbaseUrl = event.pocketbase_url;
+      renderPbUsers();
+      break;
+    case "pb_user_saved":
+      state.pbUsers = event.users || [];
+      renderPbUsers();
+      if (ui.pbAdminMsg) setMessage(ui.pbAdminMsg, "Compte PocketBase enregistré.", "ok");
+      if (ui.pbCreateForm) ui.pbCreateForm.reset();
+      if (ui.pbCreateGroup) ui.pbCreateGroup.open = false;
+      break;
+    case "pb_user_deleted":
+      state.pbUsers = event.users || [];
+      renderPbUsers();
+      if (ui.pbAdminMsg) setMessage(ui.pbAdminMsg, "Compte supprimé de PocketBase.", "ok");
+      break;
+    case "pb_admin_error":
+      if (ui.pbAdminMsg) setMessage(ui.pbAdminMsg, event.message, "error");
       break;
     case "voice_preview":
       // Jouée même si la réponse vocale est coupée sur cet appareil : c'est une demande explicite
@@ -1229,6 +1324,7 @@ ui.mic.addEventListener("click", async () => {
     return;
   }
   state.recorder = recorder;
+  announceMic(true);
   updateMainButton();
   setStatus("busy", "J'écoute…");
 });
@@ -1251,6 +1347,7 @@ function stopRecording() {
   state.recorder = null;
   updateMainButton();
   const { wav, hadSpeech } = recorder.stop();
+  announceMic(false);
   refreshControls();
   if (hadSpeech) {
     sendAudio(wav);
@@ -1400,6 +1497,7 @@ async function startConfirmListening() {
   try {
     await recorder.start(state.audioCtx);
     state.recorder = recorder;
+    announceMic(true);
   } catch (err) {
     console.warn("Écoute micro confirmation indisponible:", err);
     if (statusEl) statusEl.textContent = "Dites « Oui » ou « Non », ou cliquez ci-dessous";
@@ -1416,6 +1514,7 @@ function stopConfirmRecording() {
   if (micBtn) micBtn.classList.remove("recording");
 
   const { wav, hadSpeech } = recorder.stop();
+  announceMic(false);
   if (hadSpeech) {
     if (statusEl) statusEl.textContent = "⏳ Traitement de votre réponse…";
     sendAudio(wav);
@@ -1490,6 +1589,7 @@ ui.confirm.addEventListener("close", () => {
   if (state.recorder) {
     state.recorder.stop();
     state.recorder = null;
+    announceMic(false);
   }
   ui.confirmMicBtn?.classList.remove("recording");
   const id = ui.confirm.dataset.requestId;
@@ -1510,11 +1610,87 @@ function fillVoices(voices, selected) {
 }
 
 // Compte connecté : jeton renouvelé à mémoriser, nom affiché, outils d'administration masqués sinon
-function applyUser(user, accounts) {
+function resolvePocketBaseAdminUrl(rawUrl) {
+  try {
+    const parsed = new URL(rawUrl || "http://127.0.0.1:8090");
+    if ((parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost") && location.hostname) {
+      parsed.hostname = location.hostname;
+    }
+    return parsed.origin.replace(/\/$/, "");
+  } catch {
+    return (rawUrl || "http://127.0.0.1:8090").replace(/\/$/, "");
+  }
+}
+
+const ROLE_LABELS = {
+  superadmin: "Superadmin",
+  admin: "Admin",
+  member: "Membre",
+  guest: "Invité",
+  local: "Local",
+};
+
+function applyUser(user, accounts, tools = state.tools, pocketbaseUrl = state.pocketbaseUrl) {
+  state.user = user || null;
   state.accounts = Boolean(accounts);
   if (user?.token) store.set("userToken", user.token);
-  ui.userName.textContent = user ? `${user.name} (${user.role})` : "—";
-  state.admin = !user || Boolean(user.admin);
+
+  const isSuperadmin = Boolean(user?.superadmin);
+  state.superadmin = isSuperadmin;
+  state.admin = !user || Boolean(user.admin) || isSuperadmin;
+
+  const displayName = user ? (user.name || user.email || "Utilisateur") : "Accès local";
+  const initial = (displayName.trim()[0] || "S").toUpperCase();
+  const roleKey = isSuperadmin ? "superadmin" : (user?.role || "local");
+  const roleLabel = ROLE_LABELS[roleKey] || roleKey;
+
+  if (ui.userName) ui.userName.textContent = displayName;
+  if (ui.connAvatar) ui.connAvatar.textContent = initial;
+  if (ui.connRoleBadge) {
+    ui.connRoleBadge.textContent = roleLabel;
+    ui.connRoleBadge.dataset.role = isSuperadmin ? "superadmin" : (user?.role || "none");
+  }
+  if (ui.connUserEmail) {
+    const sub = user?.email
+      ? (isSuperadmin ? `${user.email} · Superadmin PocketBase` : user.email)
+      : (user ? `Identifiant : ${user.id}` : `Hôte : ${location.host || "local"}`);
+    ui.connUserEmail.textContent = sub;
+  }
+  if (ui.connAuthType) {
+    if (isSuperadmin) {
+      ui.connAuthType.textContent = "PocketBase (_superusers)";
+    } else if (user?.profile) {
+      ui.connAuthType.textContent = "Compte PocketBase";
+    } else if (user?.id === "token") {
+      ui.connAuthType.textContent = "Jeton passerelle";
+    } else {
+      ui.connAuthType.textContent = state.accounts ? "PocketBase" : "Réseau local";
+    }
+  }
+  if (ui.connToolsInfo) {
+    const count = Array.isArray(tools) ? tools.length : 0;
+    ui.connToolsInfo.textContent = count > 0 ? `${count} outil${count > 1 ? "s" : ""} actif${count > 1 ? "s" : ""}` : "Conversation seule";
+    ui.connToolsInfo.title = count > 0 ? tools.join(", ") : "Aucun outil système autorisé";
+  }
+
+  // Pastille de compte dans la barre supérieure
+  if (ui.connPillAvatar) ui.connPillAvatar.textContent = initial;
+  if (ui.connPillName) ui.connPillName.textContent = displayName;
+  if (ui.connPillRole) {
+    ui.connPillRole.textContent = roleLabel;
+    ui.connPillRole.dataset.role = isSuperadmin ? "superadmin" : (user?.role || "none");
+  }
+
+  // Informations de la console Superadmin PocketBase
+  const pbBase = resolvePocketBaseAdminUrl(pocketbaseUrl);
+  if (ui.pbUrlDisplay) ui.pbUrlDisplay.textContent = pbBase;
+  if (ui.pbSuperEmail) {
+    ui.pbSuperEmail.textContent = user?.email ? `Superadmin : ${user.email}` : "Superadmin référencé dans _superusers";
+  }
+  if (ui.pbDashboardLink) {
+    ui.pbDashboardLink.href = `${pbBase}/_/`;
+  }
+
   // Prénom et consignes : seulement pour un compte de l'annuaire (pas le jeton administrateur)
   ui.profile.hidden = !user?.profile;
   if (user?.profile) {
@@ -1680,13 +1856,135 @@ ui.profileVoicePlay.addEventListener("click", () => {
   send({ type: "preview_voice", voice: ui.profileVoice.value });
 });
 
-$("settings-btn").addEventListener("click", () => {
+function openSettingsModal() {
   ui.settings.showModal();
   ui.modelMsg.textContent = "";
   if (!state.admin) return;
   send({ type: "get_settings" });
   send({ type: "list_models" });
+}
+
+function openAdminDialog() {
+  if (!state.superadmin || !ui.adminDialog) return;
+  if (ui.pbAdminMsg) setMessage(ui.pbAdminMsg, "");
+  if (!ui.adminDialog.open) ui.adminDialog.showModal();
+  send({ type: "pb_list_users" });
+}
+
+function renderPbUsers() {
+  if (!ui.pbUsersList) return;
+  const users = state.pbUsers || [];
+  if (ui.pbUsersCount) ui.pbUsersCount.textContent = String(users.length);
+  ui.pbUsersList.replaceChildren();
+  if (!users.length) {
+    const empty = document.createElement("p");
+    empty.className = "meta";
+    empty.textContent = "Aucun compte utilisateur dans la collection users.";
+    ui.pbUsersList.append(empty);
+    return;
+  }
+
+  for (const u of users) {
+    const row = document.createElement("div");
+    row.className = "pb-user-item";
+
+    const avatar = document.createElement("div");
+    avatar.className = "pb-user-avatar";
+    avatar.textContent = ((u.name || u.email || "U").trim()[0] || "U").toUpperCase();
+
+    const main = document.createElement("div");
+    main.className = "pb-user-main";
+
+    const nameLine = document.createElement("div");
+    nameLine.className = "pb-user-name";
+    nameLine.textContent = u.name || u.email || u.id;
+    if (u.superadmin) {
+      const badge = document.createElement("span");
+      badge.className = "role-badge";
+      badge.dataset.role = "superadmin";
+      badge.textContent = "Superadmin PB";
+      nameLine.append(badge);
+    }
+
+    const emailLine = document.createElement("div");
+    emailLine.className = "pb-user-email";
+    emailLine.textContent = u.email || `ID : ${u.id}`;
+
+    main.append(nameLine, emailLine);
+
+    const actions = document.createElement("div");
+    actions.className = "pb-user-actions";
+
+    const roleSelect = document.createElement("select");
+    roleSelect.setAttribute("aria-label", `Rôle de ${u.name || u.email}`);
+    for (const [val, label] of [["admin", "admin"], ["member", "member"], ["guest", "guest"]]) {
+      roleSelect.append(new Option(label, val));
+    }
+    roleSelect.value = ["admin", "member", "guest"].includes(u.role) ? u.role : "member";
+    roleSelect.addEventListener("change", () => {
+      if (ui.pbAdminMsg) setMessage(ui.pbAdminMsg, "Mise à jour du rôle…");
+      send({ type: "pb_update_user", id: u.id, role: roleSelect.value });
+    });
+
+    const delBtn = document.createElement("button");
+    delBtn.type = "button";
+    delBtn.className = "pb-user-del";
+    delBtn.title = `Supprimer ${u.email || u.name}`;
+    delBtn.setAttribute("aria-label", `Supprimer ${u.email || u.name}`);
+    delBtn.textContent = "×";
+    delBtn.addEventListener("click", () => {
+      if (!confirm(`Supprimer le compte « ${u.email || u.name} » de PocketBase ?`)) return;
+      if (ui.pbAdminMsg) setMessage(ui.pbAdminMsg, "Suppression…");
+      send({ type: "pb_delete_user", id: u.id });
+    });
+
+    actions.append(roleSelect, delBtn);
+    row.append(avatar, main, actions);
+    ui.pbUsersList.append(row);
+  }
+}
+
+$("settings-btn").addEventListener("click", openSettingsModal);
+ui.connPill?.addEventListener("click", openSettingsModal);
+ui.adminBtn?.addEventListener("click", openAdminDialog);
+ui.connAdminBtn?.addEventListener("click", () => {
+  if (ui.settings.open) ui.settings.close();
+  openAdminDialog();
 });
+ui.adminCloseBtn?.addEventListener("click", () => ui.adminDialog?.close());
+ui.adminFooterClose?.addEventListener("click", () => ui.adminDialog?.close());
+ui.pbUsersRefresh?.addEventListener("click", () => {
+  if (ui.pbAdminMsg) setMessage(ui.pbAdminMsg, "Actualisation…");
+  send({ type: "pb_list_users" });
+});
+ui.pbCreateForm?.addEventListener("submit", (e) => {
+  e.preventDefault();
+  const email = ui.pbNewEmail?.value.trim() || "";
+  const password = ui.pbNewPassword?.value || "";
+  const name = ui.pbNewName?.value.trim() || "";
+  const role = ui.pbNewRole?.value || "member";
+  if (!email || password.length < 8) {
+    if (ui.pbAdminMsg) setMessage(ui.pbAdminMsg, "E-mail requis et mot de passe d'au moins 8 caractères.", "error");
+    return;
+  }
+  if (ui.pbAdminMsg) setMessage(ui.pbAdminMsg, "Création du compte…");
+  send({ type: "pb_create_user", email, password, name, role });
+});
+ui.adminOpenAdvanced?.addEventListener("click", () => {
+  ui.adminDialog?.close();
+  setMessage(ui.advancedMsg, "");
+  $("advanced-restart").hidden = true;
+  delete ui.advancedForm.dataset.dirty;
+  renderAdvanced();
+  ui.advanced.showModal();
+  $("advanced-back")?.focus();
+  send({ type: "get_settings" });
+});
+ui.adminOpenRestart?.addEventListener("click", () => {
+  ui.adminDialog?.close();
+  ui.restartConfirm.showModal();
+});
+
 $("reset-btn").addEventListener("click", () => {
   ui.settings.close();
   promptResetConversation();
@@ -1703,7 +2001,8 @@ ui.settingsLoginBtn?.addEventListener("click", () => {
 });
 ui.loginBtn?.addEventListener("click", () => openSetup());
 ui.status?.addEventListener("click", () => {
-  if (!state.ready) openSetup();
+  if (state.ready) openSettingsModal();
+  else openSetup();
 });
 ui.authBannerBtn?.addEventListener("click", () => openSetup());
 
@@ -2130,25 +2429,243 @@ ui.advancedForm.addEventListener("submit", (e) => {
 });
 
 if ("serviceWorker" in navigator && window.isSecureContext) {
+  let refreshing = false;
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (!refreshing) {
+      refreshing = true;
+      window.location.reload();
+    }
+  });
+
   navigator.serviceWorker.register("sw.js").then((reg) => {
     reg.update();
+    if (reg.waiting) {
+      reg.waiting.postMessage({ type: "SKIP_WAITING" });
+    }
+    reg.addEventListener("updatefound", () => {
+      const newWorker = reg.installing;
+      if (newWorker) {
+        newWorker.addEventListener("statechange", () => {
+          if (newWorker.state === "installed" && navigator.serviceWorker.controller) {
+            newWorker.postMessage({ type: "SKIP_WAITING" });
+          }
+        });
+      }
+    });
   }).catch(() => { /* PWA non installable, l'appli fonctionne quand même */ });
 }
 
+$("force-reload-btn")?.addEventListener("click", () => {
+  forceReloadApp();
+});
+
+async function forceReloadApp() {
+  try {
+    if ("caches" in window) {
+      const keys = await caches.keys();
+      for (const k of keys) await caches.delete(k);
+    }
+    if ("serviceWorker" in navigator) {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      for (const r of regs) await r.unregister();
+    }
+  } catch { /* ignore */ }
+  window.location.href = window.location.origin + window.location.pathname + "?nocache=" + Date.now();
+}
+
+// ---- Comparaison de version avec le dépôt GitHub & pastille de mise à jour ----
+function applyVersionInfo(info) {
+  if (!info || typeof info !== "object") return;
+  state.versionInfo = { ...(state.versionInfo || {}), ...info };
+  const v = state.versionInfo;
+
+  const repo = v.repo || "GitHub";
+  const branch = v.branch || "main";
+  const localShort = v.local_short || (v.local_sha ? v.local_sha.slice(0, 7) : "local");
+  const remoteShort = v.remote_short || (v.remote_sha ? v.remote_sha.slice(0, 7) : "");
+  const hasDiff = Boolean(v.update_available || v.difference);
+
+  // Carte de connexion dans Réglages
+  if (ui.connRepoInfo) {
+    ui.connRepoInfo.textContent = repo;
+    ui.connRepoInfo.title = v.repo_url || repo;
+  }
+  if (ui.connVersionInfo) {
+    if (hasDiff && remoteShort) {
+      ui.connVersionInfo.textContent = `${localShort} → ${remoteShort} (MAJ dispo)`;
+      ui.connVersionInfo.style.color = "var(--warn)";
+    } else if (remoteShort) {
+      ui.connVersionInfo.textContent = `${localShort} (à jour)`;
+      ui.connVersionInfo.style.color = "var(--ok)";
+    } else {
+      ui.connVersionInfo.textContent = `${localShort} (${branch})`;
+      ui.connVersionInfo.style.color = "";
+    }
+  }
+  if (ui.connUpdateBtn) {
+    ui.connUpdateBtn.hidden = !hasDiff;
+  }
+  if (ui.versionTagLabel) {
+    ui.versionTagLabel.textContent = `SmartHome v17 · ${repo}@${localShort}`;
+  }
+
+  // Pastille d'invitation à mettre à jour dans la barre supérieure
+  if (ui.updatePill) {
+    ui.updatePill.hidden = !hasDiff;
+    if (hasDiff) {
+      const label = remoteShort ? `MAJ dispo · ${remoteShort}` : "MAJ disponible";
+      if (ui.updatePillText) ui.updatePillText.textContent = label;
+      ui.updatePill.title = `Nouvelle version détectée sur GitHub (${repo} : ${localShort} → ${remoteShort || "nouveau"}). Cliquer pour mettre à jour.`;
+    }
+  }
+
+  // Fenêtre de détail de version / mise à jour
+  if (ui.updateRepoName) ui.updateRepoName.textContent = repo;
+  if (ui.updateBranchName) ui.updateBranchName.textContent = `Branche : ${branch}`;
+  if (ui.updateRepoLink && v.repo_url) ui.updateRepoLink.href = v.repo_url;
+  if (ui.updateLocalSha) ui.updateLocalSha.textContent = localShort || "—";
+  if (ui.updateLocalMsg) {
+    ui.updateLocalMsg.textContent = v.local_message || (v.local_date ? `Date : ${v.local_date}` : "Version locale actuelle");
+  }
+  if (ui.updateRemoteSha) {
+    ui.updateRemoteSha.textContent = remoteShort || (v.checked ? "—" : "Vérification…");
+  }
+  if (ui.updateRemoteMsg) {
+    if (v.remote_message) {
+      ui.updateRemoteMsg.textContent = v.remote_message;
+    } else if (v.error) {
+      ui.updateRemoteMsg.textContent = ` Vérification distante : ${v.error}`;
+    } else if (v.checked) {
+      ui.updateRemoteMsg.textContent = hasDiff ? "Nouvelle version disponible sur GitHub" : "Identique à la version locale";
+    }
+  }
+  if (ui.updateDialogBadge) {
+    if (hasDiff) {
+      ui.updateDialogBadge.textContent = "Mise à jour disponible";
+      ui.updateDialogBadge.dataset.role = "superadmin";
+    } else if (v.checked && !v.error) {
+      ui.updateDialogBadge.textContent = "À jour";
+      ui.updateDialogBadge.dataset.role = "admin";
+    } else {
+      ui.updateDialogBadge.textContent = "GitHub";
+      ui.updateDialogBadge.dataset.role = "member";
+    }
+  }
+  if (ui.updateStatusMsg && v.checked && !ui.updateApplyBtn?.disabled) {
+    if (v.error) {
+      setMessage(ui.updateStatusMsg, `Impossible de joindre GitHub : ${v.error}`, "error");
+    } else if (hasDiff) {
+      setMessage(
+        ui.updateStatusMsg,
+        `Une différence a été détectée avec le dépôt GitHub ${repo} (${localShort} ≠ ${remoteShort}).`,
+        "ok"
+      );
+    } else {
+      setMessage(ui.updateStatusMsg, `Votre application est à jour avec ${repo} (${localShort}).`, "ok");
+    }
+  }
+}
+
+function openUpdateDialog() {
+  if (!ui.updateDialog) return;
+  if (state.versionInfo) applyVersionInfo(state.versionInfo);
+  if (!ui.updateDialog.open) ui.updateDialog.showModal();
+  if (state.ready) {
+    if (ui.updateStatusMsg) setMessage(ui.updateStatusMsg, "Comparaison avec le dépôt GitHub en cours…");
+    send({ type: "check_update", force: true });
+  }
+}
+
+function onUpdateApplied(event) {
+  if (ui.updateApplyBtn) ui.updateApplyBtn.disabled = false;
+  if (event.version) applyVersionInfo(event.version);
+  if (event.ok) {
+    if (ui.updateStatusMsg) {
+      setMessage(ui.updateStatusMsg, `${event.message || "Mise à jour téléchargée."} Rechargement de l'application…`, "ok");
+    }
+    showToast("Mise à jour installée — rechargement…", "ok");
+    if (state.admin) {
+      send({ type: "restart" });
+    }
+    setTimeout(() => {
+      forceReloadApp();
+    }, 1200);
+  } else {
+    if (ui.updateStatusMsg) {
+      setMessage(ui.updateStatusMsg, event.message || "Échec de la mise à jour automatique.", "error");
+    }
+    showToast(event.message || "Échec de la mise à jour", "error");
+  }
+}
+
+ui.updatePill?.addEventListener("click", openUpdateDialog);
+ui.connUpdateBtn?.addEventListener("click", () => {
+  if (ui.settings?.open) ui.settings.close();
+  openUpdateDialog();
+});
+ui.updateCloseBtn?.addEventListener("click", () => ui.updateDialog?.close());
+ui.updateFooterClose?.addEventListener("click", () => ui.updateDialog?.close());
+ui.updateCheckBtn?.addEventListener("click", () => {
+  if (ui.updateStatusMsg) setMessage(ui.updateStatusMsg, "Vérification auprès de GitHub…");
+  send({ type: "check_update", force: true });
+});
+ui.updateApplyBtn?.addEventListener("click", () => {
+  if (!state.admin) {
+    forceReloadApp();
+    return;
+  }
+  if (ui.updateApplyBtn) ui.updateApplyBtn.disabled = true;
+  if (ui.updateStatusMsg) setMessage(ui.updateStatusMsg, "Téléchargement de la mise à jour depuis GitHub (git pull)…");
+  send({ type: "apply_update" });
+});
+
+async function handleUrlNocache() {
+  const params = new URLSearchParams(window.location.search);
+  if (params.has("nocache") || params.has("clean")) {
+    if ("caches" in window) {
+      const keys = await caches.keys();
+      for (const k of keys) await caches.delete(k);
+    }
+    if ("serviceWorker" in navigator) {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      for (const r of regs) await r.unregister();
+    }
+    params.delete("nocache");
+    params.delete("clean");
+    const query = params.toString();
+    window.location.replace(window.location.pathname + (query ? `?${query}` : "") + window.location.hash);
+  }
+}
+
 async function checkServerHealth() {
+  const hostLabel = location.host || "127.0.0.1:8765";
+  if (ui.authBannerHost) ui.authBannerHost.textContent = `Passerelle : ${hostLabel}`;
   try {
     const res = await fetch("/health");
-    if (!res.ok) return;
+    if (!res.ok) throw new Error("HTTP " + res.status);
     const data = await res.json();
+    if (data.pocketbase_url) state.pocketbaseUrl = data.pocketbase_url;
+    if (data.version) applyVersionInfo(data.version);
     if (typeof data.accounts === "boolean") {
       state.accounts = data.accounts;
       updateSetupTabs();
     }
+    const modeLabel = data.accounts ? "Annuaire : PocketBase actif" : "Authentification : Jeton / Local";
+    if (ui.authBannerMode) ui.authBannerMode.textContent = modeLabel;
+    if (ui.setupServerDot) ui.setupServerDot.dataset.state = "online";
+    if (ui.setupServerInfo) {
+      ui.setupServerInfo.textContent = `Passerelle joignable (${hostLabel}) · ${data.accounts ? "PocketBase" : "Jeton"}`;
+    }
   } catch {
-    /* Échec silencieux, la tentative WebSocket prendra le relais */
+    if (ui.authBannerMode) ui.authBannerMode.textContent = "Passerelle hors ligne";
+    if (ui.setupServerDot) ui.setupServerDot.dataset.state = "offline";
+    if (ui.setupServerInfo) {
+      ui.setupServerInfo.textContent = `Passerelle injoignable (${hostLabel})`;
+    }
   }
 }
 
+handleUrlNocache();
 consumePairingToken();
 initConversations();
 checkServerHealth();

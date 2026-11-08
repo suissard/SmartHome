@@ -447,5 +447,81 @@ class ConversationGatewayTests(unittest.TestCase):
             self.assertTrue(len(response_events[0]["tools"]) >= 1)
 
 
+class VersionTests(unittest.TestCase):
+    def test_parse_github_repo_formats(self):
+        from core.version import parse_github_repo
+        self.assertEqual(parse_github_repo("git@github.com:suissard/SmartHome.git"), "suissard/SmartHome")
+        self.assertEqual(parse_github_repo("https://github.com/suissard/SmartHome.git"), "suissard/SmartHome")
+        self.assertEqual(parse_github_repo("https://github.com/suissard/SmartHome/"), "suissard/SmartHome")
+        self.assertEqual(parse_github_repo("ssh://git@github.com/suissard/SmartHome"), "suissard/SmartHome")
+        self.assertEqual(parse_github_repo("suissard/SmartHome"), "suissard/SmartHome")
+        self.assertIsNone(parse_github_repo("https://example.com/other.git"))
+
+    def test_check_version_detects_difference_with_github(self):
+        from unittest import mock
+        from core import version
+        fake_local = {
+            "repo": "suissard/SmartHome",
+            "repo_url": "https://github.com/suissard/SmartHome",
+            "branch": "main",
+            "local_sha": "1111111111111111111111111111111111111111",
+            "local_short": "1111111",
+            "local_date": "2026-11-08",
+            "local_message": "version locale",
+        }
+        fake_remote = {
+            "remote_sha": "2222222222222222222222222222222222222222",
+            "remote_short": "2222222",
+            "remote_message": "nouvelle version sur github",
+            "remote_date": "2026-11-08T12:00:00Z",
+            "remote_url": "https://github.com/suissard/SmartHome/commit/2222222",
+            "error": "",
+        }
+        with mock.patch.object(version, "local_version_info", return_value=fake_local), \
+                mock.patch.object(version, "fetch_github_branch_info", return_value=fake_remote):
+            info = version.check_version(force=True)
+        self.assertEqual(info["repo"], "suissard/SmartHome")
+        self.assertTrue(info["difference"])
+        self.assertTrue(info["update_available"])
+        self.assertEqual(info["local_short"], "1111111")
+        self.assertEqual(info["remote_short"], "2222222")
+
+    def test_websocket_check_update_and_apply_update(self):
+        from unittest import mock
+        core = make_core([])
+        client = TestClient(create_app(core, SETTINGS))
+        fake_version = {
+            "repo": "suissard/SmartHome",
+            "repo_url": "https://github.com/suissard/SmartHome",
+            "branch": "main",
+            "local_sha": "1111111",
+            "local_short": "1111111",
+            "remote_sha": "2222222",
+            "remote_short": "2222222",
+            "difference": True,
+            "update_available": True,
+            "checked": True,
+            "error": "",
+        }
+        with mock.patch("gateway.app.check_version", return_value=fake_version), \
+                mock.patch("gateway.app.pull_update", return_value={"ok": True, "message": "MAJ OK", "version": fake_version}):
+            with client.websocket_connect("/ws") as ws:
+                ws.send_json({"type": "auth", "token": ""})
+                ready = ws.receive_json()
+                self.assertEqual(ready["type"], "ready")
+                self.assertIn("version", ready)
+
+                ws.send_json({"type": "check_update", "force": True})
+                msg = ws.receive_json()
+                self.assertEqual(msg["type"], "version_info")
+                self.assertEqual(msg["repo"], "suissard/SmartHome")
+                self.assertTrue(msg["update_available"])
+
+                ws.send_json({"type": "apply_update"})
+                applied = ws.receive_json()
+                self.assertEqual(applied["type"], "update_applied")
+                self.assertTrue(applied["ok"])
+
+
 if __name__ == "__main__":
     unittest.main()

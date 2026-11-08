@@ -102,6 +102,9 @@ class AssistantCore:
         self._sessions_lock = threading.Lock()
         # Historique persistant des comptes (PocketBase) ; inactif sans annuaire
         self.history = HistoryStore(self.settings)
+        # Outils [GET_SETTINGS] / [SET_SETTING] : l'assistant modifie ses paramètres à travers ce cœur
+        from core import settings_store
+        settings_store.set_owner(self)
 
     # ---- Composants partagés (chargés au premier besoin) ----
     @property

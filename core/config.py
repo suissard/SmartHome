@@ -203,6 +203,11 @@ class Settings(BaseModel):
     # Son joué quand l'assistant est interrompu (nom de son procédural ou chemin .wav, vide = aucun)
     BARGE_IN_SOUND: str = "wake"
 
+    # 📱 Voix distante : quand le micro d'un client (PWA du téléphone) est utilisé, l'ordinateur ignore le mot-clé
+    # et quitte l'écoute active (la même voix arrive sur les deux micros) ; délai de garde après sa fermeture (s)
+    REMOTE_VOICE_SLEEP: EnvBool = True
+    REMOTE_VOICE_HOLD: float = Field(3.0, ge=0.0)
+
     # 🔔 Retours sonores & vocaux
     FEEDBACK_WAKEWORD_TYPE: FeedbackType = "phrase"
     FEEDBACK_WAKEWORD_TEXT: str = "Que puis je pour toi ?"
@@ -237,6 +242,20 @@ class Settings(BaseModel):
     # Dossier des captures d'écran ([SCREENSHOT]) et durée maximale d'un minuteur ([TIMER], secondes)
     ACTIONS_SCREENSHOT_DIR: str = "~/Pictures"
     ACTIONS_TIMER_MAX_SECONDS: int = Field(86400, gt=0)
+    # Création de commandes par IA ([CREATE_COMMAND], superadmin) : agent lancé, modèle, répertoire (vide = projet),
+    # délai maximal de l'agent (s), guide envoyé, dossier des journaux, longueur maximale de la consigne
+    ACTIONS_AGENT_COMMAND: str = "agy --dangerously-skip-permissions"
+    ACTIONS_AGENT_MODEL: str = "claude-opus-5-5-high"
+    ACTIONS_AGENT_DIR: str = ""
+    ACTIONS_AGENT_TIMEOUT: int = Field(1800, gt=0)
+    ACTIONS_AGENT_GUIDE: str = "actions/CUSTOM_COMMAND_GUIDE.md"
+    ACTIONS_AGENT_LOG_DIR: str = "logs/agent"
+    ACTIONS_AGENT_MAX_REQUEST_CHARS: int = Field(2000, gt=0)
+    # Paramètres que l'assistant ne peut ni lire ni modifier lui-même ([GET_SETTINGS] / [SET_SETTING])
+    ACTIONS_SETTINGS_BLOCKED: CsvList = Field(
+        default_factory=lambda: ["OPENROUTER_API_KEY", "ACTIONS_CONFIRM_DANGEROUS"])
+    # Longueur maximale d'une valeur affichée par [GET_SETTINGS] (caractères, au-delà : tronquée)
+    ACTIONS_SETTINGS_MAX_VALUE_CHARS: int = Field(200, gt=0)
 
     # 🔉 Ducking
     DUCKING_ENABLED: EnvBool = True
@@ -297,6 +316,10 @@ class Settings(BaseModel):
     AUTH_LOCAL_ROLE: str = "admin"
     # Outils permis par rôle : noms séparés par des virgules, "*" (tous), "safe" (sans confirmation), "-nom" (exclu)
     AUTH_ROLE_TOOLS: JsonDict = Field(default_factory=lambda: {"admin": "*", "member": "*", "guest": "safe"})
+    # Outils réservés aux superadministrateurs, quel que soit le rôle (retirés de tous les autres comptes)
+    AUTH_SUPERADMIN_TOOLS: CsvList = Field(default_factory=lambda: ["create_command"])
+    # Outils réservés aux rôles AUTH_ADMIN_ROLES (et aux superadmins), comme les paramètres dans l'interface
+    AUTH_ADMIN_TOOLS: CsvList = Field(default_factory=lambda: ["get_settings", "set_setting"])
     # Ajouté au prompt système d'une session ouverte avec un compte (variables ${NAME}, ${INSTRUCTIONS})
     AUTH_USER_PROMPT: str = "Tu parles avec ${NAME}."
     AUTH_USER_INSTRUCTIONS_PROMPT: str = (

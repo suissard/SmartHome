@@ -14,7 +14,8 @@ Routes :
                         à retirer d'abord de l'historique, pour relancer à partir d'un message)
                         {"type": "forget", "turns", "role"?} | {"type": "edit_answer", "turn", "text", "forget"?}
                         {"type": "confirm_response", "id", "accepted": bool} | {"type": "stop"} | {"type": "reset"}
-                        | {"type": "ping"}
+                        | {"type": "ping"} | {"type": "listening", "active": bool} (micro du client ouvert / fermé :
+                        le micro de l'ordinateur ignore alors le mot-clé et repasse en veille, voir core/remote_voice.py)
                         Profil du compte connecté : {"type": "update_profile", "name", "instructions", "voice"?}
                         | {"type": "preview_voice", "voice"} (phrase d'essai renvoyée en {"type": "voice_preview", "data"})
                         Paramètres (voir core/settings_store.py) : {"type": "get_settings"} | {"type": "list_models", "provider"?: nom}
@@ -65,6 +66,7 @@ from core.security import (
     BearerTokenMiddleware, LocalOnlyMiddleware, SecurityHeadersMiddleware, bearer_from_headers, token_matches,
 )
 from core.users import AuthError, DirectoryUnavailable, User, admin_user, create_directory, is_admin
+from core.version import check_version, local_version_info, pull_update
 
 # Interface web (PWA) servie à la racine : publique, elle ne contient aucun secret (le jeton est saisi par l'utilisateur)
 WEB_DIR = Path(__file__).resolve().parent / "web"
@@ -109,6 +111,8 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
             "service": "smarthome-gateway",
             "accounts": directory.enabled,
             "auth_required": bool(token),
+            "pocketbase_url": core.settings.POCKETBASE_URL if directory.enabled else "",
+            "version": local_version_info(),
         })
 
     async def ask(request: Request):
@@ -347,6 +351,60 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
             except Exception as e:
                 push({"type": "settings_error", "message": f"Erreur : {e}"})
 
+        async def handle_pb_admin(message: dict):
+            """Gestion des comptes utilisateurs PocketBase (réservée aux superadmins référencés sur PocketBase)."""
+            kind = message["type"]
+            if not directory.enabled or not getattr(user, "superadmin", False):
+                push({"type": "pb_admin_error", "message": "Réservé aux superadministrateurs PocketBase."})
+                return
+            try:
+                if kind == "pb_list_users":
+                    users_list = await asyncio.to_thread(directory.list_users, user)
+                    push({"type": "pb_users", "users": users_list, "pocketbase_url": core.settings.POCKETBASE_URL})
+                elif kind == "pb_create_user":
+                    created = await asyncio.to_thread(
+                        directory.create_user,
+                        user,
+                        message.get("email", ""),
+                        message.get("password", ""),
+                        message.get("name", ""),
+                        message.get("role", "member"),
+                    )
+                    users_list = await asyncio.to_thread(directory.list_users, user)
+                    push({"type": "pb_user_saved", "user": created, "users": users_list})
+                elif kind == "pb_update_user":
+                    updated_u = await asyncio.to_thread(
+                        directory.update_user_role,
+                        user,
+                        message.get("id", ""),
+                        message.get("role", ""),
+                        message.get("name"),
+                    )
+                    users_list = await asyncio.to_thread(directory.list_users, user)
+                    push({"type": "pb_user_saved", "user": updated_u, "users": users_list})
+                elif kind == "pb_delete_user":
+                    del_id = str(message.get("id", ""))
+                    await asyncio.to_thread(directory.delete_user, user, del_id)
+                    users_list = await asyncio.to_thread(directory.list_users, user)
+                    push({"type": "pb_user_deleted", "id": del_id, "users": users_list})
+            except (ValueError, AuthError, DirectoryUnavailable) as e:
+                push({"type": "pb_admin_error", "message": str(e)})
+            except Exception as e:
+                push({"type": "pb_admin_error", "message": f"Erreur PocketBase : {e}"})
+
+        async def handle_version(message: dict):
+            """Vérifie la version sur GitHub ou tire les dernières modifications Git (admins)."""
+            kind = message["type"]
+            if kind == "check_update":
+                info = await asyncio.to_thread(check_version, bool(message.get("force")))
+                push({"type": "version_info", **info})
+            elif kind == "apply_update":
+                if not admin:
+                    push({"type": "update_applied", "ok": False, "output": ADMIN_ONLY_MESSAGE})
+                    return
+                res = await asyncio.to_thread(pull_update)
+                push({"type": "update_applied", **res})
+
         # Conversation en cours (rechargée depuis l'historique du compte pour une session neuve) : la PWA la réaffiche
         try:
             history = await asyncio.to_thread(core.restore_history, session.id)
@@ -361,6 +419,8 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
             "conversation_id": session.conversation_id,
             "user": {**user.public(s), **({"token": user.token} if user.token else {})},
             "accounts": directory.enabled,
+            "pocketbase_url": s.POCKETBASE_URL if directory.enabled else "",
+            "version": local_version_info(),
             "profile_max": s.AUTH_INSTRUCTIONS_MAX_CHARS,
             # Voix au choix du profil (Piper : voices/) ; vide si le fournisseur TTS n'en propose pas
             "voices": core.voices() if user.has_profile else [],
@@ -378,6 +438,7 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
         })
         sender_task = asyncio.create_task(sender())
         tasks: set[asyncio.Task] = set()
+        mic_open = False   # micro du client ouvert (message "listening")
         try:
             while True:
                 try:
@@ -476,12 +537,23 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
                     task = asyncio.create_task(handle_settings(message))
                     tasks.add(task)
                     task.add_done_callback(tasks.discard)
+                elif kind in ("pb_list_users", "pb_create_user", "pb_update_user", "pb_delete_user"):
+                    task = asyncio.create_task(handle_pb_admin(message))
+                    tasks.add(task)
+                    task.add_done_callback(tasks.discard)
+                elif kind in ("check_update", "apply_update"):
+                    task = asyncio.create_task(handle_version(message))
+                    tasks.add(task)
+                    task.add_done_callback(tasks.discard)
                 elif kind == "restart" and not admin:
                     push({"type": "settings_error", "message": ADMIN_ONLY_MESSAGE})
                 elif kind == "restart":
                     core.events.emit("restarting", None)
                     # Laisse partir l'annonce aux clients avant l'arrêt
                     asyncio.get_running_loop().call_later(RESTART_DELAY_SECONDS, restart.request_restart)
+                elif kind == "listening":
+                    mic_open = bool(message.get("active", True))
+                    core.events.emit("remote_listening", session.id, active=mic_open)
                 elif kind == "ping":
                     push({"type": "pong"})
                 elif kind == "auth":
@@ -491,6 +563,8 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
         except WebSocketDisconnect:
             pass
         finally:
+            if mic_open:
+                core.events.emit("remote_listening", session.id, active=False)
             unsubscribe()
             unsubscribe_settings()
             core.detach_confirmation(session.id)

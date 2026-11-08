@@ -171,6 +171,9 @@ def execute_action(tag: str, args: str = "", dry_run: bool = False) -> str:
     if not cmd:
         return f"❌ Action inconnue : [{tag.upper()}]. Utilisez list_actions() pour consulter les actions disponibles."
 
+    if cmd.tool_name in {name.strip().lower() for name in get_settings().AUTH_SUPERADMIN_TOOLS}:
+        return f"⛔ Action [{cmd.tag}] réservée aux superadministrateurs (passerelle avec un compte superadmin)."
+
     if dry_run:
         return f"🔍 [DRY RUN] Action [{cmd.tag}] simulée avec succès. Arguments: '{args}'"
 

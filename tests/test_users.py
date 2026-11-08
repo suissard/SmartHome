@@ -29,15 +29,29 @@ from core.users import (
 from gateway.app import create_app
 from tests.test_gateway import SETTINGS, TOKEN, collect_until_done, make_core
 
-PASSWORDS = {"marie@foyer": ("secret", "member"), "leo@foyer": ("1234", "guest")}
+PASSWORDS = {"marie@foyer": ("secret", "member"), "leo@foyer": ("1234", "guest"), "boss@foyer": ("super", "admin")}
 
 
 @USER_DIRECTORIES.register("fake_test")
 class FakeDirectory(UserDirectory):
     """Annuaire en mémoire : jeton de compte = « tok-<identifiant> »."""
 
+    def __init__(self, settings):
+        super().__init__(settings)
+        self.managed_users = [
+            {"id": "u1", "email": "marie@foyer", "name": "Marie", "role": "member", "superadmin": False, "created": "", "updated": ""},
+        ]
+
     def _user(self, identity):
-        return User(f"pb_{identity}", identity.split("@")[0].title(), PASSWORDS[identity][1], f"tok-{identity}")
+        is_super = identity == "boss@foyer"
+        return User(
+            f"pb_{identity}",
+            identity.split("@")[0].title(),
+            PASSWORDS[identity][1],
+            f"tok-{identity}",
+            email=identity,
+            superadmin=is_super,
+        )
 
     def login(self, identity, password):
         if PASSWORDS.get(identity, (None,))[0] != password:
@@ -53,7 +67,35 @@ class FakeDirectory(UserDirectory):
     def update_profile(self, user, name, instructions, voice=""):
         from core.users import clean_profile
         name, instructions = clean_profile(name, instructions, self.settings)
-        return User(user.id, name, user.role, user.token, instructions, voice)
+        return User(user.id, name, user.role, user.token, instructions, voice, email=user.email, superadmin=user.superadmin)
+
+    def list_users(self, user):
+        if not user.superadmin:
+            raise AuthError("Réservé aux superadmins.")
+        return list(self.managed_users)
+
+    def create_user(self, user, email, password, name="", role="member"):
+        if not user.superadmin:
+            raise AuthError("Réservé aux superadmins.")
+        item = {"id": f"u{len(self.managed_users)+1}", "email": email, "name": name or email, "role": role, "superadmin": False, "created": "", "updated": ""}
+        self.managed_users.append(item)
+        return item
+
+    def update_user_role(self, user, record_id, role, name=None):
+        if not user.superadmin:
+            raise AuthError("Réservé aux superadmins.")
+        for item in self.managed_users:
+            if item["id"] == record_id:
+                item["role"] = role
+                if name:
+                    item["name"] = name
+                return item
+        raise AuthError("Introuvable.")
+
+    def delete_user(self, user, record_id):
+        if not user.superadmin:
+            raise AuthError("Réservé aux superadmins.")
+        self.managed_users = [u for u in self.managed_users if u["id"] != record_id]
 
 
 ACCOUNT_SETTINGS = Settings(**{**SETTINGS.model_dump(), "GATEWAY_AUTH_TOKEN": TOKEN, "AUTH_PROVIDER": "fake_test"})
@@ -237,6 +279,42 @@ class TestGatewayAccounts(unittest.TestCase):
         with self.client.websocket_connect("/ws") as ws:
             ready = self.connect(ws, token=TOKEN, identity="leo@foyer", password="1234")
         self.assertEqual(ready["user"]["role"], "guest")
+
+    def test_pocketbase_superadmin_ws_commands(self):
+        # Un membre non-superadmin est refusé
+        with self.client.websocket_connect("/ws") as ws:
+            ready = self.connect(ws, identity="marie@foyer", password="secret")
+            self.assertFalse(ready["user"]["superadmin"])
+            ws.send_json({"type": "pb_list_users"})
+            self.assertEqual(ws.receive_json()["type"], "pb_admin_error")
+
+        # Un superadmin PocketBase peut lister, créer, modifier et supprimer des utilisateurs
+        with self.client.websocket_connect("/ws") as ws:
+            ready = self.connect(ws, identity="boss@foyer", password="super")
+            self.assertTrue(ready["user"]["superadmin"])
+            self.assertTrue(ready["user"]["admin"])
+            self.assertEqual(ready["user"]["email"], "boss@foyer")
+
+            ws.send_json({"type": "pb_list_users"})
+            listed = ws.receive_json()
+            self.assertEqual(listed["type"], "pb_users")
+            self.assertEqual(len(listed["users"]), 1)
+
+            ws.send_json({"type": "pb_create_user", "email": "paul@foyer", "password": "password123", "name": "Paul", "role": "guest"})
+            created = ws.receive_json()
+            self.assertEqual(created["type"], "pb_user_saved")
+            self.assertEqual(len(created["users"]), 2)
+            paul_id = created["user"]["id"]
+
+            ws.send_json({"type": "pb_update_user", "id": paul_id, "role": "admin"})
+            updated = ws.receive_json()
+            self.assertEqual(updated["type"], "pb_user_saved")
+            self.assertEqual(updated["user"]["role"], "admin")
+
+            ws.send_json({"type": "pb_delete_user", "id": paul_id})
+            deleted = ws.receive_json()
+            self.assertEqual(deleted["type"], "pb_user_deleted")
+            self.assertEqual(len(deleted["users"]), 1)
 
 
 class VoiceTTS:
@@ -495,6 +573,13 @@ class _PocketBaseStub(BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
 
+    def do_GET(self):
+        if self.path.startswith("/api/collections/users/records") and self.headers.get("Authorization") in ("super-jwt-1", "super-jwt-2"):
+            record = {"id": "sup_usr", "email": "root@foyer", "name": "Root", "role": "admin"}
+            self._reply(200, {"items": [record]})
+        else:
+            self._reply(404, {"message": "Not found."})
+
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
         record = {"id": "abc", "email": "marie@foyer", "name": "Marie", "role": ""}
@@ -502,7 +587,13 @@ class _PocketBaseStub(BaseHTTPRequestHandler):
             status, data = 200, {"token": "jwt-1", "record": record}
         elif self.path == "/api/collections/users/auth-refresh" and self.headers.get("Authorization") == "jwt-1":
             status, data = 200, {"token": "jwt-2", "record": {**record, "role": "admin"}}
-        elif self.path.startswith("/api/collections/users/"):
+        elif self.path == "/api/collections/_superusers/auth-with-password" and body == {"identity": "root@foyer", "password": "rootpass"}:
+            status, data = 200, {"token": "super-jwt-1", "record": {"id": "s1", "email": "root@foyer"}}
+        elif self.path == "/api/collections/_superusers/auth-refresh" and self.headers.get("Authorization") == "super-jwt-1":
+            status, data = 200, {"token": "super-jwt-2", "record": {"id": "s1", "email": "root@foyer"}}
+        elif self.path == "/api/collections/users/records" and self.headers.get("Authorization") == "super-jwt-1":
+            status, data = 200, {"id": "new_u", "email": body.get("email", ""), "name": body.get("name", ""), "role": body.get("role", "member")}
+        elif self.path.startswith("/api/collections/users/") or self.path.startswith("/api/collections/_superusers/"):
             status, data = 400, {"message": "Failed to authenticate."}
         else:
             status, data = 404, {"message": "Missing collection."}
@@ -510,10 +601,17 @@ class _PocketBaseStub(BaseHTTPRequestHandler):
 
     def do_PATCH(self):
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
-        if self.path == "/api/collections/users/records/abc" and self.headers.get("Authorization") == "jwt-1":
+        if self.path == "/api/collections/users/records/abc" and self.headers.get("Authorization") in ("jwt-1", "super-jwt-1"):
             self._reply(200, {"id": "abc", "email": "marie@foyer", "role": "member", **body})
         else:
             self._reply(404, {"message": "The requested resource wasn't found."})
+
+    def do_DELETE(self):
+        if self.path == "/api/collections/users/records/abc" and self.headers.get("Authorization") == "super-jwt-1":
+            self.send_response(204)
+            self.end_headers()
+        else:
+            self._reply(404, {"message": "Not found."})
 
     def _reply(self, status, data):
         payload = json.dumps(data).encode()
@@ -543,6 +641,29 @@ class TestPocketBaseDirectory(unittest.TestCase):
         self.assertEqual((user.id, user.name, user.role, user.token), ("pb_abc", "Marie", "member", "jwt-1"))
         refreshed = self.directory().refresh("jwt-1")
         self.assertEqual((refreshed.role, refreshed.token), ("admin", "jwt-2"))
+
+    def test_superadmin_login_refresh_and_management(self):
+        directory = self.directory()
+        super_user = directory.login("root@foyer", "rootpass")
+        self.assertTrue(super_user.superadmin)
+        self.assertEqual((super_user.id, super_user.role, super_user.email, super_user.token),
+                         ("pb_sup_usr", "admin", "root@foyer", "super-jwt-1"))
+
+        refreshed = directory.refresh("super-jwt-1")
+        self.assertTrue(refreshed.superadmin)
+        self.assertEqual(refreshed.token, "super-jwt-2")
+
+        users = directory.list_users(super_user)
+        self.assertEqual(len(users), 1)
+        self.assertEqual(users[0]["email"], "root@foyer")
+
+        created = directory.create_user(super_user, "nouveau@foyer", "motdepasse8", "Nouveau", "member")
+        self.assertEqual(created["email"], "nouveau@foyer")
+
+        updated = directory.update_user_role(super_user, "abc", "admin")
+        self.assertEqual(updated["role"], "admin")
+
+        directory.delete_user(super_user, "abc")
 
     def test_update_profile(self):
         directory = self.directory()

@@ -38,6 +38,10 @@ class Tool:
     decision_choices: Optional[dict[str, str]] = None
     # Phrase de confirmation prononcée après exécution par un modèle de décision (variables ${ARGS}, ${OUTPUT}...)
     decision_message: str = ""
+    # Question de confirmation construite d'après les arguments (lève ValueError si l'appel est invalide)
+    confirm_text: Optional[Callable[[dict], str]] = None
+    # Confirmation exigée même si ACTIONS_CONFIRM_DANGEROUS=false
+    force_confirm: bool = False
 
     def schema(self) -> dict:
         """Définition au format function calling (compatible OpenAI et Ollama)."""
@@ -79,11 +83,13 @@ def request_confirmation(
     description: str,
     settings: Optional[Settings] = None,
     handler: Optional[ConfirmationHandler] = None,
+    force: bool = False,
 ) -> bool:
     """Retourne True si l'action dangereuse décrite peut être exécutée.
-    `handler` (propre à une session) est prioritaire sur le gestionnaire global."""
+    `handler` (propre à une session) est prioritaire sur le gestionnaire global.
+    `force` : confirmation demandée même si ACTIONS_CONFIRM_DANGEROUS est désactivé."""
     s = settings or get_settings()
-    if not s.ACTIONS_CONFIRM_DANGEROUS:
+    if not s.ACTIONS_CONFIRM_DANGEROUS and not force:
         return True
     handler = handler or _confirmation_handler
     if handler is None:
@@ -159,11 +165,19 @@ class ToolRegistry:
         if tool is None:
             return ToolResult(call, f"Outil inconnu : {call.name}", executed=False)
 
-        if tool.danger == "confirm":
-            summary = tool.description
-            if call.arguments:
-                summary += f" ({json.dumps(call.arguments, ensure_ascii=False)})"
-            if not request_confirmation(summary, self.settings, confirm):
+        if tool.danger == "confirm" or tool.force_confirm:
+            summary = ""
+            if tool.confirm_text is not None:
+                try:
+                    summary = tool.confirm_text(call.arguments)
+                except ValueError as e:
+                    print(f"⛔ [TOOLS] {tool.name} refusé : {e}")
+                    return ToolResult(call, f"Refusé : {e}", executed=False)
+            if not summary:
+                summary = tool.description
+                if call.arguments:
+                    summary += f" ({json.dumps(call.arguments, ensure_ascii=False)})"
+            if not request_confirmation(summary, self.settings, confirm, force=tool.force_confirm):
                 print(f"⛔ [TOOLS] Action non confirmée, annulée : {tool.name}")
                 return ToolResult(call, "Action annulée : l'utilisateur n'a pas confirmé.", executed=False)
 
@@ -193,6 +207,8 @@ def _action_tool(action, settings: Settings) -> Tool:
         source="local",
         decision_choices=action.decision_choices() if action.has_args else None,
         decision_message=action.done_message,
+        confirm_text=lambda arguments: action.confirm_text(str(arguments.get("args", ""))),
+        force_confirm=action.force_confirm,
     )
 
 

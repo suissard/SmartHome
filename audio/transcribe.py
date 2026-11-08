@@ -58,8 +58,11 @@ class VoiceTranscriber:
         stream,
         timeout_silence=None,
         max_speech_duration=None,
-        bar_length=20
+        bar_length=20,
+        should_stop=None,
     ):
+        """Attend une phrase puis l'enregistre et la transcrit. `should_stop()` (facultatif), vérifié à chaque trame,
+        abandonne l'écoute (retour comme un délai écoulé), par exemple quand on parle déjà au téléphone."""
         if timeout_silence is None:
             timeout_silence = self.follow_up_timeout
         if max_speech_duration is None:
@@ -75,8 +78,8 @@ class VoiceTranscriber:
             elapsed = time.time() - start_wait
             remaining = max(0.0, timeout_silence - elapsed)
 
-            # Fin du délai d'attente
-            if remaining <= 0 or elapsed >= timeout_silence:
+            # Fin du délai d'attente (ou écoute abandonnée)
+            if remaining <= 0 or elapsed >= timeout_silence or (should_stop and should_stop()):
                 sys.stdout.write("\r" + " " * 80 + "\r")
                 sys.stdout.flush()
                 return "", 0.0, 0.0
@@ -106,6 +109,10 @@ class VoiceTranscriber:
                 max_chunks = int(max_speech_duration / chunk_seconds)
 
                 for _ in range(max_chunks):
+                    if should_stop and should_stop():
+                        sys.stdout.write("\r" + " " * 80 + "\r")
+                        sys.stdout.flush()
+                        return "", 0.0, 0.0
                     s_data = stream.read(CHUNK, exception_on_overflow=False)
                     s_chunk = np.frombuffer(s_data, dtype=np.int16)
                     frames.append(s_data)

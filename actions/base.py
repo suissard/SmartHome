@@ -50,6 +50,8 @@ class BaseAction:
     # Phrase prononcée après exécution par un modèle de décision (qui ne rédige pas de réponse).
     # Variables : ${ARGS} (argument choisi), ${COMMAND}, ${OUTPUT} (sortie du script). Vide = réponse type générique.
     done_message: str = ""
+    # Confirmation exigée même si ACTIONS_CONFIRM_DANGEROUS=false (ex: l'assistant modifie ses propres paramètres)
+    force_confirm: bool = False
 
     # Regex compilée pour détecter ce tag spécifique dans une réponse LLM
     _pattern: Optional[re.Pattern] = field(default=None, init=False, repr=False)
@@ -90,6 +92,11 @@ class BaseAction:
         """Valeurs possibles de l'argument pour un modèle de décision, qui choisit au lieu d'écrire :
         {valeur: description prononçable}. None = argument libre, action non proposée à ces modèles."""
         return None
+
+    def confirm_text(self, args: str = "") -> str:
+        """Question de confirmation propre à cet appel (vide = description de l'action).
+        Peut lever ValueError si l'argument est invalide : l'action est alors refusée sans rien demander."""
+        return ""
 
     def build_args(self, args: str = "") -> List[str]:
         """Découpe les arguments passés pour le script bash ou powershell. Peut être surchargé."""

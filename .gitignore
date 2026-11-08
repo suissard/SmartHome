@@ -27,3 +27,6 @@ pocketbase/pocketbase.exe
 pocketbase/pb_data/
 pocketbase/pocketbase.log
 pocketbase/*.tmp
+
+# Journaux des agents IA ([CREATE_COMMAND])
+logs/

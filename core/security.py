@@ -113,6 +113,14 @@ class SecurityHeadersMiddleware:
 
         async def send_with_headers(message):
             if message["type"] == "http.response.start":
-                message = {**message, "headers": [*message.get("headers", []), *self.HEADERS]}
+                path = scope.get("path", "")
+                extra = []
+                if path in ("/sw.js", "/manifest.webmanifest") or path.endswith((".html", "/")):
+                    extra.append((b"cache-control", b"no-cache, no-store, must-revalidate"))
+                    extra.append((b"pragma", b"no-cache"))
+                    extra.append((b"expires", b"0"))
+                elif path.endswith((".js", ".css")):
+                    extra.append((b"cache-control", b"no-cache, must-revalidate"))
+                message = {**message, "headers": [*message.get("headers", []), *self.HEADERS, *extra]}
             await send(message)
         await self.asgi_app(scope, receive, send_with_headers)
