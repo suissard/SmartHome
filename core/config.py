@@ -308,6 +308,8 @@ class Settings(BaseModel):
     )
     # Délai maximal d'une réponse d'agent (s), sauf "timeout" propre à l'agent
     AGENTS_TIMEOUT: int = Field(600, gt=0)
+    # Délai laissé à un agent interrompu pour s'arrêter (SIGTERM) avant d'être tué de force (SIGKILL), en secondes
+    AGENTS_KILL_GRACE: float = Field(3.0, gt=0.0)
     # Voix d'un agent sans "voice" dans sa fiche ; vide = une autre voix installée que celle de l'assistant
     AGENTS_DEFAULT_VOICE: str = ""
     # Fin de conversation (« au revoir », mise en veille) : l'assistant reprend la main

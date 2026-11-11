@@ -102,6 +102,12 @@ class AgentSpec:
         return {"name": self.name, "label": self.label, "color": self.color, "description": self.description}
 
     def build_command(self, prompt: str, session: str = "") -> list[str]:
+        # Un message (ou un identifiant renvoyé par l'agent) qui commence par « - » serait lu comme une option
+        # de la commande (ex: « --dangerously-skip-permissions ») : il est décalé d'une espace, sans effet sur l'agent
+        if prompt.startswith("-"):
+            prompt = " " + prompt
+        if session.startswith("-"):
+            session = ""
         args = self.command + (self.resume_args if session else [])
         resolved = [a.replace("{prompt}", prompt).replace("{session}", session) for a in args]
         if "{prompt}" not in " ".join(args):
@@ -388,7 +394,7 @@ class AgentRunner:
                     reason["why"] = "timeout"
                 else:
                     continue
-                _kill(proc)
+                _kill(proc, s.AGENTS_KILL_GRACE)
                 return
         threading.Thread(target=watchdog, name=f"agent-{spec.name}-watchdog", daemon=True).start()
 
@@ -409,7 +415,7 @@ class AgentRunner:
                         on_text(parsed.text)
             proc.wait()
         except BaseException:
-            _kill(proc)
+            _kill(proc, s.AGENTS_KILL_GRACE)
             raise
         finally:
             stopped.set()
@@ -429,19 +435,33 @@ class AgentRunner:
         return AgentResult(text=text, session=new_session)
 
 
-def _kill(proc: subprocess.Popen):
-    if proc.poll() is not None:
-        return
+def _signal_group(proc: subprocess.Popen, sig) -> None:
     try:
-        if os.name != "nt":
-            os.killpg(proc.pid, signal.SIGTERM)
-        else:
-            proc.kill()
+        os.killpg(proc.pid, sig)
     except (ProcessLookupError, PermissionError, OSError):
         try:
             proc.kill()
         except OSError:
             pass
+
+
+def _kill(proc: subprocess.Popen, grace: float = 3.0):
+    """Arrête l'agent et ses sous-processus : SIGTERM au groupe, puis SIGKILL s'il est encore là après `grace` s
+    (un agent qui ignore SIGTERM bloquerait sinon la lecture de sa sortie, et le délai ne serait jamais tenu)."""
+    if proc.poll() is not None:
+        return
+    if os.name == "nt":
+        try:
+            proc.kill()
+        except OSError:
+            pass
+        return
+    _signal_group(proc, signal.SIGTERM)
+    try:
+        proc.wait(timeout=grace)
+    except subprocess.TimeoutExpired:
+        print(f"⚠️ [AGENTS] Processus {proc.pid} toujours actif après {grace} s : arrêt forcé.")
+        _signal_group(proc, signal.SIGKILL)
 
 
 if __name__ == "__main__":

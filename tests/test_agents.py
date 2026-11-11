@@ -166,6 +166,11 @@ class TestDirectoryAndSwitch(AgentTestCase):
         with self.assertRaises(AgentError):
             AgentSpec("y", "Y", ["commande-qui-n-existe-pas"]).build_command("a")
 
+    def test_build_command_never_turns_text_into_options(self):
+        spec = AgentSpec("x", "X", [sys.executable, "{prompt}"], resume_args=["--resume", "{session}"])
+        self.assertEqual(spec.build_command("--dangerously-skip-permissions")[1:], [" --dangerously-skip-permissions"])
+        self.assertNotIn("--resume", spec.build_command("bonjour", "--evil"))
+
 
 class TestRunner(AgentTestCase):
     def test_stream_and_resume(self):
@@ -189,6 +194,20 @@ class TestRunner(AgentTestCase):
         started = time.monotonic()
         with self.assertRaises(AgentCancelled):
             AgentRunner(self.settings).run(self.directory.get("fake"), "lent", cancel=cancel)
+        self.assertLess(time.monotonic() - started, 5)
+
+    @unittest.skipIf(sys.platform == "win32", "signaux POSIX")
+    def test_cancel_kills_agent_ignoring_sigterm(self):
+        script = Path(self.tmp.name) / "stubborn.py"
+        script.write_text("import signal, time\nsignal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+                          "print('pret', flush=True)\ntime.sleep(30)\n", encoding="utf-8")
+        spec = AgentSpec("s", "Stubborn", [sys.executable, str(script), "{prompt}"])
+        settings = Settings(**{**self.settings.model_dump(), "AGENTS_KILL_GRACE": 0.5})
+        cancel = threading.Event()
+        threading.Timer(0.5, cancel.set).start()
+        started = time.monotonic()
+        with self.assertRaises(AgentCancelled):
+            AgentRunner(settings).run(spec, "x", cancel=cancel)
         self.assertLess(time.monotonic() - started, 5)
 
 
