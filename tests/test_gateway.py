@@ -325,6 +325,20 @@ class TestGateway(unittest.TestCase):
             dismiss = next(e for e in events if e["type"] == "confirm_dismiss")
             self.assertTrue(dismiss["accepted"])
 
+    def test_unclear_answer_keeps_question_open(self):
+        with self.client.websocket_connect("/ws", headers={"Authorization": f"Bearer {TOKEN}"}) as ws:
+            ws.receive_json()  # ready
+            ws.send_json({"type": "text", "text": "éteins l'ordinateur"})
+            while ws.receive_json()["type"] != "confirm_request":
+                pass
+            ws.send_json({"type": "text", "text": "peut-être", "turn": "t2"})
+            events = collect_until_done(ws)
+            self.assertTrue(any(e["type"] == "toast" for e in events))
+            self.assertFalse(any(e["type"] == "confirm_dismiss" for e in events))
+            ws.send_json({"type": "text", "text": "non"})
+            collect_until_done(ws)
+        self.assertEqual(self.executed, [])
+
 
 
 class TestWebClientServing(unittest.TestCase):

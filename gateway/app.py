@@ -438,6 +438,37 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
                 res = await asyncio.to_thread(pull_update)
                 push({"type": "update_applied", **res})
 
+        async def answer_confirmation(message: dict, kind: str) -> bool:
+            """« Oui » / « non » écrit ou dit pendant une confirmation. False : plus de question en attente,
+            le message est traité normalement."""
+            turn = message.get("turn")
+            active_id, future = next(iter(pending.items()), (None, None))
+            if future is None or future.done():
+                return False
+            answer = (message.get("text") or "").strip()
+            if kind == "audio":
+                try:
+                    answer = await asyncio.to_thread(core.transcribe_audio, base64.b64decode(message.get("data", "")))
+                except Exception as e:
+                    print(f"⚠️ [GATEWAY {session.id}] Erreur confirmation audio : {e}")
+                    push({"type": "done", "turn": turn})
+                    return True
+                print(f"🎙️ [GATEWAY {session.id}] Audio transcrit pendant confirmation : « {answer} »")
+                push({"type": "transcript", "text": answer, "turn": turn})
+            s = core.settings
+            decision = classify_confirmation(answer, s.ACTIONS_CONFIRM_WORDS, s.ACTIONS_CANCEL_WORDS)
+            source = "à la voix" if kind == "audio" else "par texte"
+            if decision is None:
+                print(f"❓ [GATEWAY {session.id}] Réponse non interprétée comme confirmation {source} (« {answer} »)")
+                push({"type": "toast", "message": f"Non compris (« {answer} »). Dites « Oui » ou « Non »."})
+            elif not future.done():
+                print(f"🗣️ [GATEWAY {session.id}] Confirmation résolue {source} (« {answer} ») -> "
+                      f"{'Acceptée' if decision else 'Refusée'}")
+                future.set_result(decision)
+                push({"type": "confirm_dismiss", "id": active_id, "accepted": decision})
+            push({"type": "done", "turn": turn})
+            return True
+
         # Conversation en cours (rechargée depuis l'historique du compte pour une session neuve) : la PWA la réaffiche
         try:
             history = await asyncio.to_thread(core.restore_history, session.id)
@@ -496,50 +527,9 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
                         if future and not future.done():
                             future.set_result(accepted)
                         continue
-
-                    if kind == "text":
-                        user_text = (message.get("text") or "").strip()
-                        decision = classify_confirmation(user_text, s.ACTIONS_CONFIRM_WORDS, s.ACTIONS_CANCEL_WORDS)
-                        if decision is not None:
-                            active_id = next(iter(pending.keys()))
-                            future = pending[active_id]
-                            if not future.done():
-                                print(f"🗣️ [GATEWAY {session.id}] Confirmation résolue par texte (« {user_text} ») -> {'Acceptée' if decision else 'Refusée'}")
-                                future.set_result(decision)
-                                push({"type": "confirm_dismiss", "id": active_id, "accepted": decision})
-                                push({"type": "done", "turn": message.get("turn")})
-                                continue
-                        else:
-                            print(f"❓ [GATEWAY {session.id}] Texte non interprété comme confirmation (« {user_text} »)")
-                            push({"type": "toast", "message": "Réponse non comprise. Dites « Oui » ou « Non »."})
-                            push({"type": "done", "turn": message.get("turn")})
-                            continue
-
-                    if kind == "audio":
-                        try:
-                            audio_raw = base64.b64decode(message.get("data", ""))
-                            transcribed = await asyncio.to_thread(core.transcribe_audio, audio_raw)
-                            print(f"🎙️ [GATEWAY {session.id}] Audio transcrit pendant confirmation : « {transcribed} »")
-                            push({"type": "transcript", "text": transcribed, "turn": message.get("turn")})
-                            decision = classify_confirmation(transcribed, s.ACTIONS_CONFIRM_WORDS, s.ACTIONS_CANCEL_WORDS)
-                            if decision is not None:
-                                active_id = next(iter(pending.keys()))
-                                future = pending[active_id]
-                                if not future.done():
-                                    print(f"🗣️ [GATEWAY {session.id}] Confirmation résolue à la voix (« {transcribed} ») -> {'Acceptée' if decision else 'Refusée'}")
-                                    future.set_result(decision)
-                                    push({"type": "confirm_dismiss", "id": active_id, "accepted": decision})
-                                    push({"type": "done", "turn": message.get("turn")})
-                                    continue
-                            else:
-                                print(f"❓ [GATEWAY {session.id}] Voix non interprétée comme confirmation (« {transcribed} »)")
-                                push({"type": "toast", "message": f"Non compris (« {transcribed} »). Dites « Oui » ou « Non »."})
-                                push({"type": "done", "turn": message.get("turn")})
-                                continue
-                        except Exception as e:
-                            print(f"⚠️ [GATEWAY {session.id}] Erreur confirmation audio : {e}")
-                            push({"type": "done", "turn": message.get("turn")})
-                            continue
+                    # Réponse écrite ou dite pendant une question de confirmation : jamais un nouveau tour concurrent
+                    if kind in ("text", "audio") and await answer_confirmation(message, kind):
+                        continue
                 if kind in ("text", "audio"):
                     txt_prev = f"texte='{message.get('text')}'" if kind == "text" else f"audio={len(message.get('data',''))}b"
                     if message.get("images"):
