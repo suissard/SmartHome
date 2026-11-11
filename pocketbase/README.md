@@ -45,6 +45,9 @@ puis `AUTH_PROVIDER=pocketbase` dans `.env`.
   en retrouve le contexte, même après un redémarrage. Supprimer, relancer ou corriger un message est enregistré ;
   « Nouvelle conversation » en commence une autre (l'ancienne reste en base). Chacun ne voit que ses messages ;
   l'administrateur de PocketBase (`/_/`) les voit tous. Le jeton maître et le micro « Foyer » ne sont pas enregistrés.
+  Indépendamment de PocketBase, tous les échanges (micro « Foyer » compris) et les notes des réponses sont gardés
+  indéfiniment dans l'archive locale `data/archive.sqlite3` (voir `core/archive.py`) : une suppression dans la PWA
+  ne fait que les masquer. Les conversations du micro s'affichent dans la PWA (lecture seule, rôles `ARCHIVE_HOUSEHOLD_ROLES`).
   Lire la dernière conversation d'un compte : `.venv/bin/python core/history.py`.
 - **Comptes du foyer** : interface `http://127.0.0.1:8090/_/` (collection `users`, champ `role`), depuis la machine
   elle-même (sur un serveur sans écran : `ssh -L 8090:127.0.0.1:8090 serveur`).

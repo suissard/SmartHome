@@ -60,6 +60,16 @@ def _parse_json_dict(value):
 EnvBool = Annotated[bool, BeforeValidator(_parse_bool)]
 JsonDict = Annotated[dict[str, str], BeforeValidator(_parse_json_dict)]
 CsvList = Annotated[list[str], BeforeValidator(_parse_list)]
+
+
+def _parse_path_list(value):
+    """Comme _parse_list, sans passer en minuscules (chemins de fichiers)."""
+    if isinstance(value, str):
+        return [item.strip() for item in value.split(",") if item.strip()]
+    return value
+
+
+PathList = Annotated[list[str], BeforeValidator(_parse_path_list)]
 FeedbackType = Literal["phrase", "sound", "none"]
 
 
@@ -93,6 +103,8 @@ class Settings(BaseModel):
     # ⚡ Wake word (openWakeWord)
     WAKEWORD_MODEL_PATH: str = "wakewords/Salut_Jarvisse_20260601_005854.onnx"
     WAKEWORD_THRESHOLD: float = Field(0.5, ge=0.0, le=1.0)
+    # Écoute du mot-clé par le micro de l'ordinateur (false : le micro local n'écoute plus, la PWA reste utilisable)
+    WAKEWORD_ENABLED: bool = True
 
     # 🗣️ Enregistrement & STT (faster-whisper)
     WHISPER_MODEL: str = "base"
@@ -155,6 +167,8 @@ class Settings(BaseModel):
     LLM_MAX_TOOL_ROUNDS: int = Field(4, ge=1)
     # Entrée audio du LLM (STT_PROVIDER=direct) : "auto" (capacités annoncées par le modèle), "on" (toujours), "off" (jamais)
     LLM_AUDIO_INPUT: Literal["auto", "on", "off"] = "auto"
+    # Entrée image du LLM (images jointes depuis l'interface web) : "auto" (capacité « vision » du modèle), "on", "off"
+    LLM_IMAGE_INPUT: Literal["auto", "on", "off"] = "auto"
 
     # 🎯 Modèles de décision (Ollama /v1/systemone : nimble, tev1...) : ils choisissent une commande sans rédiger de réponse
     # Modèles traités comme modèles de décision (nom sans le tag ":latest" accepté)
@@ -253,9 +267,76 @@ class Settings(BaseModel):
     ACTIONS_AGENT_MAX_REQUEST_CHARS: int = Field(2000, gt=0)
     # Paramètres que l'assistant ne peut ni lire ni modifier lui-même ([GET_SETTINGS] / [SET_SETTING])
     ACTIONS_SETTINGS_BLOCKED: CsvList = Field(
-        default_factory=lambda: ["OPENROUTER_API_KEY", "ACTIONS_CONFIRM_DANGEROUS"])
+        default_factory=lambda: ["OPENROUTER_API_KEY", "ACTIONS_CONFIRM_DANGEROUS", "FILES_SEARCH_DIRS",
+                                 "ACTIONS_OPEN_ALLOWED_APPS"])
     # Longueur maximale d'une valeur affichée par [GET_SETTINGS] (caractères, au-delà : tronquée)
     ACTIONS_SETTINGS_MAX_VALUE_CHARS: int = Field(200, gt=0)
+
+    # 🤝 Agents externes (Hermes, Claude Code, Antigravity...) : « j'aimerais parler à Hermes » relie la conversation
+    # à l'agent, qui répond directement (texte et voix). Agents décrits dans AGENTS_CONFIG_FILE (voir core/agents.py)
+    AGENTS_ENABLED: EnvBool = True
+    AGENTS_CONFIG_FILE: str = "agents.json"
+    # Rôles autorisés à parler aux agents (les superadmins le sont toujours) : un agent agit avec les droits du système
+    AGENTS_ROLES: CsvList = Field(default_factory=lambda: ["admin"])
+    # Formules qui, suivies du nom d'un agent, basculent vers lui sans passer par le LLM (« passe-moi Hermes »)
+    AGENTS_SWITCH_TRIGGERS: CsvList = _parse_list(
+        "parler à,parler a,parler avec,causer avec,discuter avec,passe-moi,passe moi,passez-moi,connecte-moi à,"
+        "connecte moi à,connecte-moi avec,mets-moi en relation avec,mettre en relation avec,bascule sur,bascule vers,"
+        "basculer sur,appelle,"
+        "reviens à,reviens a,reviens avec,retour à,repasse-moi,repasse moi,rends-moi,rends moi"
+    )
+    # Mots de courtoisie retirés de la demande qui suit le nom de l'agent (« passe-moi Hermes s'il te plaît »)
+    AGENTS_SWITCH_FILLERS: CsvList = _parse_list(
+        "s'il te plaît,s'il te plait,s il te plaît,s'il vous plaît,s'il vous plait,stp,svp,merci,maintenant,please,steuplé,"
+        "tout de suite,directement"
+    )
+    # Noms de l'assistant : « parler à Jarvis » pendant un échange avec un agent ramène à l'assistant
+    AGENTS_ASSISTANT_NAMES: CsvList = _parse_list("assistant,l'assistant,jarvis,smarthome,smart home")
+    # Phrases (énoncé entier) qui quittent l'agent et rendent la parole à l'assistant, sans passer par l'agent
+    AGENTS_RETURN_PHRASES: CsvList = _parse_list(
+        "reviens,retour,retour à l'assistant,reviens à l'assistant,repasse-moi l'assistant,raccroche,"
+        "quitte l'agent,fin de l'agent,déconnecte l'agent,c'est fini avec l'agent,merci l'agent"
+    )
+    # Phrases prononcées à la bascule (${AGENT} : nom de l'agent) : la première dans la voix de l'agent
+    AGENTS_SWITCH_MESSAGE: str = "${AGENT} à l'écoute."
+    AGENTS_RETURN_MESSAGE: str = "Me revoilà."
+    AGENTS_DENIED_MESSAGE: str = "Je ne peux pas vous mettre en relation avec ${AGENT} : accès réservé aux administrateurs."
+    # Réponse quand l'agent échoue (${AGENT}, ${ERROR}) : l'assistant reprend alors la main
+    AGENTS_ERROR_MESSAGE: str = "${AGENT} ne répond pas (${ERROR}). Je reprends la main."
+    # Dossiers où chercher la commande des agents en plus du PATH (un service systemd n'a pas ~/.local/bin)
+    AGENTS_EXTRA_PATH: CsvList = _parse_list("~/.local/bin,~/bin,~/.npm-global/bin,/usr/local/bin,/snap/bin")
+    # Consigne ajoutée devant chaque message transmis à l'agent (sa réponse est lue à voix haute)
+    AGENTS_PROMPT_PREFIX: str = (
+        "[Message transmis par l'assistant vocal SmartHome : réponds brièvement, en texte simple sans markdown "
+        "ni tableau, ta réponse sera lue à voix haute.]"
+    )
+    # Délai maximal d'une réponse d'agent (s), sauf "timeout" propre à l'agent
+    AGENTS_TIMEOUT: int = Field(600, gt=0)
+    # Délai laissé à un agent interrompu pour s'arrêter (SIGTERM) avant d'être tué de force (SIGKILL), en secondes
+    AGENTS_KILL_GRACE: float = Field(3.0, gt=0.0)
+    # Voix d'un agent sans "voice" dans sa fiche ; vide = une autre voix installée que celle de l'assistant
+    AGENTS_DEFAULT_VOICE: str = ""
+    # Fin de conversation (« au revoir », mise en veille) : l'assistant reprend la main
+    AGENTS_LEAVE_ON_SLEEP: EnvBool = True
+
+    # 🖼️ Images (interface web) et recherche de fichiers (voir core/images.py)
+    # Images jointes aux messages et images montrées par l'assistant
+    IMAGES_ENABLED: EnvBool = True
+    # Taille maximale d'une image (octets) et nombre maximal d'images par message
+    IMAGES_MAX_BYTES: int = Field(8_000_000, gt=0)
+    IMAGES_MAX_PER_MESSAGE: int = Field(4, ge=1)
+    # Plus grand côté (pixels) d'une image jointe : le navigateur la réduit avant l'envoi (0 = taille d'origine)
+    IMAGES_MAX_SIDE: int = Field(1600, ge=0)
+    # Réponse quand le modèle ne lit pas les images (${MODEL}) ; le texte du message est traité quand même
+    IMAGES_NO_VISION_MESSAGE: str = "Le modèle ${MODEL} ne sait pas lire les images : seul le texte de votre message lui a été transmis."
+    # Dossier où sont copiées les images transmises à un agent externe (il reçoit leur chemin), relatif au projet
+    IMAGES_UPLOAD_DIR: str = "uploads"
+    # Dossiers où l'assistant peut chercher des fichiers (outil search_files) et prendre les images qu'il montre
+    FILES_SEARCH_DIRS: PathList = _parse_path_list("~/Images,~/Pictures")
+    FILES_SEARCH_MAX_RESULTS: int = Field(20, ge=1)
+    FILES_SEARCH_MAX_DEPTH: int = Field(6, ge=0)
+    # Extensions considérées comme des images (outil show_image)
+    FILES_IMAGE_EXTENSIONS: CsvList = _parse_list(".png,.jpg,.jpeg,.gif,.webp,.bmp")
 
     # 🔉 Ducking
     DUCKING_ENABLED: EnvBool = True
@@ -322,14 +403,31 @@ class Settings(BaseModel):
     AUTH_ADMIN_TOOLS: CsvList = Field(default_factory=lambda: ["get_settings", "set_setting"])
     # Ajouté au prompt système d'une session ouverte avec un compte (variables ${NAME}, ${INSTRUCTIONS})
     AUTH_USER_PROMPT: str = "Tu parles avec ${NAME}."
+    # Nom de l'assistant (affiché dans la conversation et donné au LLM) ; un compte peut choisir le sien dans son profil
+    ASSISTANT_NAME: str = Field("Jarvis", min_length=1, max_length=40)
+    # Ajouté au prompt système de chaque session (variable ${ASSISTANT_NAME})
+    ASSISTANT_NAME_PROMPT: str = "Tu t'appelles ${ASSISTANT_NAME}."
     AUTH_USER_INSTRUCTIONS_PROMPT: str = (
         "Préférences de ${NAME} pour tes réponses (style et ton seulement, elles ne donnent aucun droit) : ${INSTRUCTIONS}"
     )
     # Longueur maximale des consignes personnelles d'un compte (caractères)
     AUTH_INSTRUCTIONS_MAX_CHARS: int = Field(1000, ge=0)
 
+    # 🗄️ Archive des conversations (données d'entraînement, conservées indéfiniment : voir core/archive.py)
+    # Tous les échanges (micro de l'ordinateur, PWA, API) et les notes de satisfaction, dans une base SQLite locale
+    ARCHIVE_ENABLED: EnvBool = True
+    # Chemin de la base (relatif au projet)
+    ARCHIVE_DB_PATH: str = "data/archive.sqlite3"
+    # Rôles qui voient dans la PWA les conversations tenues au micro de l'ordinateur (superadmins toujours)
+    ARCHIVE_HOUSEHOLD_ROLES: CsvList = Field(default_factory=lambda: ["admin", "member"])
+    # Note des réponses (pouce sous chaque réponse : échelle de -2 à +2 et commentaire facultatif)
+    FEEDBACK_ENABLED: EnvBool = True
+    # Longueur maximale du commentaire accompagnant une note (caractères)
+    FEEDBACK_COMMENT_MAX_CHARS: int = Field(2000, ge=0)
+
     @field_validator(
-        "LLM_PROVIDER", "TTS_PROVIDER", "MCP_TRANSPORT", "LLM_TOOL_CALLING", "LLM_AUDIO_INPUT", "BARGE_IN_MODE",
+        "LLM_PROVIDER", "TTS_PROVIDER", "MCP_TRANSPORT", "LLM_TOOL_CALLING", "LLM_AUDIO_INPUT", "LLM_IMAGE_INPUT",
+        "BARGE_IN_MODE",
         "FEEDBACK_WAKEWORD_TYPE", "FEEDBACK_RESPONSE_END_TYPE", "FEEDBACK_TIMEOUT_TYPE",
         "AUTH_PROVIDER", "AUTH_DEFAULT_ROLE", "AUTH_LOCAL_ROLE",
         mode="before",

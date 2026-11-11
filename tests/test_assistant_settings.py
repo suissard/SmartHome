@@ -78,7 +78,8 @@ class TestSetSetting(_Base):
 
     def test_invalid_or_forbidden_refused_without_asking(self):
         for args in ("LLM_HISTORY_MESSAGES=beaucoup", "OPENROUTER_API_KEY=sk-pirate", "ACTIONS_CONFIRM_DANGEROUS=false",
-                     "MCP_AUTH_TOKEN=x", "GATEWAY_HOST=0.0.0.0", "pas un réglage", "LLM_HISTORY_MESSAGES=5"):
+                     "MCP_AUTH_TOKEN=x", "GATEWAY_HOST=0.0.0.0", "pas un réglage", "LLM_HISTORY_MESSAGES=5",
+                     "FILES_SEARCH_DIRS=/", "ACTIONS_OPEN_ALLOWED_APPS=bash"):
             with self.subTest(args=args):
                 result = self.call(args)
                 self.assertFalse(result.executed)

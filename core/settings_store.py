@@ -30,6 +30,7 @@ LIVE, RESTART = True, False
 # (titre, [(variable, libellé, appliqué immédiatement ?)])
 EDITABLE_GROUPS: list[tuple[str, list[tuple[str, str, bool]]]] = [
     ("1. Entrée Audio & Détection", [
+        ("WAKEWORD_ENABLED", "Écoute du mot-clé sur l'ordinateur", LIVE),
         ("WAKEWORD_THRESHOLD", "Sensibilité du mot-clé (0-1)", RESTART),
         ("VAD_ENGINE", "Moteur de détection vocale (VAD)", RESTART),
         ("VAD_SPEECH_THRESHOLD", "Probabilité de voix Silero", RESTART),
@@ -55,11 +56,13 @@ EDITABLE_GROUPS: list[tuple[str, list[tuple[str, str, bool]]]] = [
         ("OPENROUTER_STT_MODEL", "Modèle STT OpenRouter", RESTART),
     ]),
     ("3. Cerveau & Intelligence (LLM)", [
+        ("ASSISTANT_NAME", "Nom de l'assistant", LIVE),
         ("LLM_PROVIDER", "Fournisseur LLM", LIVE),
         ("OPENROUTER_API_KEY", "Clé API OpenRouter", LIVE),
         ("OLLAMA_MODEL", "Modèle Ollama", LIVE),
         ("OPENROUTER_MODEL", "Modèle OpenRouter", LIVE),
         ("LLM_AUDIO_INPUT", "Mode direct : envoyer l'audio au LLM", LIVE),
+        ("LLM_IMAGE_INPUT", "Envoyer les images jointes au LLM", LIVE),
         ("LLM_DECISION_MODELS", "Modèles de décision reconnus", LIVE),
         ("LLM_SYSTEM_PROMPT", "Prompt système", LIVE),
         ("LLM_INJECT_DATETIME", "Date et heure dans le prompt", LIVE),
@@ -89,6 +92,20 @@ EDITABLE_GROUPS: list[tuple[str, list[tuple[str, str, bool]]]] = [
         ("ACTIONS_CONFIRM_PROMPT", "Question de confirmation vocale", LIVE),
         # Seul le modèle est modifiable ici : la commande de l'agent reste dans .env (un admin n'est pas superadmin)
         ("ACTIONS_AGENT_MODEL", "Modèle de l'agent créateur de commandes", LIVE),
+        # Agents externes (agents.json) : les rôles autorisés et les commandes restent dans les fichiers
+        ("AGENTS_ENABLED", "Agents externes (Hermes, Claude...)", LIVE),
+        ("AGENTS_DEFAULT_VOICE", "Voix des agents sans voix attitrée", LIVE),
+        ("AGENTS_SWITCH_MESSAGE", "Annonce de l'agent", LIVE),
+        ("AGENTS_RETURN_MESSAGE", "Annonce du retour à l'assistant", LIVE),
+        ("AGENTS_LEAVE_ON_SLEEP", "Retour à l'assistant à la mise en veille", LIVE),
+        ("AGENTS_TIMEOUT", "Délai maximal d'une réponse d'agent (s)", LIVE),
+        # Images de l'interface web et dossiers de recherche (l'assistant ne peut pas modifier ces dossiers lui-même)
+        ("IMAGES_ENABLED", "Images dans la conversation", LIVE),
+        ("IMAGES_MAX_BYTES", "Taille maximale d'une image (octets)", LIVE),
+        ("IMAGES_NO_VISION_MESSAGE", "Alerte : modèle sans vision", LIVE),
+        ("FILES_SEARCH_DIRS", "Dossiers où l'assistant peut chercher", LIVE),
+        ("FILES_SEARCH_MAX_RESULTS", "Résultats de recherche max.", LIVE),
+        ("FILES_SEARCH_MAX_DEPTH", "Profondeur de recherche max.", LIVE),
     ]),
     ("5. Synthèse Vocale (TTS)", [
         ("TTS_PROVIDER", "Moteur de voix", RESTART),
@@ -130,6 +147,7 @@ def _stt_engine(name: str) -> list[dict]:
 
 VISIBLE_WHEN: dict[str, list[dict]] = {
     # 1. Entrée Audio & Détection
+    "WAKEWORD_THRESHOLD": [{"WAKEWORD_ENABLED": [True]}],
     "VAD_SPEECH_THRESHOLD": [{"VAD_ENGINE": ["silero"]}],
     "VOICE_THRESHOLD": [{"VAD_ENGINE": ["energy"]}],
     "BARGE_IN_VOICE_THRESHOLD": [{"BARGE_IN_MODE": ["voice"]}],
@@ -176,6 +194,10 @@ VISIBLE_WHEN: dict[str, list[dict]] = {
     "ACTIONS_CONFIRM_DANGEROUS": [{"ACTIONS_ENABLED": [True]}],
     "ACTIONS_CONFIRM_TIMEOUT": [{"ACTIONS_ENABLED": [True], "ACTIONS_CONFIRM_DANGEROUS": [True]}],
     "ACTIONS_CONFIRM_PROMPT": [{"ACTIONS_ENABLED": [True], "ACTIONS_CONFIRM_DANGEROUS": [True]}],
+    **{name: [{"AGENTS_ENABLED": [True]}] for name in (
+        "AGENTS_DEFAULT_VOICE", "AGENTS_SWITCH_MESSAGE", "AGENTS_RETURN_MESSAGE", "AGENTS_LEAVE_ON_SLEEP",
+        "AGENTS_TIMEOUT")},
+    **{name: [{"IMAGES_ENABLED": [True]}] for name in ("IMAGES_MAX_BYTES", "IMAGES_NO_VISION_MESSAGE")},
 
     # 5. TTS
     "TTS_VOICE": [{"TTS_PROVIDER": ["piper"]}],

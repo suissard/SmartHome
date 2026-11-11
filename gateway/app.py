@@ -3,27 +3,35 @@ Passerelle réseau de SmartHome : permet de piloter l'assistant depuis un autre 
 
 Routes :
 - GET  /health   : état (sans authentification)
-- POST /api/ask  : {"text" | "audio" (WAV base64), "session"?, "speak"?} -> réponse JSON (sans confirmation possible :
-                   les actions dangereuses sont refusées)
+- POST /api/ask  : {"text" | "audio" (WAV base64), "images"?, "session"?, "speak"?} -> réponse JSON (sans confirmation
+                   possible : les actions dangereuses sont refusées)
 - WS   /ws       : session interactive (streaming, outils, confirmations). Protocole JSON :
     client -> serveur : {"type": "auth", "token"?, "session"?}  (premier message si pas d'en-tête Authorization)
                         Comptes (AUTH_PROVIDER, voir core/users.py) : {"type": "auth", "identity", "password", "session"?}
                         ou {"type": "auth", "user_token", "session"?} ; le jeton maître ("token") donne l'accès administrateur
                         {"type": "text", "text", "speak"?} | {"type": "audio", "data": <WAV base64>, "speak"?}
                         (avec "turn"? : identifiant de l'échange, repris dans ses événements et "done" ; "forget"? : échanges
-                        à retirer d'abord de l'historique, pour relancer à partir d'un message)
+                        à retirer d'abord de l'historique, pour relancer à partir d'un message ; "images"? :
+                        [{"data": base64 | data URL, "name"?}] jointes au message, voir core/images.py)
                         {"type": "forget", "turns", "role"?} | {"type": "edit_answer", "turn", "text", "forget"?}
                         {"type": "confirm_response", "id", "accepted": bool} | {"type": "stop"} | {"type": "reset"}
+                        | {"type": "set_agent", "agent": nom | null} (relie la conversation à un agent externe, voir
+                        core/agents.py ; null : retour à l'assistant) -> {"type": "agent_changed", "agent": {...} | null}
+                        | {"type": "feedback", "conversation_id", "turn", "rating": -2..2, "comment"?}
+                          -> {"type": "feedback_saved", "conversation_id", "turn", "rating", "comment"} | {"type": "feedback_error", "message"}
+                        | {"type": "load_conversation", "conversation_id", "source": "local"} (conversation du micro, lecture
+                          seule, ARCHIVE_HOUSEHOLD_ROLES) ; {"type": "history_updated", "conversation_id", "source"} à chaque échange au micro
                         | {"type": "ping"} | {"type": "listening", "active": bool} (micro du client ouvert / fermé :
                         le micro de l'ordinateur ignore alors le mot-clé et repasse en veille, voir core/remote_voice.py)
-                        Profil du compte connecté : {"type": "update_profile", "name", "instructions", "voice"?}
+                        Profil du compte connecté : {"type": "update_profile", "name", "instructions", "voice"?, "assistant_name"?}
                         | {"type": "preview_voice", "voice"} (phrase d'essai renvoyée en {"type": "voice_preview", "data"})
                         Paramètres (voir core/settings_store.py) : {"type": "get_settings"} | {"type": "list_models", "provider"?: nom}
                         | {"type": "update_settings", "values": {VARIABLE: valeur}} | {"type": "restart"}
     serveur -> client : {"type": "ready", "session", "user", "tools", "audio", "confirm_timeout", "llm"} puis les événements du cœur
                         ("user" : {"id", "name", "role", "admin", "token"?} ; "token" = jeton du compte à réutiliser,
                         refus : {"type": "error", "message", "accounts"} puis fermeture 4401)
-                        (transcript, token, tool, confirm_request, response, interrupted, error), la voix si speak :
+                        (transcript, token, tool, confirm_request, response, interrupted, error, warning ;
+                        image : {"name", "mime", "data", "path"} montrée par l'assistant, outil show_image), la voix si speak :
                         {"type": "audio_chunk", "seq", "format": "wav", "data"} phrase par phrase (TTS_STREAMING)
                         ou {"type": "audio", ...} en un bloc, et {"type": "done"} à la fin de chaque demande.
                         Paramètres : {"type": "settings", "groups", "llm"} | {"type": "models", "models", "error"?}
@@ -31,6 +39,11 @@ Routes :
                         | {"type": "profile_saved", "user"} | {"type": "profile_error", "message"}
                         ; "ready.history" : [{role, content, turn?}] (conversation en cours, rechargée depuis
                         l'historique du compte si la session est neuve)
+                        ; "ready.agents" / "ready.agent" : agents externes permis et agent relié (les réponses d'un agent
+                        portent "agent" dans l'événement "response")
+                        ; "ready", "profile_saved" et "settings_changed" portent "assistant" ({"name", "default_name"} :
+                        nom affiché sur les bulles) et "wakeword" ({"enabled", "available"} : écoute du mot-clé
+                        par le micro de l'ordinateur, coupée avec update_settings {"WAKEWORD_ENABLED": false})
                         ; "settings_changed" est diffusé à tous les clients après une modification,
                         "restarting" juste avant un redémarrage demandé par un client.
                         Paramètres, liste des modèles et redémarrage sont réservés aux rôles AUTH_ADMIN_ROLES.
@@ -62,10 +75,12 @@ from audio.confirm import classify_confirmation
 from core.assistant import AssistantCore, Reply, to_wav_bytes
 from core import restart, settings_store
 from core.config import Settings
+from core.images import ImageError, decode_uploads
 from core.security import (
     BearerTokenMiddleware, LocalOnlyMiddleware, SecurityHeadersMiddleware, bearer_from_headers, token_matches,
 )
-from core.users import AuthError, DirectoryUnavailable, User, admin_user, create_directory, is_admin
+from core.users import (AuthError, DirectoryUnavailable, User, admin_user, assistant_name, create_directory,
+                        is_admin)
 from core.version import check_version, local_version_info, pull_update
 
 # Interface web (PWA) servie à la racine : publique, elle ne contient aucun secret (le jeton est saisi par l'utilisateur)
@@ -79,7 +94,8 @@ ADMIN_ONLY_MESSAGE = "Réservé aux administrateurs."
 
 
 def _reply_to_dict(reply: Reply) -> dict:
-    data = {"session": reply.session_id, "transcript": reply.transcript, "text": reply.text, "tools": reply.tools}
+    data = {"session": reply.session_id, "transcript": reply.transcript, "text": reply.text, "tools": reply.tools,
+            "images": reply.images}
     if reply.audio_wav:
         data["audio"] = {"format": "wav", "data": base64.b64encode(reply.audio_wav).decode()}
     return data
@@ -121,12 +137,18 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
             audio = base64.b64decode(body["audio"]) if body.get("audio") else None
         except Exception:
             return JSONResponse({"error": "Corps JSON invalide."}, status_code=400)
-        if not body.get("text") and audio is None:
-            return JSONResponse({"error": "Champ 'text' ou 'audio' requis."}, status_code=400)
+        try:
+            images = decode_uploads(body.get("images"), core.settings)
+        except ImageError as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+        if not body.get("text") and audio is None and not images:
+            return JSONResponse({"error": "Champ 'text', 'audio' ou 'images' requis."}, status_code=400)
         # Seul le jeton maître protège /api/ask : c'est l'administrateur
-        session = core.open_session(body.get("session"), user=admin_user(core.settings))
+        admin = admin_user(core.settings)
+        session = core.open_session(body.get("session"), user=admin)
         reply = await asyncio.to_thread(
-            core.respond, session.id, text=body.get("text"), audio_wav=audio, synthesize=bool(body.get("speak"))
+            core.respond, session.id, text=body.get("text"), audio_wav=audio, synthesize=bool(body.get("speak")),
+            images=images, user=admin,
         )
         return JSONResponse(_reply_to_dict(reply))
 
@@ -194,14 +216,27 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
                 pending.pop(request_id, None)
 
         session_id = hello.get("session") or ws.query_params.get("session")
-        session = core.open_session(session_id, confirm=confirm, user=user)
+        session = core.open_session(session_id, confirm=confirm, user=user, attach=True)
         client_ip = getattr(ws.client, "host", ws.client[0] if isinstance(ws.client, (tuple, list)) else "inconnu") if ws.client else "inconnu"
         print(f"🔌 [GATEWAY {session.id}] {user.name} (rôle {user.role}) connecté depuis {client_ip}")
         unsubscribe = core.events.subscribe(lambda e: push(e.to_dict()), session_id=session.id)
         # Modifications de paramètres faites depuis un autre appareil : chaque client recharge son formulaire
-        unsubscribe_settings = core.events.subscribe(
-            lambda e: push(e.to_dict()) if e.type in ("settings_changed", "restarting") else None
-        )
+        # Nom de l'assistant et écoute du mot-clé : état affiché en permanence par la PWA, renvoyé à chaque changement
+        def public_state() -> dict:
+            s = core.settings
+            return {
+                "assistant": {"name": assistant_name(user, s), "default_name": s.ASSISTANT_NAME},
+                "wakeword": {"enabled": s.WAKEWORD_ENABLED, "available": core.local_microphone},
+            }
+
+        def on_global(e):
+            if e.type in ("settings_changed", "restarting"):
+                push({**e.to_dict(), **(public_state() if e.type == "settings_changed" else {})})
+            elif e.type == "history_updated" and e.session_id != session.id and core.sees_household(user):
+                # Échange au micro de l'ordinateur : la liste des conversations (et la conversation affichée) suit
+                push(e.to_dict())
+
+        unsubscribe_settings = core.events.subscribe(on_global)
 
         async def sender():
             while True:
@@ -216,15 +251,17 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
             def send_chunk(samples, sample_rate):
                 push({"type": "audio_chunk", "seq": next(seq), "format": "wav",
                       "data": base64.b64encode(to_wav_bytes(samples, sample_rate)).decode()})
-            return SpeechPipeline(core.tts, sink=send_chunk, voice=core.session_voice(session.id))
+            # Voix résolue à chaque phrase : un agent externe relié en cours de réponse parle avec sa propre voix
+            return SpeechPipeline(core.tts, sink=send_chunk, voice=lambda: core.session_voice(session.id))
 
-        def run_request(text, audio, speak, turn, forget) -> Reply:
+        def run_request(text, audio, speak, turn, forget, images=()) -> Reply:
             speech = streamed_speech() if speak and core.settings.TTS_STREAMING else None
             if speech:
                 speeches.add(speech)
             try:
                 reply = core.respond(session.id, text=text, audio_wav=audio, synthesize=speak and not speech,
-                                     on_sentence=speech.say if speech else None, turn=turn, forget=forget)
+                                     on_sentence=speech.say if speech else None, turn=turn, forget=forget,
+                                     images=images, user=user)
                 if speech:
                     speech.wait()
                 return reply
@@ -238,8 +275,9 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
             tag = {"turn": turn} if turn else {}
             try:
                 audio = base64.b64decode(message["data"]) if message["type"] == "audio" else None
+                images = decode_uploads(message.get("images"), core.settings)
                 reply = await asyncio.to_thread(run_request, message.get("text"), audio, bool(message.get("speak")),
-                                                turn, message.get("forget") or ())
+                                                turn, message.get("forget") or (), images)
                 if reply.audio_wav:
                     push({"type": "audio", "format": "wav", "data": base64.b64encode(reply.audio_wav).decode()})
             except Exception as e:
@@ -265,6 +303,12 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
                 if kind == "list_conversations":
                     convs = await asyncio.to_thread(core.list_conversations, session.id)
                     push({"type": "conversations_list", "conversations": convs})
+                elif kind == "load_conversation" and message.get("source") == "local":
+                    # Conversation tenue au micro de l'ordinateur : affichée en lecture seule, la session n'en change pas
+                    cid = str(message.get("conversation_id", "")).strip()
+                    msgs = await asyncio.to_thread(core.household_conversation, session.id, cid)
+                    push({"type": "conversation_loaded", "conversation_id": cid, "history": msgs,
+                          "source": "local", "readonly": True})
                 elif kind == "load_conversation":
                     cid = str(message.get("conversation_id", "")).strip()
                     client_msgs = message.get("messages")
@@ -277,6 +321,18 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
             except Exception as e:
                 push({"type": "error", "message": f"Erreur conversation : {e}"})
 
+        async def handle_feedback(message: dict):
+            """Note d'une réponse (-2 à +2) et commentaire facultatif, enregistrés dans l'archive."""
+            try:
+                saved = await asyncio.to_thread(
+                    core.set_feedback, session.id, str(message.get("conversation_id") or ""),
+                    str(message.get("turn") or ""), message.get("rating"), str(message.get("comment") or ""))
+                push({"type": "feedback_saved", **saved})
+            except (ValueError, PermissionError) as e:
+                push({"type": "feedback_error", "message": str(e), "turn": message.get("turn")})
+            except Exception as e:
+                push({"type": "feedback_error", "message": f"Note non enregistrée : {e}", "turn": message.get("turn")})
+
         async def handle_profile(message: dict):
             """Prénom et consignes du compte, enregistrés dans l'annuaire avec le jeton du compte lui-même."""
             nonlocal user
@@ -288,12 +344,15 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
                 push({"type": "profile_error", "message": f"Voix « {voice} » non installée sur cette machine."})
                 return
             try:
+                # Nom de l'assistant : seulement s'il est envoyé (sinon inchangé)
+                extra = {"assistant_name": str(message.get("assistant_name") or "")} \
+                    if "assistant_name" in message else {}
                 updated = await asyncio.to_thread(directory.update_profile, user, message.get("name", ""),
-                                                  message.get("instructions", ""), voice)
+                                                  message.get("instructions", ""), voice, **extra)
                 core.set_session_user(session.id, updated)
                 user = updated
                 print(f"👤 [GATEWAY {session.id}] Profil de {user.name} mis à jour")
-                push({"type": "profile_saved", "user": user.public(core.settings)})
+                push({"type": "profile_saved", "user": user.public(core.settings), **public_state()})
             except (ValueError, AuthError, DirectoryUnavailable) as e:
                 push({"type": "profile_error", "message": str(e)})
             except Exception as e:
@@ -405,6 +464,37 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
                 res = await asyncio.to_thread(pull_update)
                 push({"type": "update_applied", **res})
 
+        async def answer_confirmation(message: dict, kind: str) -> bool:
+            """« Oui » / « non » écrit ou dit pendant une confirmation. False : plus de question en attente,
+            le message est traité normalement."""
+            turn = message.get("turn")
+            active_id, future = next(iter(pending.items()), (None, None))
+            if future is None or future.done():
+                return False
+            answer = (message.get("text") or "").strip()
+            if kind == "audio":
+                try:
+                    answer = await asyncio.to_thread(core.transcribe_audio, base64.b64decode(message.get("data", "")))
+                except Exception as e:
+                    print(f"⚠️ [GATEWAY {session.id}] Erreur confirmation audio : {e}")
+                    push({"type": "done", "turn": turn})
+                    return True
+                print(f"🎙️ [GATEWAY {session.id}] Audio transcrit pendant confirmation : « {answer} »")
+                push({"type": "transcript", "text": answer, "turn": turn})
+            s = core.settings
+            decision = classify_confirmation(answer, s.ACTIONS_CONFIRM_WORDS, s.ACTIONS_CANCEL_WORDS)
+            source = "à la voix" if kind == "audio" else "par texte"
+            if decision is None:
+                print(f"❓ [GATEWAY {session.id}] Réponse non interprétée comme confirmation {source} (« {answer} »)")
+                push({"type": "toast", "message": f"Non compris (« {answer} »). Dites « Oui » ou « Non »."})
+            elif not future.done():
+                print(f"🗣️ [GATEWAY {session.id}] Confirmation résolue {source} (« {answer} ») -> "
+                      f"{'Acceptée' if decision else 'Refusée'}")
+                future.set_result(decision)
+                push({"type": "confirm_dismiss", "id": active_id, "accepted": decision})
+            push({"type": "done", "turn": turn})
+            return True
+
         # Conversation en cours (rechargée depuis l'historique du compte pour une session neuve) : la PWA la réaffiche
         try:
             history = await asyncio.to_thread(core.restore_history, session.id)
@@ -434,7 +524,17 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
                 "max_speech_duration": s.MAX_SPEECH_DURATION,
             },
             "confirm_timeout": s.GATEWAY_CONFIRM_TIMEOUT,
+            # Images jointes : le navigateur les réduit avant l'envoi (plus grand côté max_side, en pixels)
+            "images": {"enabled": s.IMAGES_ENABLED, "max_bytes": s.IMAGES_MAX_BYTES,
+                       "max_per_message": s.IMAGES_MAX_PER_MESSAGE, "max_side": s.IMAGES_MAX_SIDE},
             "llm": core.model_info(),
+            # Agents externes que ce compte peut rejoindre, et celui relié à la session (None : l'assistant)
+            "agents": core.available_agents(session.id),
+            "agent": core.agent_info(session.id),
+            # Pouce sous les réponses (note de -2 à +2, commentaire) et conversations du micro dans le tiroir
+            "feedback": {"enabled": core.feedback_available(), "comment_max": s.FEEDBACK_COMMENT_MAX_CHARS},
+            "household": core.sees_household(user),
+            **public_state(),
         })
         sender_task = asyncio.create_task(sender())
         tasks: set[asyncio.Task] = set()
@@ -456,52 +556,13 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
                         if future and not future.done():
                             future.set_result(accepted)
                         continue
-
-                    if kind == "text":
-                        user_text = (message.get("text") or "").strip()
-                        decision = classify_confirmation(user_text, s.ACTIONS_CONFIRM_WORDS, s.ACTIONS_CANCEL_WORDS)
-                        if decision is not None:
-                            active_id = next(iter(pending.keys()))
-                            future = pending[active_id]
-                            if not future.done():
-                                print(f"🗣️ [GATEWAY {session.id}] Confirmation résolue par texte (« {user_text} ») -> {'Acceptée' if decision else 'Refusée'}")
-                                future.set_result(decision)
-                                push({"type": "confirm_dismiss", "id": active_id, "accepted": decision})
-                                push({"type": "done", "turn": message.get("turn")})
-                                continue
-                        else:
-                            print(f"❓ [GATEWAY {session.id}] Texte non interprété comme confirmation (« {user_text} »)")
-                            push({"type": "toast", "message": "Réponse non comprise. Dites « Oui » ou « Non »."})
-                            push({"type": "done", "turn": message.get("turn")})
-                            continue
-
-                    if kind == "audio":
-                        try:
-                            audio_raw = base64.b64decode(message.get("data", ""))
-                            transcribed = await asyncio.to_thread(core.transcribe_audio, audio_raw)
-                            print(f"🎙️ [GATEWAY {session.id}] Audio transcrit pendant confirmation : « {transcribed} »")
-                            push({"type": "transcript", "text": transcribed, "turn": message.get("turn")})
-                            decision = classify_confirmation(transcribed, s.ACTIONS_CONFIRM_WORDS, s.ACTIONS_CANCEL_WORDS)
-                            if decision is not None:
-                                active_id = next(iter(pending.keys()))
-                                future = pending[active_id]
-                                if not future.done():
-                                    print(f"🗣️ [GATEWAY {session.id}] Confirmation résolue à la voix (« {transcribed} ») -> {'Acceptée' if decision else 'Refusée'}")
-                                    future.set_result(decision)
-                                    push({"type": "confirm_dismiss", "id": active_id, "accepted": decision})
-                                    push({"type": "done", "turn": message.get("turn")})
-                                    continue
-                            else:
-                                print(f"❓ [GATEWAY {session.id}] Voix non interprétée comme confirmation (« {transcribed} »)")
-                                push({"type": "toast", "message": f"Non compris (« {transcribed} »). Dites « Oui » ou « Non »."})
-                                push({"type": "done", "turn": message.get("turn")})
-                                continue
-                        except Exception as e:
-                            print(f"⚠️ [GATEWAY {session.id}] Erreur confirmation audio : {e}")
-                            push({"type": "done", "turn": message.get("turn")})
-                            continue
+                    # Réponse écrite ou dite pendant une question de confirmation : jamais un nouveau tour concurrent
+                    if kind in ("text", "audio") and await answer_confirmation(message, kind):
+                        continue
                 if kind in ("text", "audio"):
                     txt_prev = f"texte='{message.get('text')}'" if kind == "text" else f"audio={len(message.get('data',''))}b"
+                    if message.get("images"):
+                        txt_prev += f", {len(message['images'])} image(s)"
                     print(f"📩 [GATEWAY {session.id}] Message entrant : {kind} ({txt_prev})")
                     task = asyncio.create_task(handle(message))
                     tasks.add(task)
@@ -522,6 +583,10 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
                     push({"type": "reset_done", "conversation_id": session.conversation_id})
                 elif kind in ("list_conversations", "load_conversation", "delete_conversation"):
                     task = asyncio.create_task(handle_conversations(message))
+                    tasks.add(task)
+                    task.add_done_callback(tasks.discard)
+                elif kind == "feedback":
+                    task = asyncio.create_task(handle_feedback(message))
                     tasks.add(task)
                     task.add_done_callback(tasks.discard)
                 elif kind in ("forget", "edit_answer"):
@@ -551,6 +616,12 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
                     core.events.emit("restarting", None)
                     # Laisse partir l'annonce aux clients avant l'arrêt
                     asyncio.get_running_loop().call_later(RESTART_DELAY_SECONDS, restart.request_restart)
+                elif kind == "set_agent":
+                    # Choix depuis la pastille de la PWA (null : retour à l'assistant)
+                    try:
+                        core.set_agent(session.id, message.get("agent") or None)
+                    except ValueError as e:
+                        push({"type": "toast", "message": str(e), "kind": "warn"})
                 elif kind == "listening":
                     mic_open = bool(message.get("active", True))
                     core.events.emit("remote_listening", session.id, active=mic_open)

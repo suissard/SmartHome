@@ -41,7 +41,10 @@ const ui = {
   updateRemoteSha: $("update-remote-sha"), updateRemoteMsg: $("update-remote-msg"),
   updateStatusMsg: $("update-status-msg"), updateApplyBtn: $("update-apply-btn"),
   updateCheckBtn: $("update-check-btn"),
-  profile: $("profile"), profileName: $("profile-name"),
+  profile: $("profile"), profileName: $("profile-name"), profileAssistantName: $("profile-assistant-name"),
+  wakewordCard: $("wakeword-card"), wakewordToggle: $("wakeword-toggle"), wakewordState: $("wakeword-state"),
+  wakewordHint: $("wakeword-hint"), wakewordPill: $("wakeword-pill"),
+  agentCard: $("agent-card"), agentCardState: $("agent-card-state"), agentChoices: $("agent-choices"),
   profileInstructions: $("profile-instructions"), profileSave: $("profile-save"), profileMsg: $("profile-msg"),
   profileVoiceField: $("profile-voice-field"), profileVoice: $("profile-voice"), profileVoicePlay: $("profile-voice-play"),
   adminDialog: $("admin-dialog"), adminCloseBtn: $("admin-close-btn"), adminFooterClose: $("admin-footer-close"),
@@ -56,8 +59,11 @@ const ui = {
   settings: $("settings"), settingsLoginBtn: $("settings-login-btn"), logoutBtn: $("logout-btn"),
   speak: $("speak"), autostop: $("autostop"), sessionId: $("session-id"),
   confirm: $("confirm"), confirmQuestion: $("confirm-question"), confirmBar: $("confirm-bar"), confirmTimerText: $("confirm-timer-text"), confirmMicBtn: $("confirm-mic-btn"), confirmVoiceStatus: $("confirm-voice-status"),
-  modelBadge: $("model-badge"), modelCurrent: $("model-current"), modelOllama: $("model-ollama"),
+  modelBadge: $("model-badge"), modelBadgeLabel: $("model-badge-label"), agentMenu: $("agent-menu"), modelCurrent: $("model-current"), modelOllama: $("model-ollama"),
   modelSelect: $("model-select"), modelDecision: $("model-decision"), modelMsg: $("model-msg"),
+  attachBtn: $("attach-btn"), attachInput: $("attach-input"), attachments: $("attachments"),
+  attachList: $("attachments-list"), attachNote: $("attachments-note"),
+  imageViewer: $("image-viewer"), imageViewerImg: $("image-viewer-img"), imageViewerCaption: $("image-viewer-caption"),
   advanced: $("advanced"), advancedForm: $("advanced-form"), advancedFields: $("advanced-fields"), advancedMsg: $("advanced-msg"), advancedBack: $("advanced-back"),
 };
 
@@ -89,6 +95,10 @@ const store = {
 
 const state = {
   ws: null,
+  agent: null,             // agent externe relié à la conversation ({name, label, color}) ; null : l'assistant
+  agents: [],              // agents externes que ce compte peut rejoindre
+  attachments: [],         // images jointes au prochain message : [{id, name, mime, data (base64), url}]
+  imageConfig: { enabled: true, max_bytes: 8000000, max_per_message: 4, max_side: 1600 },
   ready: false,
   accounts: false,         // la passerelle a des comptes utilisateurs (AUTH_PROVIDER)
   admin: true,             // l'utilisateur connecté peut modifier les paramètres et redémarrer
@@ -111,6 +121,8 @@ const state = {
   audioGeneration: 0,      // incrémenté à chaque arrêt : les phrases encore en décodage sont ignorées
   llm: null,               // modèle actif : {provider, model, decision}
   restarting: false,       // redémarrage demandé : reconnexion en cours
+  assistantName: "Assistant", // nom de l'assistant affiché sur ses bulles (ready.assistant)
+  wakeword: { enabled: true, available: false },  // écoute du mot-clé par le micro de l'ordinateur
   settings: null,          // groupes de paramètres du serveur (message "settings")
   modelsBy: {},            // modèles par fournisseur (complétion des champs de modèle)
   models: [],              // modèles du fournisseur : [{name, capabilities, size}]
@@ -128,7 +140,14 @@ const state = {
   pocketbaseUrl: "http://127.0.0.1:8090", // URL de PocketBase
   pbUsers: [],             // liste des comptes PocketBase (superadmin)
   versionInfo: null,       // informations de version locale vs dépôt GitHub
+  feedback: { enabled: false, comment_max: 2000 }, // pouce sous les réponses (ready.feedback)
+  household: false,        // ce compte voit les conversations tenues au micro de l'ordinateur
+  readonlyConversation: null, // conversation du micro affichée (lecture seule) ; null : conversation de la session
 };
+
+// Éléments du fil de conversation (effacés ensemble au changement de conversation)
+const LOG_ITEMS = ".msg, .tool, .tool-pastille, .feedback, .readonly-banner";
+const HOUSEHOLD_AUTHOR = "Foyer (micro)";
 
 // ---- Synchronisation de la hauteur visible (évite que la barre de saisie en bas sorte de l'écran) ----
 function syncViewportHeight() {
@@ -164,16 +183,93 @@ function scrollDown(force = false) {
   }
 }
 
+// Bulle « en train d'écrire » (trois points animés) : visible tant qu'une demande est en cours
+// et qu'aucun texte de réponse n'arrive, toujours en bas du fil
+let typingIndicator = null;
+function updateTypingIndicator() {
+  const streaming = state.botBubble && state.botBubble.textContent.trim();
+  const show = state.ready && state.busy > 0 && !streaming;
+  if (!show) {
+    typingIndicator?.remove();
+    return;
+  }
+  if (!typingIndicator) {
+    typingIndicator = document.createElement("div");
+    typingIndicator.className = "typing-indicator";
+    typingIndicator.setAttribute("role", "status");
+    typingIndicator.setAttribute("aria-label", "L'assistant réfléchit");
+    typingIndicator.innerHTML = "<span></span><span></span><span></span>";
+  }
+  if (state.agent) typingIndicator.style.setProperty("--bubble-agent-color", state.agent.color);
+  else typingIndicator.style.removeProperty("--bubble-agent-color");
+  if (ui.log.lastElementChild !== typingIndicator) {
+    ui.log.append(typingIndicator);
+    scrollDown();
+  }
+}
+
 function addBubble(kind, text) {
   ui.empty.hidden = true;
   const el = document.createElement("div");
   el.className = `msg ${kind}`;
   el.textContent = text;
+  // Nom de l'auteur affiché au-dessus de la bulle (pseudo-élément : survit aux mises à jour du texte)
+  if (kind.startsWith("user")) el.dataset.author = userDisplayName();
+  else if (kind.startsWith("bot")) el.dataset.author = state.assistantName;
+  if (kind.startsWith("bot") && state.agent) markAgentBubble(el, state.agent);
   el.tabIndex = 0;  // touche « menu » du clavier : voir l'événement contextmenu
   if (state.eventTurn) el.dataset.turn = state.eventTurn;
   ui.log.append(el);
   scrollDown(true);
   return el;
+}
+
+function userDisplayName() {
+  const user = state.user;
+  return user ? (user.name || user.email || "Vous") : "Vous";
+}
+
+// Noms de l'assistant et de l'utilisateur : bulles déjà affichées mises à jour (profil ou réglage modifié)
+function refreshAuthors() {
+  for (const el of ui.log.querySelectorAll(".msg.user:not([data-household])")) el.dataset.author = userDisplayName();
+  for (const el of ui.log.querySelectorAll(".msg.bot")) el.dataset.author = state.assistantName;
+}
+
+// État public envoyé par le serveur (ready, profile_saved, settings_changed) : nom de l'assistant, écoute du mot-clé
+function applyPublicState(event) {
+  if (event.assistant?.name) state.assistantName = event.assistant.name;
+  if (ui.profileAssistantName && event.assistant) ui.profileAssistantName.placeholder = event.assistant.default_name || "";
+  if (event.wakeword) state.wakeword = event.wakeword;
+  refreshAuthors();
+  renderWakeword();
+}
+
+function renderWakeword() {
+  const { enabled, available } = state.wakeword;
+  if (ui.wakewordToggle) {
+    ui.wakewordToggle.checked = Boolean(enabled);
+    ui.wakewordToggle.disabled = !state.admin;
+  }
+  if (ui.wakewordCard) ui.wakewordCard.dataset.state = enabled ? "on" : "off";
+  if (ui.wakewordState) ui.wakewordState.textContent = enabled
+    ? `Le micro de l'ordinateur attend « ${state.assistantName} »`
+    : "Coupé : le mot-clé n'est plus détecté sur l'ordinateur";
+  if (ui.wakewordHint) {
+    const hints = [];
+    if (!available) hints.push("SmartHome tourne sans micro local (passerelle seule) : ce réglage s'appliquera au prochain lancement avec micro.");
+    if (!state.admin) hints.push("Réservé aux administrateurs.");
+    ui.wakewordHint.textContent = hints.join(" ");
+    ui.wakewordHint.hidden = !hints.length;
+  }
+  // Pastille dans la barre du haut : visible seulement quand l'écoute est coupée
+  if (ui.wakewordPill) ui.wakewordPill.hidden = Boolean(enabled) || !state.ready;
+}
+
+function setWakeword(enabled) {
+  if (!state.admin) return;
+  state.wakeword = { ...state.wakeword, enabled };
+  renderWakeword();
+  send({ type: "update_settings", values: { WAKEWORD_ENABLED: enabled } });
 }
 
 function escapeHtml(str) {
@@ -211,6 +307,8 @@ const TOOL_ICONS = {
   system_info: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7 14h-2v-4h2v4zm0-6h-2V7h2v4z"/></svg>`,
   audio_output: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 0 0-9 9v7c0 1.66 1.34 3 3 3h3v-8H5v-2c0-3.87 3.13-7 7-7s7 3.13 7 7v2h-4v8h3c1.66 0 3-1.34 3-3v-7a9 9 0 0 0-9-9z"/></svg>`,
   sleep: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12.3 2a10 10 0 0 0-1.9 20 10.04 10.04 0 0 0 9.6-7.2A8 8 0 0 1 12.3 2z"/></svg>`,
+  search_files: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>`,
+  show_image: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/></svg>`,
   notify: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.89 2 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/></svg>`,
   default: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>`
 };
@@ -304,6 +402,16 @@ function formatActionLabel(name, args = {}, executed = true) {
       label = s ? `Minuteur : ${s} s` : "Minuteur programmé";
       break;
     }
+    case "search_files": {
+      const q = args?.args || rawArg;
+      label = q ? `Recherche de fichiers : « ${q} »` : "Recherche de fichiers";
+      break;
+    }
+    case "show_image": {
+      const path = args?.args || rawArg;
+      label = path ? `Image montrée : ${path.split("/").pop()}` : "Image montrée";
+      break;
+    }
     case "audio_output": {
       const sink = args?.sink || rawArg;
       label = sink ? `Sortie audio : ${sink}` : "Sortie audio modifiée";
@@ -371,7 +479,7 @@ function isSpeaking() {
 // Bouton principal : arrêter l'écoute, envoyer le texte saisi, sinon parler
 function updateMainButton() {
   const recording = Boolean(state.recorder);
-  const mode = recording ? "recording" : ui.text.value.trim() ? "send" : "idle";
+  const mode = recording ? "recording" : ui.text.value.trim() || state.attachments.length ? "send" : "idle";
   ui.mic.dataset.state = mode;
   ui.mic.setAttribute("aria-label", { recording: "Arrêter l'écoute", send: "Envoyer", idle: "Parler" }[mode]);
   ui.mic.setAttribute("aria-pressed", String(recording));
@@ -405,6 +513,10 @@ function refreshControls() {
   const enabled = state.ready;
   ui.text.disabled = !enabled;
   ui.mic.disabled = !enabled;
+  if (ui.attachBtn) {
+    ui.attachBtn.disabled = !enabled;
+    ui.attachBtn.hidden = state.imageConfig.enabled === false;
+  }
   if (ui.loginBtn) ui.loginBtn.hidden = enabled;
   if (ui.connPill) ui.connPill.hidden = !enabled;
   if (ui.adminBtn) ui.adminBtn.hidden = !(enabled && state.superadmin);
@@ -477,12 +589,14 @@ function connect() {
     state.eventTurn = event.turn ?? null;
     handleEvent(event);
     state.eventTurn = null;
+    updateTypingIndicator();
   });
 
   ws.addEventListener("close", (e) => {
     state.ready = false;
     state.busy = 0;
     refreshControls();
+    renderAgentChoices();
     if (e.code === 4401) {
       setStatus("offline", "Connexion requise");
       // Le jeton du compte a expiré ou a été révoqué : il ne sert plus à rien
@@ -524,7 +638,12 @@ function handleEvent(event) {
       state.audioConfig = event.audio;
       state.confirmTimeout = event.confirm_timeout || 20;
       state.tools = event.tools || [];
+      if (event.images) state.imageConfig = event.images;
       if (event.pocketbase_url) state.pocketbaseUrl = event.pocketbase_url;
+      state.feedback = { enabled: false, comment_max: 2000, ...(event.feedback || {}) };
+      state.household = Boolean(event.household);
+      state.readonlyConversation = null;
+      if (!state.household) state.conversations = state.conversations.filter((c) => c.source !== "local");
       store.set("session", event.session);
       ui.sessionId.textContent = event.session;
       if (event.conversation_id) state.currentConversationId = event.conversation_id;
@@ -532,8 +651,12 @@ function handleEvent(event) {
       if (event.version) applyVersionInfo(event.version);
       if (event.profile_max) ui.profileInstructions.maxLength = event.profile_max;
       fillVoices(event.voices || [], event.user?.voice || "");
+      applyPublicState(event);
       renderHistory(event.history || []);
+      state.agents = event.agents || [];
+      setAgent(event.agent || null, { quiet: true });
       showModel(event.llm);
+      renderAgentChoices();
       refreshControls();
       send({ type: "list_conversations" });
       send({ type: "check_update" });
@@ -552,6 +675,7 @@ function handleEvent(event) {
             local.updated = sConv.updated || local.updated;
             local.last_message = sConv.last_message || local.last_message;
             if (sConv.tools) local.tools = [...new Set([...(local.tools || []), ...sConv.tools])];
+            if (sConv.source) local.source = sConv.source;
           } else {
             state.conversations.push(sConv);
           }
@@ -563,7 +687,10 @@ function handleEvent(event) {
       break;
     case "conversation_loaded":
       if (event.conversation_id) {
+        // Réponse tardive à un ancien choix : la conversation affichée a changé entre-temps
+        if (event.conversation_id !== state.currentConversationId && event.readonly) break;
         state.currentConversationId = event.conversation_id;
+        state.readonlyConversation = event.readonly ? event.conversation_id : null;
         renderHistory(event.history || []);
         const conv = getCurrentConversation();
         conv.messages = event.history || [];
@@ -575,10 +702,27 @@ function handleEvent(event) {
       if (event.conversation_id) {
         state.currentConversationId = event.conversation_id;
         state.currentTurnTools = [];
-        ui.log.querySelectorAll(".msg, .tool, .tool-pastille").forEach((el) => el.remove());
+        ui.log.querySelectorAll(LOG_ITEMS).forEach((el) => el.remove());
         ui.empty.hidden = false;
         updateActiveConversationUI();
       }
+      break;
+    case "history_updated":
+      // Échange au micro de l'ordinateur : liste rafraîchie, et conversation rechargée si elle est affichée
+      clearTimeout(historyRefreshTimer);
+      historyRefreshTimer = setTimeout(() => {
+        send({ type: "list_conversations" });
+        if (state.readonlyConversation && state.readonlyConversation === event.conversation_id) {
+          send({ type: "load_conversation", conversation_id: event.conversation_id, source: "local" });
+        }
+      }, 400);
+      break;
+    case "feedback_saved":
+      onFeedbackSaved(event);
+      break;
+    case "feedback_error":
+      showToast(event.message || "Note non enregistrée", "error");
+      if (event.turn) for (const el of feedbackControls(event.turn)) renderFeedback(el);
       break;
     case "conversation_deleted":
       if (event.conversation_id) {
@@ -608,6 +752,9 @@ function handleEvent(event) {
       }
       recordMessageInCurrentConversation("user", event.text, state.eventTurn);
       break;
+    case "agent_changed":
+      setAgent(event.agent || null);
+      break;
     case "token":
       if (!state.botBubble) {
         state.botBubble = addBubble("bot pending", "");
@@ -624,6 +771,18 @@ function handleEvent(event) {
       break;
     case "toast":
       showToast(event.message, event.kind || "warn");
+      break;
+    case "warning":
+      // Ex : modèle sans vision, l'image n'a pas été transmise
+      addNotice(event.message);
+      announce(event.message);
+      break;
+    case "image":
+      // Image montrée par l'assistant (outil show_image) : la suite du texte part dans une nouvelle bulle
+      if (state.botBubble && !state.botBubble.textContent.trim()) state.botBubble.remove();
+      state.botBubble?.classList.remove("pending");
+      state.botBubble = null;
+      addImageBubble(event);
       break;
     case "confirm_dismiss":
       if (ui.confirm.open) {
@@ -653,6 +812,8 @@ function handleEvent(event) {
       }
       recordMessageInCurrentConversation("assistant", event.text, state.eventTurn, state.currentTurnTools);
       state.currentTurnTools = [];
+      // Les échanges avec un agent externe ne sont pas archivés : rien à noter
+      if (event.text && state.eventTurn && !event.agent) addFeedbackControl(state.eventTurn);
       if (event.end_conversation) {
         const el = document.createElement("div");
         el.className = "tool-pastille";
@@ -691,7 +852,7 @@ function handleEvent(event) {
       refreshControls();
       break;
     case "reset_done":
-      ui.log.querySelectorAll(".msg, .tool, .tool-pastille").forEach((el) => el.remove());
+      ui.log.querySelectorAll(LOG_ITEMS).forEach((el) => el.remove());
       ui.empty.hidden = false;
       if (event.conversation_id) state.currentConversationId = event.conversation_id;
       state.currentTurnTools = [];
@@ -717,6 +878,7 @@ function handleEvent(event) {
       break;
     case "profile_saved":
       applyUser(event.user, state.accounts, state.tools, state.pocketbaseUrl);
+      applyPublicState(event);
       setMessage(ui.profileMsg, "Profil enregistré : pris en compte dès votre prochaine demande.", "ok");
       break;
     case "pb_users":
@@ -750,6 +912,7 @@ function handleEvent(event) {
       setMessage(ui.advanced.open ? ui.advancedMsg : ui.modelMsg, event.message, "error");
       break;
     case "settings_changed":
+      applyPublicState(event);
       // Modifié depuis un autre appareil (ou celui-ci) : on recharge les valeurs affichées
       if (state.admin && (ui.settings.open || ui.advanced.open)) send({ type: "get_settings" });
       break;
@@ -908,7 +1071,17 @@ function renderConvList(filterText = "") {
         confirmDeleteConversation(conv.id, conv.title);
       });
 
-      top.append(title, date, delBtn);
+      if (conv.source === "local") {
+        // Conversation au micro de l'ordinateur : appartient au foyer, jamais supprimée depuis la PWA
+        li.classList.add("household");
+        const badge = document.createElement("span");
+        badge.className = "conv-item-badge";
+        badge.title = "Conversation au micro de l'ordinateur";
+        badge.innerHTML = `${HOUSE_ICON}<span>Micro</span>`;
+        top.append(badge, title, date);
+      } else {
+        top.append(title, date, delBtn);
+      }
 
       const snippet = document.createElement("div");
       snippet.className = "conv-item-snippet";
@@ -959,8 +1132,12 @@ function selectConversation(convId) {
   state.currentConversationId = convId;
   const conv = state.conversations.find((c) => c.id === convId);
   if (conv) {
+    const household = conv.source === "local";
+    state.readonlyConversation = household ? convId : null;
     renderHistory(conv.messages || []);
-    send({ type: "load_conversation", conversation_id: convId, messages: conv.messages || [] });
+    send(household
+      ? { type: "load_conversation", conversation_id: convId, source: "local" }
+      : { type: "load_conversation", conversation_id: convId, messages: conv.messages || [] });
   }
   updateActiveConversationUI();
   if (window.innerWidth <= 600) {
@@ -970,10 +1147,11 @@ function selectConversation(convId) {
 
 function startNewConversation() {
   if (state.busy) interruptAssistant();
+  state.readonlyConversation = null;
   const newId = generateConvId();
   state.currentConversationId = newId;
   state.currentTurnTools = [];
-  ui.log.querySelectorAll(".msg, .tool, .tool-pastille").forEach((el) => el.remove());
+  ui.log.querySelectorAll(LOG_ITEMS).forEach((el) => el.remove());
   ui.empty.hidden = false;
   send({ type: "new_conversation" });
   updateActiveConversationUI();
@@ -985,7 +1163,7 @@ function startNewConversation() {
 function confirmDeleteConversation(convId, title) {
   state.pendingDeleteConvId = convId;
   if (ui.convDeleteDesc) {
-    ui.convDeleteDesc.textContent = `Voulez-vous supprimer définitivement « ${title || "cette conversation"} » et son historique ?`;
+    ui.convDeleteDesc.textContent = `Retirer « ${title || "cette conversation"} » de votre historique ? Elle reste dans l'archive locale de SmartHome (données d'entraînement).`;
   }
   if (ui.convDeleteConfirm) {
     ui.convDeleteConfirm.showModal();
@@ -1066,14 +1244,19 @@ function initConversations() {
 // Conversation en cours renvoyée par le serveur ou chargée depuis le tiroir :
 function renderHistory(messages) {
   if (!messages || !messages.length) {
-    ui.empty.hidden = ui.log.querySelector(".msg, .tool, .tool-pastille") !== null;
+    ui.empty.hidden = ui.log.querySelector(LOG_ITEMS) !== null;
     return;
   }
-  ui.log.querySelectorAll(".msg, .tool, .tool-pastille").forEach((el) => el.remove());
+  ui.log.querySelectorAll(LOG_ITEMS).forEach((el) => el.remove());
   for (const message of messages) {
     if (message.role === "user") {
       const el = addBubble("user", message.content);
       if (message.turn) el.dataset.turn = message.turn;
+      // Conversation au micro : la voix n'est pas identifiée, c'est le foyer qui parle
+      if (state.readonlyConversation) {
+        el.dataset.author = HOUSEHOLD_AUTHOR;
+        el.dataset.household = "1";
+      }
     } else if (message.role === "assistant") {
       if (message.tools && Array.isArray(message.tools)) {
         for (const t of message.tools) {
@@ -1083,12 +1266,192 @@ function renderHistory(messages) {
       }
       if (message.content) {
         const el = addBubble("bot", message.content);
-        if (message.turn) el.dataset.turn = message.turn;
+        if (message.turn) {
+          el.dataset.turn = message.turn;
+          addFeedbackControl(message.turn, message.feedback || null);
+        }
       }
     }
   }
-  ui.empty.hidden = ui.log.querySelector(".msg, .tool, .tool-pastille") !== null;
+  if (state.readonlyConversation) {
+    const banner = document.createElement("div");
+    banner.className = "readonly-banner";
+    banner.setAttribute("role", "note");
+    banner.innerHTML = `<span aria-hidden="true">${HOUSE_ICON}</span><span>Conversation tenue au micro de l'ordinateur — lecture seule. Écrire ou parler en commence une nouvelle.</span>`;
+    ui.log.prepend(banner);
+  }
+  ui.empty.hidden = ui.log.querySelector(LOG_ITEMS) !== null;
   scrollDown(true);
+}
+
+// ---- Note des réponses : pouce, échelle de -2 à +2, puis commentaire facultatif ----
+const HOUSE_ICON = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg>`;
+const THUMB_ICON = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 21h4V9H2v12zm20-11c0-1.1-.9-2-2-2h-6.31l.95-4.57.03-.32c0-.41-.17-.79-.44-1.06L13.17 1 6.59 7.59C6.22 7.95 6 8.45 6 9v10c0 1.1.9 2 2 2h9c.83 0 1.54-.5 1.84-1.22l3.02-7.05c.09-.23.14-.47.14-.73v-2z"/></svg>`;
+const FEEDBACK_SCALE = [
+  { value: -2, label: "Très mauvaise" },
+  { value: -1, label: "Mauvaise" },
+  { value: 0, label: "Moyenne" },
+  { value: 1, label: "Bonne" },
+  { value: 2, label: "Excellente" },
+];
+let historyRefreshTimer = null;
+
+function formatRating(value) {
+  return value > 0 ? `+${value}` : String(value);
+}
+
+function feedbackControls(turn) {
+  return [...ui.log.querySelectorAll(".feedback")].filter((el) => el.dataset.turn === turn);
+}
+
+function leaveReadonlyConversation() {
+  if (state.readonlyConversation) startNewConversation();
+}
+
+// Contrôle placé sous la dernière bulle de l'échange (une réponse coupée par des outils en a plusieurs)
+function addFeedbackControl(turn, feedback = null) {
+  if (!state.feedback.enabled || !turn || !state.currentConversationId) return;
+  for (const old of feedbackControls(turn)) old.remove();
+  const el = document.createElement("div");
+  el.className = "feedback";
+  el.dataset.turn = turn;
+  el.dataset.conversation = state.currentConversationId;
+  el.innerHTML = `
+    <button type="button" class="feedback-thumb" aria-expanded="false">
+      ${THUMB_ICON}<span class="feedback-value"></span>
+    </button>
+    <div class="feedback-panel" hidden>
+      <div class="feedback-scale" role="radiogroup" aria-label="Satisfaction, de -2 (très mauvaise) à +2 (excellente)">
+        ${FEEDBACK_SCALE.map((s) => `
+          <button type="button" role="radio" aria-checked="false" class="feedback-step" data-value="${s.value}" title="${s.label}">
+            <span class="feedback-step-value">${formatRating(s.value)}</span>
+            <span class="feedback-step-label">${s.label}</span>
+          </button>`).join("")}
+      </div>
+      <form class="feedback-comment" hidden>
+        <textarea rows="2" placeholder="Un commentaire ? (facultatif) — ce qui manquait, ce qui était faux…"
+          aria-label="Commentaire sur la réponse"></textarea>
+        <div class="feedback-actions">
+          <button type="button" class="feedback-close">Fermer</button>
+          <button type="submit" class="feedback-send">Envoyer</button>
+        </div>
+      </form>
+    </div>`;
+  el.querySelector("textarea").maxLength = state.feedback.comment_max || 2000;
+  if (feedback && Number.isInteger(feedback.rating)) {
+    el.dataset.rating = String(feedback.rating);
+    el.dataset.comment = feedback.comment || "";
+  }
+  renderFeedback(el);
+
+  const thumb = el.querySelector(".feedback-thumb");
+  thumb.addEventListener("click", () => toggleFeedback(el));
+  for (const step of el.querySelectorAll(".feedback-step")) {
+    step.addEventListener("click", () => {
+      el.dataset.pending = step.dataset.value;
+      sendFeedback(el, Number(step.dataset.value), el.querySelector("textarea").value);
+      const form = el.querySelector(".feedback-comment");
+      form.hidden = false;
+      renderFeedback(el);
+      el.querySelector("textarea").focus({ preventScroll: true });
+      scrollDown();
+    });
+  }
+  el.querySelector(".feedback-comment").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const rating = Number(el.dataset.pending ?? el.dataset.rating);
+    if (!Number.isInteger(rating)) return;
+    el.dataset.closeOnSave = "1";
+    sendFeedback(el, rating, el.querySelector("textarea").value);
+  });
+  el.querySelector(".feedback-close").addEventListener("click", () => toggleFeedback(el, false));
+  el.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !el.querySelector(".feedback-panel").hidden) {
+      e.stopPropagation();
+      toggleFeedback(el, false);
+      thumb.focus();
+    }
+  });
+
+  // Après la dernière bulle (ou pastille) de l'échange
+  const items = turnElements(turn, ".msg, .tool, .tool-pastille");
+  const last = items[items.length - 1];
+  if (last) last.after(el);
+  else ui.log.append(el);
+  scrollDown();
+}
+
+function toggleFeedback(el, open) {
+  const panel = el.querySelector(".feedback-panel");
+  const show = open ?? panel.hidden;
+  for (const other of ui.log.querySelectorAll(".feedback.open")) if (other !== el) toggleFeedback(other, false);
+  panel.hidden = !show;
+  el.classList.toggle("open", show);
+  el.querySelector(".feedback-thumb").setAttribute("aria-expanded", String(show));
+  // Une note déjà donnée : son commentaire reste modifiable
+  const form = el.querySelector(".feedback-comment");
+  form.hidden = !(show && el.dataset.rating !== undefined);
+  if (show) {
+    el.querySelector("textarea").value = el.dataset.comment || "";
+    const current = el.querySelector(`.feedback-step[aria-checked="true"]`) || el.querySelector(".feedback-step");
+    current.focus({ preventScroll: true });
+    scrollDown();
+  } else {
+    delete el.dataset.pending;
+  }
+}
+
+function renderFeedback(el) {
+  const rating = el.dataset.pending ?? el.dataset.rating;
+  const has = rating !== undefined && rating !== "";
+  el.dataset.level = has ? rating : "";
+  const value = el.querySelector(".feedback-value");
+  value.textContent = has ? formatRating(Number(rating)) : "";
+  const thumb = el.querySelector(".feedback-thumb");
+  const label = has
+    ? `Réponse notée ${formatRating(Number(rating))} (${FEEDBACK_SCALE.find((s) => String(s.value) === rating)?.label || ""}) : modifier`
+    : "Noter cette réponse";
+  thumb.setAttribute("aria-label", label);
+  thumb.title = label;
+  for (const step of el.querySelectorAll(".feedback-step")) {
+    step.setAttribute("aria-checked", String(step.dataset.value === rating));
+  }
+}
+
+function sendFeedback(el, rating, comment) {
+  if (!state.ready) {
+    showToast("Hors ligne : note non envoyée", "error");
+    return;
+  }
+  send({
+    type: "feedback",
+    conversation_id: el.dataset.conversation,
+    turn: el.dataset.turn,
+    rating,
+    comment: (comment || "").trim(),
+  });
+}
+
+function onFeedbackSaved(event) {
+  for (const el of feedbackControls(event.turn)) {
+    if (el.dataset.conversation !== event.conversation_id) continue;
+    el.dataset.rating = String(event.rating);
+    el.dataset.comment = event.comment || "";
+    delete el.dataset.pending;
+    renderFeedback(el);
+    if (el.dataset.closeOnSave) {
+      delete el.dataset.closeOnSave;
+      toggleFeedback(el, false);
+      showToast("Merci pour votre avis", "ok", 2000);
+    }
+  }
+  // Note gardée avec la conversation sur cet appareil (réaffichée hors ligne)
+  const conv = state.conversations.find((c) => c.id === event.conversation_id);
+  const message = conv?.messages?.find((m) => m.turn === event.turn && m.role === "assistant");
+  if (message) {
+    message.feedback = { rating: event.rating, comment: event.comment || "" };
+    saveConversations();
+  }
 }
 
 function newTurn() {
@@ -1097,22 +1460,32 @@ function newTurn() {
 }
 
 // `forget` : échanges à retirer de l'historique du serveur avant de répondre (relance d'un message)
-function sendText(text, forget = []) {
+function sendText(text, forget = [], images = []) {
   interruptAssistant();
+  leaveReadonlyConversation();
   const turn = newTurn();
-  addBubble("user", text).dataset.turn = turn;
+  const bubble = addBubble("user", text);
+  bubble.dataset.turn = turn;
+  if (images.length) attachImagesToBubble(bubble, images);
   state.busy += 1;
   refreshControls();
-  recordMessageInCurrentConversation("user", text, turn);
-  send({ type: "text", text, speak: ui.speak.checked, turn, forget });
+  updateTypingIndicator();
+  // Les images ne sont pas gardées dans l'historique de l'appareil (trop lourdes) : seule leur mention l'est
+  const mention = images.length ? `\n🖼️ [Image(s) jointe(s) : ${images.map((i) => i.name).join(", ")}]` : "";
+  recordMessageInCurrentConversation("user", `${text}${mention}`.trim(), turn);
+  const payload = { type: "text", text, speak: ui.speak.checked, turn, forget };
+  if (images.length) payload.images = images.map((i) => ({ data: i.data, name: i.name }));
+  send(payload);
 }
 
 function sendAudio(wavBytes) {
+  leaveReadonlyConversation();
   const turn = newTurn();
   state.pendingUser = addBubble("user", "🎙️ …");
   state.pendingUser.dataset.turn = turn;
   state.busy += 1;
   refreshControls();
+  updateTypingIndicator();
   send({ type: "audio", data: toBase64(wavBytes), speak: ui.speak.checked, turn });
 }
 
@@ -1120,10 +1493,13 @@ ui.textForm.addEventListener("submit", (e) => {
   e.preventDefault();
   unlockAudio();
   const text = ui.text.value.trim();
-  if (!text || !state.ready) return;
+  const images = state.attachments;
+  if ((!text && !images.length) || !state.ready) return;
   ui.text.value = "";
+  state.attachments = [];
+  renderAttachments();
   updateMainButton();
-  sendText(text);
+  sendText(text, [], images);
 });
 
 ui.text.addEventListener("input", updateMainButton);
@@ -1176,7 +1552,7 @@ ui.log.addEventListener("contextmenu", (e) => {
   openMessageMenu(el);
 });
 
-function turnElements(turn, selector = ".msg, .tool, .tool-pastille") {
+function turnElements(turn, selector = LOG_ITEMS) {
   return [...ui.log.querySelectorAll(selector)].filter((el) => el.dataset.turn === turn);
 }
 
@@ -1188,6 +1564,10 @@ function relaunchSource(el) {
 
 function openMessageMenu(el) {
   if (ui.msgMenu.open || ui.msgEditor.open) return;
+  if (state.readonlyConversation) {
+    showToast("Conversation du micro : lecture seule", "warn");
+    return;
+  }
   state.menuTarget = el;
   const isBot = el.classList.contains("bot");
   const canRelaunch = Boolean(el.dataset.turn && relaunchSource(el));
@@ -1206,7 +1586,7 @@ function removeElements(elements) {
     if (el === state.pendingUser) state.pendingUser = null;
     el.remove();
   }
-  ui.empty.hidden = ui.log.querySelector(".msg, .tool, .tool-pastille") !== null;
+  ui.empty.hidden = ui.log.querySelector(LOG_ITEMS) !== null;
 }
 
 // Efface ces éléments et retourne leurs échanges, à retirer aussi de l'historique du serveur
@@ -1220,7 +1600,7 @@ function dropElements(elements) {
 function followingElements(el) {
   const elements = [];
   for (let next = el.nextElementSibling; next; next = next.nextElementSibling) {
-    if (next.matches(".msg, .tool, .tool-pastille")) elements.push(next);
+    if (next.matches(LOG_ITEMS)) elements.push(next);
   }
   return elements;
 }
@@ -1301,7 +1681,7 @@ ui.mic.addEventListener("click", async () => {
     stopRecording();
     return;
   }
-  if (ui.text.value.trim()) {
+  if (ui.text.value.trim() || state.attachments.length) {
     ui.textForm.requestSubmit();
     return;
   }
@@ -1696,6 +2076,7 @@ function applyUser(user, accounts, tools = state.tools, pocketbaseUrl = state.po
   if (user?.profile) {
     ui.profileName.value = user.name;
     ui.profileInstructions.value = user.instructions || "";
+    if (ui.profileAssistantName) ui.profileAssistantName.value = user.assistant_name || "";
     if ([...ui.profileVoice.options].some((o) => o.value === (user.voice || ""))) ui.profileVoice.value = user.voice || "";
   }
   document.body.classList.toggle("not-admin", !state.admin);
@@ -1791,7 +2172,7 @@ ui.scrollBottomBtn?.addEventListener("click", () => {
 });
 
 function promptResetConversation() {
-  const hasMessages = ui.log.querySelectorAll(".msg, .tool, .tool-pastille").length > 0;
+  const hasMessages = ui.log.querySelectorAll(LOG_ITEMS).length > 0;
   if (!hasMessages) {
     startNewConversation();
     return;
@@ -1848,7 +2229,14 @@ window.addEventListener("keydown", (e) => {
 ui.profileSave.addEventListener("click", () => {
   setMessage(ui.profileMsg, "Enregistrement…");
   const voice = ui.profileVoiceField.hidden ? {} : { voice: ui.profileVoice.value };
-  send({ type: "update_profile", name: ui.profileName.value, instructions: ui.profileInstructions.value, ...voice });
+  send({ type: "update_profile", name: ui.profileName.value, instructions: ui.profileInstructions.value,
+         assistant_name: ui.profileAssistantName?.value || "", ...voice });
+});
+
+ui.wakewordToggle?.addEventListener("change", () => setWakeword(ui.wakewordToggle.checked));
+ui.wakewordPill?.addEventListener("click", () => {
+  if (state.admin) setWakeword(true);
+  else openSettingsModal();
 });
 
 ui.profileVoicePlay.addEventListener("click", () => {
@@ -1857,6 +2245,7 @@ ui.profileVoicePlay.addEventListener("click", () => {
 });
 
 function openSettingsModal() {
+  renderAgentChoices();
   ui.settings.showModal();
   ui.modelMsg.textContent = "";
   if (!state.admin) return;
@@ -2037,12 +2426,218 @@ function settingValue(name) {
 function showModel(llm) {
   if (!llm) return;
   state.llm = llm;
-  ui.modelBadge.hidden = false;
-  ui.modelBadge.textContent = llm.decision ? `${llm.model} · décision` : llm.model;
-  ui.modelBadge.classList.toggle("decision", Boolean(llm.decision));
-  ui.modelBadge.title = `${llm.provider} : ${llm.model}${llm.decision ? " (modèle de décision)" : ""}`;
+  renderBadge();
+  renderAttachments();
   ui.modelCurrent.textContent = `Actif : ${llm.model} (${llm.provider})${llm.decision ? " — modèle de décision" : ""}`;
 }
+
+// ---- Agents externes (Hermes, Claude, Antigravity...) : la pastille du modèle devient celle de l'agent ----
+const SWAP_OUT_MS = 200;
+const reducedMotion = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+function badgeView() {
+  if (state.agent) {
+    return {
+      label: state.agent.label,
+      agent: true,
+      title: `Conversation reliée à ${state.agent.label} — cliquer pour revenir à l'assistant ou changer d'agent`,
+    };
+  }
+  const llm = state.llm;
+  if (!llm) return null;
+  return {
+    label: llm.decision ? `${llm.model} · décision` : llm.model,
+    agent: false,
+    decision: Boolean(llm.decision),
+    title: `${llm.provider} : ${llm.model}${llm.decision ? " (modèle de décision)" : ""}`
+      + (state.agents.length ? " — cliquer pour parler à un agent" : ""),
+  };
+}
+
+function applyBadge(view) {
+  const badge = ui.modelBadge;
+  badge.classList.toggle("agent", view.agent);
+  badge.classList.toggle("decision", Boolean(view.decision));
+  badge.classList.toggle("clickable", view.agent || state.agents.length > 0);
+  badge.title = view.title;
+  badge.setAttribute("aria-label", view.agent ? `Agent : ${view.label}` : `Modèle : ${view.label}`);
+  ui.modelBadgeLabel.textContent = view.label;
+}
+
+// Bascule animée : le libellé s'efface (flou, glissement), la pastille change de largeur et de couleur,
+// un reflet la traverse puis le nouveau nom apparaît.
+function renderBadge(animate = false) {
+  const view = badgeView();
+  const badge = ui.modelBadge;
+  if (!view) return;
+  badge.hidden = false;
+  if (state.agent?.color) document.documentElement.style.setProperty("--agent-color", state.agent.color);
+  if (!animate || reducedMotion()) {
+    applyBadge(view);
+    return;
+  }
+  clearTimeout(badge._swapTimer);
+  const from = badge.getBoundingClientRect().width;
+  badge.style.width = `${from}px`;
+  badge.classList.remove("sheen");
+  badge.classList.add("swapping");
+  badge._swapTimer = setTimeout(() => {
+    applyBadge(view);
+    badge.style.width = "auto";
+    const to = badge.getBoundingClientRect().width;
+    badge.style.width = `${from}px`;
+    void badge.offsetWidth;  // force le calcul : la transition part de l'ancienne largeur
+    badge.style.width = `${to}px`;
+    badge.classList.remove("swapping");
+    badge.classList.add("sheen");
+    badge._swapTimer = setTimeout(() => {
+      badge.style.width = "";
+      badge.classList.remove("sheen");
+    }, 900);
+  }, SWAP_OUT_MS);
+}
+
+function markAgentBubble(el, agent) {
+  el.classList.add("agent");
+  el.dataset.agent = agent.label;
+  el.style.setProperty("--bubble-agent-color", agent.color);
+}
+
+function addAgentSwitchNote(agent) {
+  const el = document.createElement("div");
+  el.className = `agent-switch${agent ? " to-agent" : ""}`;
+  if (agent) el.style.setProperty("--bubble-agent-color", agent.color);
+  const dot = document.createElement("span");
+  dot.className = "agent-switch-dot";
+  dot.setAttribute("aria-hidden", "true");
+  const label = document.createElement("span");
+  label.textContent = agent ? `Conversation reliée à ${agent.label}` : "Retour à l'assistant";
+  el.append(dot, label);
+  ui.empty.hidden = true;
+  ui.log.append(el);
+  scrollDown(true);
+}
+
+function setAgent(agent, { quiet = false } = {}) {
+  const before = state.agent?.name || null;
+  const after = agent?.name || null;
+  state.agent = agent;
+  document.body.classList.toggle("with-agent", Boolean(agent));
+  renderAttachments();
+  renderAgentChoices();
+  if (before === after && !quiet) return;
+  renderBadge(!quiet);
+  if (!quiet) {
+    addAgentSwitchNote(agent);
+    announce(agent ? `Conversation reliée à ${agent.label}` : "Retour à l'assistant");
+  }
+}
+
+function closeAgentMenu() {
+  if (ui.agentMenu.hidden) return;
+  ui.agentMenu.hidden = true;
+  ui.modelBadge.setAttribute("aria-expanded", "false");
+}
+
+// Interlocuteurs proposés : l'assistant puis les agents externes permis à ce compte
+function agentEntries() {
+  return [
+    { name: null, label: "Assistant", hint: state.llm?.model || "", color: "" },
+    ...state.agents.map((a) => ({ name: a.name, label: a.label, hint: a.description || "", color: a.color })),
+  ];
+}
+
+function chooseAgent(name) {
+  if ((state.agent?.name || null) !== name) send({ type: "set_agent", agent: name });
+}
+
+// Carte « Interlocuteur » des réglages : une pastille par interlocuteur, celle en cours cochée
+function renderAgentChoices() {
+  if (!ui.agentCard) return;
+  ui.agentCard.hidden = !state.agents.length;
+  if (!state.agents.length) return;
+  const currentName = state.agent?.name || null;
+  ui.agentCardState.textContent = state.agent
+    ? `Conversation reliée à ${state.agent.label}.`
+    : "Vous parlez à l'assistant.";
+  ui.agentChoices.replaceChildren();
+  for (const entry of agentEntries()) {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "agent-choice";
+    chip.setAttribute("role", "radio");
+    const current = currentName === entry.name;
+    chip.setAttribute("aria-checked", String(current));
+    if (entry.hint) chip.title = entry.hint;
+    if (entry.color) chip.style.setProperty("--bubble-agent-color", entry.color);
+    chip.disabled = !state.ready;
+    const dot = document.createElement("span");
+    dot.className = `agent-menu-dot${entry.name ? "" : " assistant"}`;
+    dot.setAttribute("aria-hidden", "true");
+    const label = document.createElement("span");
+    label.textContent = entry.label;
+    chip.append(dot, label);
+    chip.addEventListener("click", () => chooseAgent(entry.name));
+    ui.agentChoices.append(chip);
+  }
+}
+
+function openAgentMenu() {
+  if (!state.agents.length) return;
+  const menu = ui.agentMenu;
+  menu.replaceChildren();
+  for (const entry of agentEntries()) {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.className = "agent-menu-item";
+    item.setAttribute("role", "menuitemradio");
+    const current = (state.agent?.name || null) === entry.name;
+    item.setAttribute("aria-checked", String(current));
+    if (entry.color) item.style.setProperty("--bubble-agent-color", entry.color);
+    const dot = document.createElement("span");
+    dot.className = `agent-menu-dot${entry.name ? "" : " assistant"}`;
+    dot.setAttribute("aria-hidden", "true");
+    const text = document.createElement("span");
+    text.className = "agent-menu-text";
+    const title = document.createElement("strong");
+    title.textContent = entry.label;
+    text.append(title);
+    if (entry.hint) {
+      const hint = document.createElement("small");
+      hint.textContent = entry.hint;
+      text.append(hint);
+    }
+    item.append(dot, text);
+    item.addEventListener("click", () => {
+      closeAgentMenu();
+      chooseAgent(entry.name);
+    });
+    menu.append(item);
+  }
+  const rect = ui.modelBadge.getBoundingClientRect();
+  menu.hidden = false;
+  const width = menu.offsetWidth;
+  menu.style.top = `${rect.bottom + 8}px`;
+  menu.style.left = `${Math.max(12, Math.min(rect.left, window.innerWidth - width - 12))}px`;
+  ui.modelBadge.setAttribute("aria-expanded", "true");
+  (menu.querySelector('[aria-checked="true"]') || menu.firstElementChild)?.focus();
+}
+
+ui.modelBadge.addEventListener("click", (e) => {
+  e.stopPropagation();
+  if (ui.agentMenu.hidden) openAgentMenu();
+  else closeAgentMenu();
+});
+document.addEventListener("click", (e) => {
+  if (!ui.agentMenu.contains(e.target)) closeAgentMenu();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !ui.agentMenu.hidden) {
+    closeAgentMenu();
+    ui.modelBadge.focus();
+  }
+});
+window.addEventListener("resize", closeAgentMenu);
 
 const baseName = (model) => model.split(":")[0].toLowerCase();
 
@@ -2308,6 +2903,11 @@ function renderField(field) {
       input.id = id;
       wrap.append(label, input);
     }
+    // Listes de choix, nombres et tableaux de messages : contrôle créé plus haut, ajouté ici
+    if (!wrap.contains(input)) {
+      if (input.tagName !== "DIV") input.id = id;
+      wrap.append(label, input);
+    }
   }
   input.dataset.name = field.name;
   const onFieldChange = () => {
@@ -2506,7 +3106,7 @@ function applyVersionInfo(info) {
     ui.connUpdateBtn.hidden = !hasDiff;
   }
   if (ui.versionTagLabel) {
-    ui.versionTagLabel.textContent = `SmartHome v17 · ${repo}@${localShort}`;
+    ui.versionTagLabel.textContent = `SmartHome v18 · ${repo}@${localShort}`;
   }
 
   // Pastille d'invitation à mettre à jour dans la barre supérieure
@@ -2670,3 +3270,219 @@ consumePairingToken();
 initConversations();
 checkServerHealth();
 connect();
+
+
+// ---- Images : jointes aux messages (trombone, coller, glisser-déposer) et montrées par l'assistant ----
+const IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp", "image/bmp"];
+// En dessous de cette taille, une image déjà assez petite part telle quelle (GIF animé conservé)
+const IMAGE_KEEP_BYTES = 1_500_000;
+
+function readAsDataURL(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
+}
+
+function loadImageElement(url) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error("image illisible"));
+    img.src = url;
+  });
+}
+
+// Réduit l'image (plus grand côté `max_side`) en JPEG avant l'envoi : quelques centaines de Ko au lieu de plusieurs Mo
+async function prepareImage(file) {
+  const cfg = state.imageConfig;
+  const original = await readAsDataURL(file);
+  const img = await loadImageElement(original);
+  const side = Math.max(img.naturalWidth, img.naturalHeight);
+  const maxSide = cfg.max_side || 0;
+  const small = file.size <= IMAGE_KEEP_BYTES && (!maxSide || side <= maxSide);
+  let url = original;
+  let mime = file.type;
+  if (!small && file.type !== "image/gif") {
+    const scale = maxSide && side > maxSide ? maxSide / side : 1;
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
+    canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#ffffff";  // transparence : fond blanc (JPEG)
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    url = canvas.toDataURL("image/jpeg", 0.88);
+    mime = "image/jpeg";
+  }
+  const data = url.slice(url.indexOf(",") + 1);
+  if (data.length * 0.75 > cfg.max_bytes) throw new Error(`trop lourde (maximum ${Math.round(cfg.max_bytes / 1e6)} Mo)`);
+  const base = (file.name || "image").replace(/\.[^.]+$/, "") || "image";
+  const name = mime === file.type && file.name ? file.name : `${base}.jpg`;
+  return { id: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`, name, mime, data, url };
+}
+
+async function addAttachments(files) {
+  if (!state.ready) return;
+  const cfg = state.imageConfig;
+  if (cfg.enabled === false) {
+    showToast("Les images sont désactivées sur ce serveur.");
+    return;
+  }
+  const images = [...files].filter((f) => IMAGE_TYPES.includes(f.type));
+  if (files.length && !images.length) {
+    showToast("Seules les images (PNG, JPEG, GIF, WebP, BMP) peuvent être jointes.");
+    return;
+  }
+  for (const file of images) {
+    if (state.attachments.length >= cfg.max_per_message) {
+      showToast(`${cfg.max_per_message} images au maximum par message.`);
+      break;
+    }
+    try {
+      state.attachments.push(await prepareImage(file));
+    } catch (e) {
+      showToast(`« ${file.name || "image"} » non jointe : ${e.message}`);
+    }
+  }
+  // Modèle sans vision : l'alerte est affichée sous les miniatures (renderAttachments)
+  renderAttachments();
+  updateMainButton();
+  if (state.attachments.length && !visionAvailable()) announce(visionWarning());
+  ui.text.focus();
+}
+
+// L'image sera-t-elle comprise ? (agent externe : il reçoit le chemin du fichier)
+function visionAvailable() {
+  return Boolean(state.agent) || Boolean(state.llm?.vision);
+}
+
+function visionWarning() {
+  const model = state.llm?.model || "actif";
+  return `Le modèle ${model} ne sait pas lire les images : seul le texte de votre message lui sera transmis.`;
+}
+
+function renderAttachments() {
+  if (!ui.attachments) return;
+  const items = state.attachments;
+  ui.attachments.hidden = !items.length;
+  ui.attachList.replaceChildren(...items.map((item) => {
+    const el = document.createElement("div");
+    el.className = "attachment";
+    const img = document.createElement("img");
+    img.src = item.url;
+    img.alt = item.name;
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "attachment-remove";
+    remove.setAttribute("aria-label", `Retirer ${item.name}`);
+    remove.title = "Retirer";
+    remove.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>`;
+    remove.addEventListener("click", () => {
+      state.attachments = state.attachments.filter((a) => a.id !== item.id);
+      renderAttachments();
+      updateMainButton();
+    });
+    el.append(img, remove);
+    return el;
+  }));
+  const warn = items.length && !visionAvailable();
+  ui.attachNote.hidden = !items.length;
+  ui.attachNote.classList.toggle("warn", Boolean(warn));
+  ui.attachNote.textContent = warn
+    ? `⚠️ ${visionWarning()}`
+    : state.agent
+      ? `${state.agent.label} recevra le chemin de ${items.length > 1 ? "ces images" : "l'image"} sur l'ordinateur.`
+      : `${items.length} image${items.length > 1 ? "s" : ""} pour ${state.llm?.model || "le modèle"}.`;
+}
+
+function attachImagesToBubble(bubble, images) {
+  const wrap = document.createElement("div");
+  wrap.className = "msg-images";
+  for (const item of images) {
+    const img = document.createElement("img");
+    img.src = item.url;
+    img.alt = item.name;
+    img.loading = "lazy";
+    img.addEventListener("click", () => openImageViewer(item.url, item.name));
+    wrap.append(img);
+  }
+  bubble.append(wrap);
+  bubble.classList.add("with-images");
+}
+
+function addImageBubble(event) {
+  const url = `data:${event.mime};base64,${event.data}`;
+  const el = addBubble("bot image-msg", "");
+  const img = document.createElement("img");
+  img.src = url;
+  img.alt = event.name || "Image";
+  img.addEventListener("click", () => openImageViewer(url, event.path || event.name));
+  const caption = document.createElement("span");
+  caption.className = "image-caption";
+  caption.textContent = event.path || event.name || "";
+  el.append(img, caption);
+  img.addEventListener("load", () => scrollDown(true), { once: true });
+}
+
+function addNotice(message) {
+  ui.empty.hidden = true;
+  const el = document.createElement("div");
+  el.className = "notice";
+  el.setAttribute("role", "status");
+  el.textContent = message;
+  if (state.eventTurn) el.dataset.turn = state.eventTurn;
+  ui.log.append(el);
+  scrollDown(true);
+}
+
+function openImageViewer(url, caption) {
+  if (!ui.imageViewer) return;
+  ui.imageViewerImg.src = url;
+  ui.imageViewerImg.alt = caption || "Image";
+  ui.imageViewerCaption.textContent = caption || "";
+  ui.imageViewer.showModal();
+}
+
+ui.imageViewer?.addEventListener("click", () => ui.imageViewer.close());
+ui.imageViewer?.addEventListener("close", () => { ui.imageViewerImg.removeAttribute("src"); });
+
+ui.attachBtn?.addEventListener("click", () => ui.attachInput.click());
+ui.attachInput?.addEventListener("change", () => {
+  addAttachments(ui.attachInput.files || []);
+  ui.attachInput.value = "";
+});
+
+// Coller une image (capture d'écran...) dans le champ de saisie ou n'importe où dans la page
+document.addEventListener("paste", (e) => {
+  const files = [...(e.clipboardData?.files || [])].filter((f) => f.type.startsWith("image/"));
+  if (!files.length) return;
+  e.preventDefault();
+  addAttachments(files);
+});
+
+// Glisser-déposer : une image déposée sur la page est jointe au prochain message
+let dragDepth = 0;
+const hasFiles = (e) => [...(e.dataTransfer?.types || [])].includes("Files");
+document.addEventListener("dragenter", (e) => {
+  if (!hasFiles(e) || !state.ready) return;
+  dragDepth += 1;
+  document.body.classList.add("dragging-file");
+});
+document.addEventListener("dragleave", (e) => {
+  if (!hasFiles(e)) return;
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (!dragDepth) document.body.classList.remove("dragging-file");
+});
+document.addEventListener("dragover", (e) => {
+  if (hasFiles(e)) e.preventDefault();
+});
+document.addEventListener("drop", (e) => {
+  if (!hasFiles(e)) return;
+  e.preventDefault();
+  dragDepth = 0;
+  document.body.classList.remove("dragging-file");
+  addAttachments(e.dataTransfer.files || []);
+});

@@ -30,3 +30,9 @@ pocketbase/*.tmp
 
 # Journaux des agents IA ([CREATE_COMMAND])
 logs/
+
+# Images transmises aux agents externes (IMAGES_UPLOAD_DIR)
+uploads/
+
+# Archive des conversations (données d'entraînement, ARCHIVE_DB_PATH)
+data/

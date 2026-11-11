@@ -64,10 +64,12 @@ class FakeDirectory(UserDirectory):
             raise AuthError("Identifiants refusés.")
         return self._user(identity)
 
-    def update_profile(self, user, name, instructions, voice=""):
+    def update_profile(self, user, name, instructions, voice="", assistant_name=None):
         from core.users import clean_profile
         name, instructions = clean_profile(name, instructions, self.settings)
-        return User(user.id, name, user.role, user.token, instructions, voice, email=user.email, superadmin=user.superadmin)
+        assistant = user.assistant_name if assistant_name is None else assistant_name
+        return User(user.id, name, user.role, user.token, instructions, voice, email=user.email,
+                    superadmin=user.superadmin, assistant_name=assistant)
 
     def list_users(self, user):
         if not user.superadmin:
@@ -156,17 +158,41 @@ class TestSessionOwnership(unittest.TestCase):
         self.assertEqual(executed, [])
         self.assertFalse(reply.tools[0]["executed"])
 
+    def test_expired_session_is_recreated_with_its_owner_rights(self):
+        # Session disparue (expiration) avant la demande : jamais recréée sans propriétaire (aucune restriction)
+        executed = []
+        core = make_core(executed)
+        leo = User("pb_l", "Léo", "guest")
+        session = core.open_session("s9", user=leo)
+        core.close_session(session.id)
+        reply = core.respond("s9", text="éteins tout", user=leo)
+        self.assertEqual(executed, [])
+        self.assertFalse(reply.tools[0]["executed"])
+        self.assertEqual(core.get_session("s9").user, leo)
+        self.assertEqual([t.name for t in core.get_session("s9").conversation.tools.all()], ["volume"])
+
 
 class TestUserProfile(unittest.TestCase):
     def test_prompt_lines(self):
         from core.users import user_prompt
         s = Settings(MCP_CLIENT_ENABLED=False)
-        self.assertEqual(user_prompt(User("pb_m", "Marie", "member"), s), "Tu parles avec Marie.")
+        self.assertEqual(user_prompt(User("pb_m", "Marie", "member"), s), "Tu t'appelles Jarvis.\nTu parles avec Marie.")
         with_prefs = user_prompt(User("pb_m", "Marie", "member", instructions="Tutoie-moi."), s)
         self.assertIn("Tutoie-moi.", with_prefs)
-        self.assertEqual(user_prompt(admin_user(s), s), "")
-        self.assertEqual(user_prompt(local_user(s), s), "")
-        self.assertEqual(user_prompt(None, s), "")
+        # Sans profil : seul le nom de l'assistant est donné
+        self.assertEqual(user_prompt(admin_user(s), s), "Tu t'appelles Jarvis.")
+        self.assertEqual(user_prompt(local_user(s), s), "Tu t'appelles Jarvis.")
+        self.assertEqual(user_prompt(None, s), "Tu t'appelles Jarvis.")
+
+    def test_assistant_name(self):
+        from core.users import assistant_name, clean_assistant_name, user_prompt
+        s = Settings(MCP_CLIENT_ENABLED=False, ASSISTANT_NAME="Alfred")
+        self.assertEqual(assistant_name(None, s), "Alfred")
+        marie = User("pb_m", "Marie", "member", assistant_name="Nova")
+        self.assertEqual(assistant_name(marie, s), "Nova")
+        self.assertIn("Tu t'appelles Nova.", user_prompt(marie, s))
+        self.assertEqual(marie.public(s)["assistant_name"], "Nova")
+        self.assertEqual(clean_assistant_name("  Ma   Nova " + "x" * 50), ("Ma Nova " + "x" * 50)[:40])
 
     def test_clean_profile(self):
         from core.users import clean_profile
@@ -256,10 +282,18 @@ class TestGatewayAccounts(unittest.TestCase):
             self.assertEqual(event["type"], "profile_saved")
             self.assertEqual((event["user"]["name"], event["user"]["instructions"]), ("Marie C", "Réponds en une phrase."))
             self.assertNotIn("token", event["user"])
+            self.assertEqual(event["assistant"]["name"], self.core.settings.ASSISTANT_NAME)
+            # Nom de l'assistant choisi par le compte : affiché (assistant.name) et donné au LLM
+            ws.send_json({"type": "update_profile", "name": "Marie C", "instructions": "Réponds en une phrase.",
+                          "assistant_name": "Nova"})
+            event = ws.receive_json()
+            self.assertEqual((event["user"]["assistant_name"], event["assistant"]["name"]), ("Nova", "Nova"))
             ws.send_json({"type": "update_profile", "name": "", "instructions": ""})
             self.assertEqual(ws.receive_json()["type"], "profile_error")
+        self.assertIn("wakeword", ready)
         session = self.core.get_session(ready["session"])
         self.assertIn("Réponds en une phrase.", session.conversation.user_prompt)
+        self.assertIn("Tu t'appelles Nova.", session.conversation.user_prompt)
 
     def test_master_token_has_no_profile(self):
         with self.client.websocket_connect("/ws") as ws:
@@ -736,6 +770,38 @@ class TestPocketBaseLauncher(unittest.TestCase):
         cmd = pb.serve_command(Settings(POCKETBASE_URL="http://127.0.0.1:8091", MCP_CLIENT_ENABLED=False))
         self.assertEqual(cmd[1:4], ["serve", "--http", "127.0.0.1:8091"])
         self.assertIn("--automigrate=false", cmd)
+
+
+class TestHistoryStoreWrites(unittest.TestCase):
+    """Écritures de HistoryStore : repli sans « tools » seulement si PocketBase refuse l'enregistrement."""
+
+    def setUp(self):
+        from core.history import HistoryStore
+        self.store = HistoryStore(Settings(AUTH_PROVIDER="pocketbase", MCP_CLIENT_ENABLED=False))
+        self.user = User("pb_m", "Marie", "member", token="jeton")
+        self.message = [{"role": "assistant", "content": "ok", "turn": "t1", "tools": [{"name": "volume"}]}]
+
+    def run_append(self, errors):
+        bodies = []
+
+        def request(user, path="", **kwargs):
+            bodies.append(kwargs.get("body"))
+            if errors:
+                raise errors.pop(0)
+            return {}
+        with mock.patch.object(type(self.store), "_request", side_effect=request, autospec=False):
+            self.store.append(self.user, "c1", self.message).result(5)
+        return bodies
+
+    def test_refused_record_retried_without_tools(self):
+        from core.users import AuthError
+        bodies = self.run_append([AuthError("400")])
+        self.assertEqual(len(bodies), 2)
+        self.assertNotIn("tools", bodies[1])
+
+    def test_unreachable_server_not_retried(self):
+        from core.users import DirectoryUnavailable
+        self.assertEqual(len(self.run_append([DirectoryUnavailable("injoignable")])), 1)
 
 
 if __name__ == "__main__":
