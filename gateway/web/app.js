@@ -44,6 +44,7 @@ const ui = {
   profile: $("profile"), profileName: $("profile-name"), profileAssistantName: $("profile-assistant-name"),
   wakewordCard: $("wakeword-card"), wakewordToggle: $("wakeword-toggle"), wakewordState: $("wakeword-state"),
   wakewordHint: $("wakeword-hint"), wakewordPill: $("wakeword-pill"),
+  agentCard: $("agent-card"), agentCardState: $("agent-card-state"), agentChoices: $("agent-choices"),
   profileInstructions: $("profile-instructions"), profileSave: $("profile-save"), profileMsg: $("profile-msg"),
   profileVoiceField: $("profile-voice-field"), profileVoice: $("profile-voice"), profileVoicePlay: $("profile-voice-play"),
   adminDialog: $("admin-dialog"), adminCloseBtn: $("admin-close-btn"), adminFooterClose: $("admin-footer-close"),
@@ -569,6 +570,7 @@ function connect() {
     state.ready = false;
     state.busy = 0;
     refreshControls();
+    renderAgentChoices();
     if (e.code === 4401) {
       setStatus("offline", "Connexion requise");
       // Le jeton du compte a expiré ou a été révoqué : il ne sert plus à rien
@@ -628,6 +630,7 @@ function handleEvent(event) {
       state.agents = event.agents || [];
       setAgent(event.agent || null, { quiet: true });
       showModel(event.llm);
+      renderAgentChoices();
       refreshControls();
       send({ type: "list_conversations" });
       send({ type: "check_update" });
@@ -2214,6 +2217,7 @@ ui.profileVoicePlay.addEventListener("click", () => {
 });
 
 function openSettingsModal() {
+  renderAgentChoices();
   ui.settings.showModal();
   ui.modelMsg.textContent = "";
   if (!state.admin) return;
@@ -2492,6 +2496,7 @@ function setAgent(agent, { quiet = false } = {}) {
   state.agent = agent;
   document.body.classList.toggle("with-agent", Boolean(agent));
   renderAttachments();
+  renderAgentChoices();
   if (before === after && !quiet) return;
   renderBadge(!quiet);
   if (!quiet) {
@@ -2506,15 +2511,54 @@ function closeAgentMenu() {
   ui.modelBadge.setAttribute("aria-expanded", "false");
 }
 
+// Interlocuteurs proposés : l'assistant puis les agents externes permis à ce compte
+function agentEntries() {
+  return [
+    { name: null, label: "Assistant", hint: state.llm?.model || "", color: "" },
+    ...state.agents.map((a) => ({ name: a.name, label: a.label, hint: a.description || "", color: a.color })),
+  ];
+}
+
+function chooseAgent(name) {
+  if ((state.agent?.name || null) !== name) send({ type: "set_agent", agent: name });
+}
+
+// Carte « Interlocuteur » des réglages : une pastille par interlocuteur, celle en cours cochée
+function renderAgentChoices() {
+  if (!ui.agentCard) return;
+  ui.agentCard.hidden = !state.agents.length;
+  if (!state.agents.length) return;
+  const currentName = state.agent?.name || null;
+  ui.agentCardState.textContent = state.agent
+    ? `Conversation reliée à ${state.agent.label}.`
+    : "Vous parlez à l'assistant.";
+  ui.agentChoices.replaceChildren();
+  for (const entry of agentEntries()) {
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = "agent-choice";
+    chip.setAttribute("role", "radio");
+    const current = currentName === entry.name;
+    chip.setAttribute("aria-checked", String(current));
+    if (entry.hint) chip.title = entry.hint;
+    if (entry.color) chip.style.setProperty("--bubble-agent-color", entry.color);
+    chip.disabled = !state.ready;
+    const dot = document.createElement("span");
+    dot.className = `agent-menu-dot${entry.name ? "" : " assistant"}`;
+    dot.setAttribute("aria-hidden", "true");
+    const label = document.createElement("span");
+    label.textContent = entry.label;
+    chip.append(dot, label);
+    chip.addEventListener("click", () => chooseAgent(entry.name));
+    ui.agentChoices.append(chip);
+  }
+}
+
 function openAgentMenu() {
   if (!state.agents.length) return;
   const menu = ui.agentMenu;
   menu.replaceChildren();
-  const entries = [
-    { name: null, label: "Assistant", hint: state.llm?.model || "", color: "" },
-    ...state.agents.map((a) => ({ name: a.name, label: a.label, hint: a.description || "", color: a.color })),
-  ];
-  for (const entry of entries) {
+  for (const entry of agentEntries()) {
     const item = document.createElement("button");
     item.type = "button";
     item.className = "agent-menu-item";
@@ -2538,7 +2582,7 @@ function openAgentMenu() {
     item.append(dot, text);
     item.addEventListener("click", () => {
       closeAgentMenu();
-      if (!current) send({ type: "set_agent", agent: entry.name });
+      chooseAgent(entry.name);
     });
     menu.append(item);
   }
