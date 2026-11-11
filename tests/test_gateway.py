@@ -154,6 +154,17 @@ class TestAssistantCore(unittest.TestCase):
         self.assertIsNone(core.get_session("old"))
         self.assertIsNotNone(core.get_session("keep"))
 
+    def test_attached_session_never_expires(self):
+        core = AssistantCore(Settings(GATEWAY_SESSION_TIMEOUT=0.001, MCP_CLIENT_ENABLED=False), tools=ToolRegistry(SETTINGS), llm=RuleLLM())
+        core.open_session("ws", attach=True)
+        import time; time.sleep(0.01)
+        core.open_session("other")
+        self.assertIsNotNone(core.get_session("ws"))   # client toujours connecté
+        core.detach_confirmation("ws")
+        time.sleep(0.01)
+        core.open_session("other2")
+        self.assertIsNone(core.get_session("ws"))      # client parti : expiration normale
+
 
 class TestGateway(unittest.TestCase):
     def setUp(self):

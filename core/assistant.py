@@ -105,6 +105,7 @@ class Session:
     cancel: threading.Event = field(default_factory=threading.Event, repr=False)
     agent: Optional[str] = None   # agent externe relié à la conversation (None : l'assistant répond)
     agent_sessions: dict[str, str] = field(default_factory=dict)  # identifiant de session de chaque agent
+    clients: int = 0              # clients connectés (WebSocket) : une session suivie n'expire jamais
 
 
 @dataclass
@@ -278,10 +279,12 @@ class AssistantCore:
         confirm: Optional[ConfirmationHandler] = None,
         persistent: bool = False,
         user: Optional[User] = None,
+        attach: bool = False,
     ) -> Session:
         """Retourne la session existante (en mettant à jour sa confirmation) ou en crée une nouvelle.
         Avec `user`, une session appartenant à quelqu'un d'autre n'est jamais reprise : une nouvelle est créée
-        (un client ne peut pas lire l'historique d'un autre compte en devinant son identifiant de session)."""
+        (un client ne peut pas lire l'historique d'un autre compte en devinant son identifiant de session).
+        `attach` : un client connecté suit la session (WebSocket) ; elle n'expire pas avant `detach_confirmation`."""
         self._expire_sessions()
         with self._sessions_lock:
             sid = session_id or uuid.uuid4().hex[:12]
@@ -301,6 +304,8 @@ class AssistantCore:
                 if user is not None and session.user != user:
                     # Même compte, rôle, profil ou jeton renouvelés à la reconnexion : droits et prompt suivent
                     self._assign_user(session, user)
+            if attach:
+                session.clients += 1
             session.last_seen = time.monotonic()
             return session
 
@@ -415,11 +420,15 @@ class AssistantCore:
         session = self.get_session(session_id)
         if session:
             session.conversation.confirm = None
+            session.clients = max(0, session.clients - 1)
+            session.last_seen = time.monotonic()
 
     def _expire_sessions(self):
         limit = time.monotonic() - self.settings.GATEWAY_SESSION_TIMEOUT
         with self._sessions_lock:
-            for sid in [s.id for s in self._sessions.values() if not s.persistent and s.last_seen < limit]:
+            expired = [s.id for s in self._sessions.values()
+                       if not s.persistent and not s.clients and s.last_seen < limit]
+            for sid in expired:
                 del self._sessions[sid]
 
     # ---- Historique (le verrou attend la fin de la réponse en cours, qui pourrait y écrire) ----
@@ -556,6 +565,7 @@ class AssistantCore:
         turn: Optional[str] = None,
         forget: Iterable[str] = (),
         images: Iterable[Image] = (),
+        user: Optional[User] = None,
     ) -> Reply:
         """Traite une demande (texte ou enregistrement WAV) et retourne la réponse. Bloquant : à appeler
         depuis un thread pour un serveur asyncio. Les demandes d'une même session sont traitées une à une.
@@ -563,8 +573,11 @@ class AssistantCore:
         `turn` identifie l'échange (repris dans les événements et l'historique) ; `forget` retire d'abord
         ces échanges de l'historique (relance d'un message : les suivants sont effacés).
         `images` (déjà validées, voir core.images.decode_uploads) accompagnent le message : envoyées au modèle s'il
-        a la vision (sinon événement « warning » et seul le texte est traité), ou transmises par chemin à un agent."""
-        session = self.open_session(session_id)
+        a la vision (sinon événement « warning » et seul le texte est traité), ou transmises par chemin à un agent.
+        `user` : propriétaire attendu de la session. Les appelants qui servent un compte (passerelle) doivent le
+        donner : une session disparue entre-temps est alors recréée avec les droits de ce compte, jamais sans
+        propriétaire (une session sans propriétaire n'a aucune restriction d'outils)."""
+        session = self.open_session(session_id, user=user)
         sid = session.id
 
         def emit(event_type: str, session_id: str, **data):

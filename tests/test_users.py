@@ -158,6 +158,19 @@ class TestSessionOwnership(unittest.TestCase):
         self.assertEqual(executed, [])
         self.assertFalse(reply.tools[0]["executed"])
 
+    def test_expired_session_is_recreated_with_its_owner_rights(self):
+        # Session disparue (expiration) avant la demande : jamais recréée sans propriétaire (aucune restriction)
+        executed = []
+        core = make_core(executed)
+        leo = User("pb_l", "Léo", "guest")
+        session = core.open_session("s9", user=leo)
+        core.close_session(session.id)
+        reply = core.respond("s9", text="éteins tout", user=leo)
+        self.assertEqual(executed, [])
+        self.assertFalse(reply.tools[0]["executed"])
+        self.assertEqual(core.get_session("s9").user, leo)
+        self.assertEqual([t.name for t in core.get_session("s9").conversation.tools.all()], ["volume"])
+
 
 class TestUserProfile(unittest.TestCase):
     def test_prompt_lines(self):

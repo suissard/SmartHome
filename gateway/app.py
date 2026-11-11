@@ -140,10 +140,11 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
         if not body.get("text") and audio is None and not images:
             return JSONResponse({"error": "Champ 'text', 'audio' ou 'images' requis."}, status_code=400)
         # Seul le jeton maître protège /api/ask : c'est l'administrateur
-        session = core.open_session(body.get("session"), user=admin_user(core.settings))
+        admin = admin_user(core.settings)
+        session = core.open_session(body.get("session"), user=admin)
         reply = await asyncio.to_thread(
             core.respond, session.id, text=body.get("text"), audio_wav=audio, synthesize=bool(body.get("speak")),
-            images=images,
+            images=images, user=admin,
         )
         return JSONResponse(_reply_to_dict(reply))
 
@@ -211,7 +212,7 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
                 pending.pop(request_id, None)
 
         session_id = hello.get("session") or ws.query_params.get("session")
-        session = core.open_session(session_id, confirm=confirm, user=user)
+        session = core.open_session(session_id, confirm=confirm, user=user, attach=True)
         client_ip = getattr(ws.client, "host", ws.client[0] if isinstance(ws.client, (tuple, list)) else "inconnu") if ws.client else "inconnu"
         print(f"🔌 [GATEWAY {session.id}] {user.name} (rôle {user.role}) connecté depuis {client_ip}")
         unsubscribe = core.events.subscribe(lambda e: push(e.to_dict()), session_id=session.id)
@@ -252,7 +253,7 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
             try:
                 reply = core.respond(session.id, text=text, audio_wav=audio, synthesize=speak and not speech,
                                      on_sentence=speech.say if speech else None, turn=turn, forget=forget,
-                                     images=images)
+                                     images=images, user=user)
                 if speech:
                     speech.wait()
                 return reply
