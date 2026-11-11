@@ -410,6 +410,18 @@ class Settings(BaseModel):
     # Longueur maximale des consignes personnelles d'un compte (caractères)
     AUTH_INSTRUCTIONS_MAX_CHARS: int = Field(1000, ge=0)
 
+    # 🗄️ Archive des conversations (données d'entraînement, conservées indéfiniment : voir core/archive.py)
+    # Tous les échanges (micro de l'ordinateur, PWA, API) et les notes de satisfaction, dans une base SQLite locale
+    ARCHIVE_ENABLED: EnvBool = True
+    # Chemin de la base (relatif au projet)
+    ARCHIVE_DB_PATH: str = "data/archive.sqlite3"
+    # Rôles qui voient dans la PWA les conversations tenues au micro de l'ordinateur (superadmins toujours)
+    ARCHIVE_HOUSEHOLD_ROLES: CsvList = Field(default_factory=lambda: ["admin", "member"])
+    # Note des réponses (pouce sous chaque réponse : échelle de -2 à +2 et commentaire facultatif)
+    FEEDBACK_ENABLED: EnvBool = True
+    # Longueur maximale du commentaire accompagnant une note (caractères)
+    FEEDBACK_COMMENT_MAX_CHARS: int = Field(2000, ge=0)
+
     @field_validator(
         "LLM_PROVIDER", "TTS_PROVIDER", "MCP_TRANSPORT", "LLM_TOOL_CALLING", "LLM_AUDIO_INPUT", "LLM_IMAGE_INPUT",
         "BARGE_IN_MODE",

@@ -326,6 +326,8 @@ def main():
                     media_pauser.resume()
                     flush_stream(stream)
                     detector.oww.reset()
+                    # Chaque réveil est une conversation distincte dans l'archive (affichée dans la PWA)
+                    core.new_local_conversation(LOCAL_SESSION)
                     print("\n🟢 Veille...\n")
 
     except KeyboardInterrupt:

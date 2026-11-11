@@ -21,6 +21,7 @@ _ROOT_DIR = Path(__file__).resolve().parent.parent
 if str(_ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(_ROOT_DIR))
 
+from core.archive import SOURCE_API, SOURCE_LOCAL, SOURCE_PWA, ConversationArchive, clean_rating
 from core.agents import ASSISTANT, AgentCancelled, AgentDirectory, AgentError, AgentRunner, AgentSpec, detect_switch
 from core.config import ENV_FILE, Settings, get_settings, set_settings
 from core.events import EventBus
@@ -28,7 +29,7 @@ from core.history import HistoryStore, is_safe_id, new_conversation_id, sanitize
 from core.images import Image, ImageError, load_image, save_upload
 from core.sentences import SentenceSplitter, matches_phrase, strip_markdown
 from core.tools import ConfirmationHandler, ToolRegistry, ToolResult, build_tool_registry
-from core.users import User, tool_policy, user_prompt
+from core.users import LOCAL_USER_ID, User, tool_policy, user_prompt
 from llm.llm import Conversation, ResponseInterrupted
 
 
@@ -143,6 +144,8 @@ class AssistantCore:
         self._sessions_lock = threading.Lock()
         # Historique persistant des comptes (PocketBase) ; inactif sans annuaire
         self.history = HistoryStore(self.settings)
+        # Archive de tous les échanges et des notes (données d'entraînement, jamais purgée)
+        self.archive = ConversationArchive(self.settings)
         # Agents externes (agents.json) que la conversation peut rejoindre
         self._agents: Optional[AgentDirectory] = None
         # Outils [GET_SETTINGS] / [SET_SETTING] : l'assistant modifie ses paramètres à travers ce cœur
@@ -449,13 +452,18 @@ class AssistantCore:
                     print(f"📜 [ASSISTANT {session.id}] Conversation de {session.user.name} rechargée "
                           f"({len(messages)} message(s))")
         session.restored = True
-        return self._format_messages_for_client(session)
+        return self._with_feedback(self._format_messages_for_client(session), session.conversation_id, session.user)
 
     def _format_messages_for_client(self, session: Session) -> list[dict]:
-        from actions.manager import get_action_manager
-        manager = get_action_manager()
         with session.lock:
             messages = list(session.conversation.older) + list(session.conversation.history)
+        return self._clean_for_client(messages)
+
+    @staticmethod
+    def _clean_for_client(messages: list[dict]) -> list[dict]:
+        """Messages pour l'affichage : [{role, content, turn?, tools?}], tags d'actions retirés des réponses."""
+        from actions.manager import get_action_manager
+        manager = get_action_manager()
         result = []
         for m in messages:
             if m.get("role") not in ("user", "assistant"):
@@ -499,20 +507,122 @@ class AssistantCore:
             messages = []
             if self.history.applies(session.user):
                 _, messages = self.history.load_conversation(session.user, conversation_id)
-            elif client_messages:
+            elif session.user is not None:
+                # Sans historique PocketBase (jeton maître) : l'archive fait foi, sinon les messages de l'appareil
+                messages = self.archive.load_conversation(conversation_id, SOURCE_PWA, session.user.id)
+            if not messages and client_messages and not self.history.applies(session.user):
                 messages = sanitize_messages(client_messages)
             session.conversation.older = messages
             session.conversation._fit_window()
             session.restored = True
             print(f"📜 [ASSISTANT {session.id}] Conversation {conversation_id} chargée ({len(messages)} message(s))")
-        return self._format_messages_for_client(session)
+        return self._with_feedback(self._format_messages_for_client(session), conversation_id, session.user)
 
     def list_conversations(self, session_id: str) -> list[dict]:
-        """Retourne la liste des conversations du compte."""
+        """Conversations du compte (PocketBase, sinon l'archive pour le jeton maître), puis celles du micro de
+        l'ordinateur si son rôle les voit (ARCHIVE_HOUSEHOLD_ROLES ; marquées « source »: « local »)."""
         session = self.get_session(session_id)
-        if session is None or not self.history.applies(session.user):
+        if session is None or session.user is None:
             return []
-        return self.history.list_conversations(session.user)
+        if self.history.applies(session.user):
+            conversations = self.history.list_conversations(session.user)
+        else:
+            conversations = self.archive.list_conversations(SOURCE_PWA, session.user.id)
+        if self.sees_household(session.user):
+            conversations += self.archive.list_conversations(SOURCE_LOCAL)
+        return conversations
+
+    # ---- Conversations du micro de l'ordinateur & notes des réponses ----
+    def sees_household(self, user: Optional[User]) -> bool:
+        """La voix n'est pas identifiée : les conversations du micro appartiennent au foyer, visibles par ces rôles."""
+        return (self.archive.enabled and user is not None and user.id != LOCAL_USER_ID
+                and (user.superadmin or user.role in self.settings.ARCHIVE_HOUSEHOLD_ROLES))
+
+    def household_conversation(self, session_id: str, conversation_id: str) -> list[dict]:
+        """Messages d'une conversation tenue au micro, pour affichage seul (la session n'en change pas).
+        Lève PermissionError si ce compte ne voit pas les conversations du foyer."""
+        session = self.get_session(session_id)
+        if not is_safe_id(conversation_id):
+            raise ValueError("Identifiant de conversation invalide.")
+        if session is None or not self.sees_household(session.user):
+            raise PermissionError("Conversations du micro réservées aux rôles ARCHIVE_HOUSEHOLD_ROLES.")
+        messages = self._clean_for_client(self.archive.load_conversation(conversation_id, SOURCE_LOCAL))
+        return self._with_feedback(messages, conversation_id, session.user)
+
+    def new_local_conversation(self, session_id: str):
+        """Retour en veille du micro : l'échange suivant ouvre une nouvelle conversation dans l'archive (le contexte
+        du LLM est gardé, comme avant)."""
+        session = self.get_session(session_id)
+        if session is not None:
+            with session.lock:
+                session.conversation_id = new_conversation_id()
+
+    def _with_feedback(self, messages: list[dict], conversation_id: str, user: Optional[User]) -> list[dict]:
+        if not self.settings.FEEDBACK_ENABLED or user is None or not messages:
+            return messages
+        notes = self.archive.feedback_for(conversation_id, user.id)
+        for m in messages:
+            if m.get("role") == "assistant" and m.get("turn") in notes:
+                m["feedback"] = notes[m["turn"]]
+        return messages
+
+    def feedback_available(self) -> bool:
+        return bool(self.settings.FEEDBACK_ENABLED and self.archive.enabled)
+
+    def set_feedback(self, session_id: str, conversation_id: str, turn: str, rating, comment: str = "") -> dict:
+        """Note (-2 à +2) et commentaire facultatif d'une réponse, enregistrés dans l'archive au nom du compte.
+        On ne note que ce qu'on peut lire : ses propres conversations, ou celles du micro (ARCHIVE_HOUSEHOLD_ROLES).
+        Lève ValueError (donnée invalide, notes désactivées) ou PermissionError."""
+        if not self.feedback_available():
+            raise ValueError("Les notes ne sont pas activées (FEEDBACK_ENABLED, ARCHIVE_ENABLED).")
+        if not is_safe_id(conversation_id) or not is_safe_id(turn):
+            raise ValueError("Réponse inconnue.")
+        value = clean_rating(rating)
+        if value is None:
+            raise ValueError("La note doit être un entier de -2 à +2.")
+        session = self.get_session(session_id)
+        if session is None or session.user is None:
+            raise PermissionError("Session inconnue.")
+        user = session.user
+        comment = str(comment or "").strip()[:self.settings.FEEDBACK_COMMENT_MAX_CHARS]
+        row = self.archive.has_turn(conversation_id, turn)
+        if row is not None:
+            allowed = row["user_id"] == user.id or (row["source"] == SOURCE_LOCAL and self.sees_household(user))
+        else:
+            # Échange antérieur à l'archive : seulement s'il figure dans l'historique PocketBase du compte, copié alors
+            # dans l'archive pour que la note y retrouve sa réponse
+            allowed = False
+            if self.history.applies(user):
+                _, stored = self.history.load_conversation(user, conversation_id)
+                exchange = [m for m in stored if m.get("turn") == turn]
+                if any(m["role"] == "assistant" for m in exchange):
+                    allowed = True
+                    self.archive.append(conversation_id, exchange, SOURCE_PWA, session.id, user.id, user.name)
+        if not allowed:
+            raise PermissionError("Cette réponse ne peut pas être notée depuis ce compte.")
+        if not self.archive.set_feedback(conversation_id, turn, user.id, user.name, value, comment):
+            raise ValueError("Note non enregistrée (archive indisponible).")
+        print(f"⭐ [ASSISTANT {session.id}] {user.name} note {value:+d} la réponse {turn}"
+              f"{' (avec commentaire)' if comment else ''}")
+        return {"conversation_id": conversation_id, "turn": turn, "rating": value, "comment": comment}
+
+    @staticmethod
+    def _source(session: Session) -> str:
+        if session.user is None:
+            return SOURCE_API
+        return SOURCE_LOCAL if session.user.id == LOCAL_USER_ID else SOURCE_PWA
+
+    def _archive_exchange(self, session: Session, messages: list[dict]):
+        user = session.user
+        source = self._source(session)
+        try:
+            model = self.llm.model
+        except Exception:
+            model = ""
+        if self.archive.append(session.conversation_id, messages, source, session.id,
+                               user.id if user else "", user.name if user else "", model) and source == SOURCE_LOCAL:
+            # Les PWA ouvertes rafraîchissent leur liste (conversation au micro en cours)
+            self.events.emit("history_updated", session.id, conversation_id=session.conversation_id, source=source)
 
     def delete_conversation(self, session_id: str, conversation_id: str) -> bool:
         """Supprime une conversation du compte. Si c'est la conversation active, réinitialise la session."""
@@ -525,6 +635,9 @@ class AssistantCore:
                 session.conversation_id = new_conversation_id()
         if self.history.applies(session.user):
             self.history.delete_conversation(session.user, conversation_id)
+        if session.user is not None and is_safe_id(conversation_id):
+            # Masquée seulement : l'archive (données d'entraînement) la garde
+            self.archive.hide_conversation(conversation_id, session.user.id)
         return True
 
     def reset(self, session_id: str):
@@ -545,6 +658,7 @@ class AssistantCore:
             with session.lock:
                 session.conversation.forget(turns, role)
                 self.history.forget(session.user, session.conversation_id, turns, role)
+                self.archive.hide_turns(session.conversation_id, turns, role)
 
     def edit_answer(self, session_id: str, turn: str, text: str, forget: Iterable[str] = ()):
         """Remplace la réponse d'un échange et retire les échanges `forget` (ceux qui la suivaient)."""
@@ -556,6 +670,8 @@ class AssistantCore:
                 session.conversation.forget(forget)
                 self.history.edit_answer(session.user, session.conversation_id, turn, text)
                 self.history.forget(session.user, session.conversation_id, forget)
+                self.archive.edit_answer(session.conversation_id, turn, text)
+                self.archive.hide_turns(session.conversation_id, forget)
 
     # ---- Pipeline ----
     def respond(
@@ -593,6 +709,7 @@ class AssistantCore:
             forget = list(forget)
             session.conversation.forget(forget)
             self.history.forget(session.user, session.conversation_id, forget)
+            self.archive.hide_turns(session.conversation_id, forget)
             # Échange toujours numéroté dans l'historique (pour l'enregistrer, puis l'effacer ou le corriger)
             stored_turn = turn or uuid.uuid4().hex[:12]
             print(f"\n📥 [ASSISTANT {sid}] Nouveau tour (texte: « {text or ''} », audio: {len(audio_wav) if audio_wav else 0} octets)")
@@ -696,8 +813,9 @@ class AssistantCore:
                     m["tools"] = list(reply.tools)
                     break
 
-            self.history.append(session.user, session.conversation_id,
-                                [m for m in conversation.older + conversation.history if m.get("turn") == stored_turn])
+            exchange = [m for m in conversation.older + conversation.history if m.get("turn") == stored_turn]
+            self.history.append(session.user, session.conversation_id, exchange)
+            self._archive_exchange(session, exchange)
             if splitter:
                 for sentence in splitter.flush():
                     say(sentence)

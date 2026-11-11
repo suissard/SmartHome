@@ -17,6 +17,10 @@ Routes :
                         {"type": "confirm_response", "id", "accepted": bool} | {"type": "stop"} | {"type": "reset"}
                         | {"type": "set_agent", "agent": nom | null} (relie la conversation à un agent externe, voir
                         core/agents.py ; null : retour à l'assistant) -> {"type": "agent_changed", "agent": {...} | null}
+                        | {"type": "feedback", "conversation_id", "turn", "rating": -2..2, "comment"?}
+                          -> {"type": "feedback_saved", "conversation_id", "turn", "rating", "comment"} | {"type": "feedback_error", "message"}
+                        | {"type": "load_conversation", "conversation_id", "source": "local"} (conversation du micro, lecture
+                          seule, ARCHIVE_HOUSEHOLD_ROLES) ; {"type": "history_updated", "conversation_id", "source"} à chaque échange au micro
                         | {"type": "ping"} | {"type": "listening", "active": bool} (micro du client ouvert / fermé :
                         le micro de l'ordinateur ignore alors le mot-clé et repasse en veille, voir core/remote_voice.py)
                         Profil du compte connecté : {"type": "update_profile", "name", "instructions", "voice"?, "assistant_name"?}
@@ -225,10 +229,14 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
                 "wakeword": {"enabled": s.WAKEWORD_ENABLED, "available": core.local_microphone},
             }
 
-        unsubscribe_settings = core.events.subscribe(
-            lambda e: push({**e.to_dict(), **(public_state() if e.type == "settings_changed" else {})})
-            if e.type in ("settings_changed", "restarting") else None
-        )
+        def on_global(e):
+            if e.type in ("settings_changed", "restarting"):
+                push({**e.to_dict(), **(public_state() if e.type == "settings_changed" else {})})
+            elif e.type == "history_updated" and e.session_id != session.id and core.sees_household(user):
+                # Échange au micro de l'ordinateur : la liste des conversations (et la conversation affichée) suit
+                push(e.to_dict())
+
+        unsubscribe_settings = core.events.subscribe(on_global)
 
         async def sender():
             while True:
@@ -295,6 +303,12 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
                 if kind == "list_conversations":
                     convs = await asyncio.to_thread(core.list_conversations, session.id)
                     push({"type": "conversations_list", "conversations": convs})
+                elif kind == "load_conversation" and message.get("source") == "local":
+                    # Conversation tenue au micro de l'ordinateur : affichée en lecture seule, la session n'en change pas
+                    cid = str(message.get("conversation_id", "")).strip()
+                    msgs = await asyncio.to_thread(core.household_conversation, session.id, cid)
+                    push({"type": "conversation_loaded", "conversation_id": cid, "history": msgs,
+                          "source": "local", "readonly": True})
                 elif kind == "load_conversation":
                     cid = str(message.get("conversation_id", "")).strip()
                     client_msgs = message.get("messages")
@@ -306,6 +320,18 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
                     push({"type": "conversation_deleted", "conversation_id": cid, "success": ok})
             except Exception as e:
                 push({"type": "error", "message": f"Erreur conversation : {e}"})
+
+        async def handle_feedback(message: dict):
+            """Note d'une réponse (-2 à +2) et commentaire facultatif, enregistrés dans l'archive."""
+            try:
+                saved = await asyncio.to_thread(
+                    core.set_feedback, session.id, str(message.get("conversation_id") or ""),
+                    str(message.get("turn") or ""), message.get("rating"), str(message.get("comment") or ""))
+                push({"type": "feedback_saved", **saved})
+            except (ValueError, PermissionError) as e:
+                push({"type": "feedback_error", "message": str(e), "turn": message.get("turn")})
+            except Exception as e:
+                push({"type": "feedback_error", "message": f"Note non enregistrée : {e}", "turn": message.get("turn")})
 
         async def handle_profile(message: dict):
             """Prénom et consignes du compte, enregistrés dans l'annuaire avec le jeton du compte lui-même."""
@@ -505,6 +531,9 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
             # Agents externes que ce compte peut rejoindre, et celui relié à la session (None : l'assistant)
             "agents": core.available_agents(session.id),
             "agent": core.agent_info(session.id),
+            # Pouce sous les réponses (note de -2 à +2, commentaire) et conversations du micro dans le tiroir
+            "feedback": {"enabled": core.feedback_available(), "comment_max": s.FEEDBACK_COMMENT_MAX_CHARS},
+            "household": core.sees_household(user),
             **public_state(),
         })
         sender_task = asyncio.create_task(sender())
@@ -554,6 +583,10 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
                     push({"type": "reset_done", "conversation_id": session.conversation_id})
                 elif kind in ("list_conversations", "load_conversation", "delete_conversation"):
                     task = asyncio.create_task(handle_conversations(message))
+                    tasks.add(task)
+                    task.add_done_callback(tasks.discard)
+                elif kind == "feedback":
+                    task = asyncio.create_task(handle_feedback(message))
                     tasks.add(task)
                     task.add_done_callback(tasks.discard)
                 elif kind in ("forget", "edit_answer"):

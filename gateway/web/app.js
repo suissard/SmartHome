@@ -139,7 +139,14 @@ const state = {
   pocketbaseUrl: "http://127.0.0.1:8090", // URL de PocketBase
   pbUsers: [],             // liste des comptes PocketBase (superadmin)
   versionInfo: null,       // informations de version locale vs dépôt GitHub
+  feedback: { enabled: false, comment_max: 2000 }, // pouce sous les réponses (ready.feedback)
+  household: false,        // ce compte voit les conversations tenues au micro de l'ordinateur
+  readonlyConversation: null, // conversation du micro affichée (lecture seule) ; null : conversation de la session
 };
+
+// Éléments du fil de conversation (effacés ensemble au changement de conversation)
+const LOG_ITEMS = ".msg, .tool, .tool-pastille, .feedback, .readonly-banner";
+const HOUSEHOLD_AUTHOR = "Foyer (micro)";
 
 // ---- Synchronisation de la hauteur visible (évite que la barre de saisie en bas sorte de l'écran) ----
 function syncViewportHeight() {
@@ -198,7 +205,7 @@ function userDisplayName() {
 
 // Noms de l'assistant et de l'utilisateur : bulles déjà affichées mises à jour (profil ou réglage modifié)
 function refreshAuthors() {
-  for (const el of ui.log.querySelectorAll(".msg.user")) el.dataset.author = userDisplayName();
+  for (const el of ui.log.querySelectorAll(".msg.user:not([data-household])")) el.dataset.author = userDisplayName();
   for (const el of ui.log.querySelectorAll(".msg.bot")) el.dataset.author = state.assistantName;
 }
 
@@ -605,6 +612,10 @@ function handleEvent(event) {
       state.tools = event.tools || [];
       if (event.images) state.imageConfig = event.images;
       if (event.pocketbase_url) state.pocketbaseUrl = event.pocketbase_url;
+      state.feedback = { enabled: false, comment_max: 2000, ...(event.feedback || {}) };
+      state.household = Boolean(event.household);
+      state.readonlyConversation = null;
+      if (!state.household) state.conversations = state.conversations.filter((c) => c.source !== "local");
       store.set("session", event.session);
       ui.sessionId.textContent = event.session;
       if (event.conversation_id) state.currentConversationId = event.conversation_id;
@@ -635,6 +646,7 @@ function handleEvent(event) {
             local.updated = sConv.updated || local.updated;
             local.last_message = sConv.last_message || local.last_message;
             if (sConv.tools) local.tools = [...new Set([...(local.tools || []), ...sConv.tools])];
+            if (sConv.source) local.source = sConv.source;
           } else {
             state.conversations.push(sConv);
           }
@@ -646,7 +658,10 @@ function handleEvent(event) {
       break;
     case "conversation_loaded":
       if (event.conversation_id) {
+        // Réponse tardive à un ancien choix : la conversation affichée a changé entre-temps
+        if (event.conversation_id !== state.currentConversationId && event.readonly) break;
         state.currentConversationId = event.conversation_id;
+        state.readonlyConversation = event.readonly ? event.conversation_id : null;
         renderHistory(event.history || []);
         const conv = getCurrentConversation();
         conv.messages = event.history || [];
@@ -658,10 +673,27 @@ function handleEvent(event) {
       if (event.conversation_id) {
         state.currentConversationId = event.conversation_id;
         state.currentTurnTools = [];
-        ui.log.querySelectorAll(".msg, .tool, .tool-pastille").forEach((el) => el.remove());
+        ui.log.querySelectorAll(LOG_ITEMS).forEach((el) => el.remove());
         ui.empty.hidden = false;
         updateActiveConversationUI();
       }
+      break;
+    case "history_updated":
+      // Échange au micro de l'ordinateur : liste rafraîchie, et conversation rechargée si elle est affichée
+      clearTimeout(historyRefreshTimer);
+      historyRefreshTimer = setTimeout(() => {
+        send({ type: "list_conversations" });
+        if (state.readonlyConversation && state.readonlyConversation === event.conversation_id) {
+          send({ type: "load_conversation", conversation_id: event.conversation_id, source: "local" });
+        }
+      }, 400);
+      break;
+    case "feedback_saved":
+      onFeedbackSaved(event);
+      break;
+    case "feedback_error":
+      showToast(event.message || "Note non enregistrée", "error");
+      if (event.turn) for (const el of feedbackControls(event.turn)) renderFeedback(el);
       break;
     case "conversation_deleted":
       if (event.conversation_id) {
@@ -751,6 +783,8 @@ function handleEvent(event) {
       }
       recordMessageInCurrentConversation("assistant", event.text, state.eventTurn, state.currentTurnTools);
       state.currentTurnTools = [];
+      // Les échanges avec un agent externe ne sont pas archivés : rien à noter
+      if (event.text && state.eventTurn && !event.agent) addFeedbackControl(state.eventTurn);
       if (event.end_conversation) {
         const el = document.createElement("div");
         el.className = "tool-pastille";
@@ -789,7 +823,7 @@ function handleEvent(event) {
       refreshControls();
       break;
     case "reset_done":
-      ui.log.querySelectorAll(".msg, .tool, .tool-pastille").forEach((el) => el.remove());
+      ui.log.querySelectorAll(LOG_ITEMS).forEach((el) => el.remove());
       ui.empty.hidden = false;
       if (event.conversation_id) state.currentConversationId = event.conversation_id;
       state.currentTurnTools = [];
@@ -1008,7 +1042,17 @@ function renderConvList(filterText = "") {
         confirmDeleteConversation(conv.id, conv.title);
       });
 
-      top.append(title, date, delBtn);
+      if (conv.source === "local") {
+        // Conversation au micro de l'ordinateur : appartient au foyer, jamais supprimée depuis la PWA
+        li.classList.add("household");
+        const badge = document.createElement("span");
+        badge.className = "conv-item-badge";
+        badge.title = "Conversation au micro de l'ordinateur";
+        badge.innerHTML = `${HOUSE_ICON}<span>Micro</span>`;
+        top.append(badge, title, date);
+      } else {
+        top.append(title, date, delBtn);
+      }
 
       const snippet = document.createElement("div");
       snippet.className = "conv-item-snippet";
@@ -1059,8 +1103,12 @@ function selectConversation(convId) {
   state.currentConversationId = convId;
   const conv = state.conversations.find((c) => c.id === convId);
   if (conv) {
+    const household = conv.source === "local";
+    state.readonlyConversation = household ? convId : null;
     renderHistory(conv.messages || []);
-    send({ type: "load_conversation", conversation_id: convId, messages: conv.messages || [] });
+    send(household
+      ? { type: "load_conversation", conversation_id: convId, source: "local" }
+      : { type: "load_conversation", conversation_id: convId, messages: conv.messages || [] });
   }
   updateActiveConversationUI();
   if (window.innerWidth <= 600) {
@@ -1070,10 +1118,11 @@ function selectConversation(convId) {
 
 function startNewConversation() {
   if (state.busy) interruptAssistant();
+  state.readonlyConversation = null;
   const newId = generateConvId();
   state.currentConversationId = newId;
   state.currentTurnTools = [];
-  ui.log.querySelectorAll(".msg, .tool, .tool-pastille").forEach((el) => el.remove());
+  ui.log.querySelectorAll(LOG_ITEMS).forEach((el) => el.remove());
   ui.empty.hidden = false;
   send({ type: "new_conversation" });
   updateActiveConversationUI();
@@ -1085,7 +1134,7 @@ function startNewConversation() {
 function confirmDeleteConversation(convId, title) {
   state.pendingDeleteConvId = convId;
   if (ui.convDeleteDesc) {
-    ui.convDeleteDesc.textContent = `Voulez-vous supprimer définitivement « ${title || "cette conversation"} » et son historique ?`;
+    ui.convDeleteDesc.textContent = `Retirer « ${title || "cette conversation"} » de votre historique ? Elle reste dans l'archive locale de SmartHome (données d'entraînement).`;
   }
   if (ui.convDeleteConfirm) {
     ui.convDeleteConfirm.showModal();
@@ -1166,14 +1215,19 @@ function initConversations() {
 // Conversation en cours renvoyée par le serveur ou chargée depuis le tiroir :
 function renderHistory(messages) {
   if (!messages || !messages.length) {
-    ui.empty.hidden = ui.log.querySelector(".msg, .tool, .tool-pastille") !== null;
+    ui.empty.hidden = ui.log.querySelector(LOG_ITEMS) !== null;
     return;
   }
-  ui.log.querySelectorAll(".msg, .tool, .tool-pastille").forEach((el) => el.remove());
+  ui.log.querySelectorAll(LOG_ITEMS).forEach((el) => el.remove());
   for (const message of messages) {
     if (message.role === "user") {
       const el = addBubble("user", message.content);
       if (message.turn) el.dataset.turn = message.turn;
+      // Conversation au micro : la voix n'est pas identifiée, c'est le foyer qui parle
+      if (state.readonlyConversation) {
+        el.dataset.author = HOUSEHOLD_AUTHOR;
+        el.dataset.household = "1";
+      }
     } else if (message.role === "assistant") {
       if (message.tools && Array.isArray(message.tools)) {
         for (const t of message.tools) {
@@ -1183,12 +1237,192 @@ function renderHistory(messages) {
       }
       if (message.content) {
         const el = addBubble("bot", message.content);
-        if (message.turn) el.dataset.turn = message.turn;
+        if (message.turn) {
+          el.dataset.turn = message.turn;
+          addFeedbackControl(message.turn, message.feedback || null);
+        }
       }
     }
   }
-  ui.empty.hidden = ui.log.querySelector(".msg, .tool, .tool-pastille") !== null;
+  if (state.readonlyConversation) {
+    const banner = document.createElement("div");
+    banner.className = "readonly-banner";
+    banner.setAttribute("role", "note");
+    banner.innerHTML = `<span aria-hidden="true">${HOUSE_ICON}</span><span>Conversation tenue au micro de l'ordinateur — lecture seule. Écrire ou parler en commence une nouvelle.</span>`;
+    ui.log.prepend(banner);
+  }
+  ui.empty.hidden = ui.log.querySelector(LOG_ITEMS) !== null;
   scrollDown(true);
+}
+
+// ---- Note des réponses : pouce, échelle de -2 à +2, puis commentaire facultatif ----
+const HOUSE_ICON = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg>`;
+const THUMB_ICON = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 21h4V9H2v12zm20-11c0-1.1-.9-2-2-2h-6.31l.95-4.57.03-.32c0-.41-.17-.79-.44-1.06L13.17 1 6.59 7.59C6.22 7.95 6 8.45 6 9v10c0 1.1.9 2 2 2h9c.83 0 1.54-.5 1.84-1.22l3.02-7.05c.09-.23.14-.47.14-.73v-2z"/></svg>`;
+const FEEDBACK_SCALE = [
+  { value: -2, label: "Très mauvaise" },
+  { value: -1, label: "Mauvaise" },
+  { value: 0, label: "Moyenne" },
+  { value: 1, label: "Bonne" },
+  { value: 2, label: "Excellente" },
+];
+let historyRefreshTimer = null;
+
+function formatRating(value) {
+  return value > 0 ? `+${value}` : String(value);
+}
+
+function feedbackControls(turn) {
+  return [...ui.log.querySelectorAll(".feedback")].filter((el) => el.dataset.turn === turn);
+}
+
+function leaveReadonlyConversation() {
+  if (state.readonlyConversation) startNewConversation();
+}
+
+// Contrôle placé sous la dernière bulle de l'échange (une réponse coupée par des outils en a plusieurs)
+function addFeedbackControl(turn, feedback = null) {
+  if (!state.feedback.enabled || !turn || !state.currentConversationId) return;
+  for (const old of feedbackControls(turn)) old.remove();
+  const el = document.createElement("div");
+  el.className = "feedback";
+  el.dataset.turn = turn;
+  el.dataset.conversation = state.currentConversationId;
+  el.innerHTML = `
+    <button type="button" class="feedback-thumb" aria-expanded="false">
+      ${THUMB_ICON}<span class="feedback-value"></span>
+    </button>
+    <div class="feedback-panel" hidden>
+      <div class="feedback-scale" role="radiogroup" aria-label="Satisfaction, de -2 (très mauvaise) à +2 (excellente)">
+        ${FEEDBACK_SCALE.map((s) => `
+          <button type="button" role="radio" aria-checked="false" class="feedback-step" data-value="${s.value}" title="${s.label}">
+            <span class="feedback-step-value">${formatRating(s.value)}</span>
+            <span class="feedback-step-label">${s.label}</span>
+          </button>`).join("")}
+      </div>
+      <form class="feedback-comment" hidden>
+        <textarea rows="2" placeholder="Un commentaire ? (facultatif) — ce qui manquait, ce qui était faux…"
+          aria-label="Commentaire sur la réponse"></textarea>
+        <div class="feedback-actions">
+          <button type="button" class="feedback-close">Fermer</button>
+          <button type="submit" class="feedback-send">Envoyer</button>
+        </div>
+      </form>
+    </div>`;
+  el.querySelector("textarea").maxLength = state.feedback.comment_max || 2000;
+  if (feedback && Number.isInteger(feedback.rating)) {
+    el.dataset.rating = String(feedback.rating);
+    el.dataset.comment = feedback.comment || "";
+  }
+  renderFeedback(el);
+
+  const thumb = el.querySelector(".feedback-thumb");
+  thumb.addEventListener("click", () => toggleFeedback(el));
+  for (const step of el.querySelectorAll(".feedback-step")) {
+    step.addEventListener("click", () => {
+      el.dataset.pending = step.dataset.value;
+      sendFeedback(el, Number(step.dataset.value), el.querySelector("textarea").value);
+      const form = el.querySelector(".feedback-comment");
+      form.hidden = false;
+      renderFeedback(el);
+      el.querySelector("textarea").focus({ preventScroll: true });
+      scrollDown();
+    });
+  }
+  el.querySelector(".feedback-comment").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const rating = Number(el.dataset.pending ?? el.dataset.rating);
+    if (!Number.isInteger(rating)) return;
+    el.dataset.closeOnSave = "1";
+    sendFeedback(el, rating, el.querySelector("textarea").value);
+  });
+  el.querySelector(".feedback-close").addEventListener("click", () => toggleFeedback(el, false));
+  el.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !el.querySelector(".feedback-panel").hidden) {
+      e.stopPropagation();
+      toggleFeedback(el, false);
+      thumb.focus();
+    }
+  });
+
+  // Après la dernière bulle (ou pastille) de l'échange
+  const items = turnElements(turn, ".msg, .tool, .tool-pastille");
+  const last = items[items.length - 1];
+  if (last) last.after(el);
+  else ui.log.append(el);
+  scrollDown();
+}
+
+function toggleFeedback(el, open) {
+  const panel = el.querySelector(".feedback-panel");
+  const show = open ?? panel.hidden;
+  for (const other of ui.log.querySelectorAll(".feedback.open")) if (other !== el) toggleFeedback(other, false);
+  panel.hidden = !show;
+  el.classList.toggle("open", show);
+  el.querySelector(".feedback-thumb").setAttribute("aria-expanded", String(show));
+  // Une note déjà donnée : son commentaire reste modifiable
+  const form = el.querySelector(".feedback-comment");
+  form.hidden = !(show && el.dataset.rating !== undefined);
+  if (show) {
+    el.querySelector("textarea").value = el.dataset.comment || "";
+    const current = el.querySelector(`.feedback-step[aria-checked="true"]`) || el.querySelector(".feedback-step");
+    current.focus({ preventScroll: true });
+    scrollDown();
+  } else {
+    delete el.dataset.pending;
+  }
+}
+
+function renderFeedback(el) {
+  const rating = el.dataset.pending ?? el.dataset.rating;
+  const has = rating !== undefined && rating !== "";
+  el.dataset.level = has ? rating : "";
+  const value = el.querySelector(".feedback-value");
+  value.textContent = has ? formatRating(Number(rating)) : "";
+  const thumb = el.querySelector(".feedback-thumb");
+  const label = has
+    ? `Réponse notée ${formatRating(Number(rating))} (${FEEDBACK_SCALE.find((s) => String(s.value) === rating)?.label || ""}) : modifier`
+    : "Noter cette réponse";
+  thumb.setAttribute("aria-label", label);
+  thumb.title = label;
+  for (const step of el.querySelectorAll(".feedback-step")) {
+    step.setAttribute("aria-checked", String(step.dataset.value === rating));
+  }
+}
+
+function sendFeedback(el, rating, comment) {
+  if (!state.ready) {
+    showToast("Hors ligne : note non envoyée", "error");
+    return;
+  }
+  send({
+    type: "feedback",
+    conversation_id: el.dataset.conversation,
+    turn: el.dataset.turn,
+    rating,
+    comment: (comment || "").trim(),
+  });
+}
+
+function onFeedbackSaved(event) {
+  for (const el of feedbackControls(event.turn)) {
+    if (el.dataset.conversation !== event.conversation_id) continue;
+    el.dataset.rating = String(event.rating);
+    el.dataset.comment = event.comment || "";
+    delete el.dataset.pending;
+    renderFeedback(el);
+    if (el.dataset.closeOnSave) {
+      delete el.dataset.closeOnSave;
+      toggleFeedback(el, false);
+      showToast("Merci pour votre avis", "ok", 2000);
+    }
+  }
+  // Note gardée avec la conversation sur cet appareil (réaffichée hors ligne)
+  const conv = state.conversations.find((c) => c.id === event.conversation_id);
+  const message = conv?.messages?.find((m) => m.turn === event.turn && m.role === "assistant");
+  if (message) {
+    message.feedback = { rating: event.rating, comment: event.comment || "" };
+    saveConversations();
+  }
 }
 
 function newTurn() {
@@ -1199,6 +1433,7 @@ function newTurn() {
 // `forget` : échanges à retirer de l'historique du serveur avant de répondre (relance d'un message)
 function sendText(text, forget = [], images = []) {
   interruptAssistant();
+  leaveReadonlyConversation();
   const turn = newTurn();
   const bubble = addBubble("user", text);
   bubble.dataset.turn = turn;
@@ -1214,6 +1449,7 @@ function sendText(text, forget = [], images = []) {
 }
 
 function sendAudio(wavBytes) {
+  leaveReadonlyConversation();
   const turn = newTurn();
   state.pendingUser = addBubble("user", "🎙️ …");
   state.pendingUser.dataset.turn = turn;
@@ -1285,7 +1521,7 @@ ui.log.addEventListener("contextmenu", (e) => {
   openMessageMenu(el);
 });
 
-function turnElements(turn, selector = ".msg, .tool, .tool-pastille") {
+function turnElements(turn, selector = LOG_ITEMS) {
   return [...ui.log.querySelectorAll(selector)].filter((el) => el.dataset.turn === turn);
 }
 
@@ -1297,6 +1533,10 @@ function relaunchSource(el) {
 
 function openMessageMenu(el) {
   if (ui.msgMenu.open || ui.msgEditor.open) return;
+  if (state.readonlyConversation) {
+    showToast("Conversation du micro : lecture seule", "warn");
+    return;
+  }
   state.menuTarget = el;
   const isBot = el.classList.contains("bot");
   const canRelaunch = Boolean(el.dataset.turn && relaunchSource(el));
@@ -1315,7 +1555,7 @@ function removeElements(elements) {
     if (el === state.pendingUser) state.pendingUser = null;
     el.remove();
   }
-  ui.empty.hidden = ui.log.querySelector(".msg, .tool, .tool-pastille") !== null;
+  ui.empty.hidden = ui.log.querySelector(LOG_ITEMS) !== null;
 }
 
 // Efface ces éléments et retourne leurs échanges, à retirer aussi de l'historique du serveur
@@ -1329,7 +1569,7 @@ function dropElements(elements) {
 function followingElements(el) {
   const elements = [];
   for (let next = el.nextElementSibling; next; next = next.nextElementSibling) {
-    if (next.matches(".msg, .tool, .tool-pastille")) elements.push(next);
+    if (next.matches(LOG_ITEMS)) elements.push(next);
   }
   return elements;
 }
@@ -1901,7 +2141,7 @@ ui.scrollBottomBtn?.addEventListener("click", () => {
 });
 
 function promptResetConversation() {
-  const hasMessages = ui.log.querySelectorAll(".msg, .tool, .tool-pastille").length > 0;
+  const hasMessages = ui.log.querySelectorAll(LOG_ITEMS).length > 0;
   if (!hasMessages) {
     startNewConversation();
     return;
