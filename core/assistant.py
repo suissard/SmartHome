@@ -24,7 +24,7 @@ if str(_ROOT_DIR) not in sys.path:
 from core.agents import ASSISTANT, AgentCancelled, AgentDirectory, AgentError, AgentRunner, AgentSpec, detect_switch
 from core.config import ENV_FILE, Settings, get_settings, set_settings
 from core.events import EventBus
-from core.history import HistoryStore, new_conversation_id
+from core.history import HistoryStore, is_safe_id, new_conversation_id, sanitize_messages
 from core.images import Image, ImageError, load_image, save_upload
 from core.sentences import SentenceSplitter, matches_phrase, strip_markdown
 from core.tools import ConfirmationHandler, ToolRegistry, ToolResult, build_tool_registry
@@ -486,7 +486,10 @@ class AssistantCore:
         return result
 
     def load_conversation(self, session_id: str, conversation_id: str, client_messages: Optional[list] = None) -> list[dict]:
-        """Bascule la session sur une conversation existante et renvoie ses messages."""
+        """Bascule la session sur une conversation existante et renvoie ses messages.
+        Lève ValueError si l'identifiant n'est pas valide (il est ensuite écrit dans l'historique du compte)."""
+        if not is_safe_id(conversation_id):
+            raise ValueError("Identifiant de conversation invalide.")
         session = self.get_session(session_id)
         if session is None:
             return []
@@ -497,7 +500,7 @@ class AssistantCore:
             if self.history.applies(session.user):
                 _, messages = self.history.load_conversation(session.user, conversation_id)
             elif client_messages:
-                messages = client_messages
+                messages = sanitize_messages(client_messages)
             session.conversation.older = messages
             session.conversation._fit_window()
             session.restored = True

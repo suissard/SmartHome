@@ -37,6 +37,25 @@ def new_conversation_id() -> str:
     return uuid.uuid4().hex
 
 
+def is_safe_id(value) -> bool:
+    """Identifiant (conversation, échange) utilisable dans un filtre PocketBase."""
+    return isinstance(value, str) and bool(_SAFE_ID.match(value))
+
+
+def sanitize_messages(messages) -> list[dict]:
+    """Messages d'une conversation fournis par un client (sans historique serveur) : seuls les rôles « user » et
+    « assistant » à contenu texte sont gardés (jamais de message système ou d'outil injecté dans le contexte du LLM)."""
+    if not isinstance(messages, list):
+        return []
+    clean = []
+    for m in messages:
+        if not isinstance(m, dict) or m.get("role") not in ("user", "assistant") or not isinstance(m.get("content"), str):
+            continue
+        clean.append({"role": m["role"], "content": m["content"],
+                      **({"turn": m["turn"]} if is_safe_id(m.get("turn")) else {})})
+    return clean
+
+
 def _record_id(user: User) -> str:
     return user.id.removeprefix("pb_")
 
