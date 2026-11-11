@@ -366,7 +366,8 @@ class AssistantCore:
         session = self.get_session(session_id)
         if session is None or not self.agents_allowed(session.user):
             return []
-        return [a.public() for a in self.agents.all()]
+        # Un agent dont la commande n'est pas installée n'est pas proposé dans le menu de la PWA
+        return [a.public() for a in self.agents.all() if a.executable(self.settings)]
 
     def _current_agent(self, session: Session) -> Optional[AgentSpec]:
         if not session.agent:
@@ -384,8 +385,12 @@ class AssistantCore:
             return None
         return {**agent.public(), "voice": self._agent_voice(agent, session)}
 
+    def agent_error(self, agent: AgentSpec, error) -> str:
+        return Template(self.settings.AGENTS_ERROR_MESSAGE).safe_substitute(AGENT=agent.label, ERROR=str(error))
+
     def set_agent(self, session_id: str, name: Optional[str]) -> Optional[AgentSpec]:
-        """Relie la session à un agent (None : retour à l'assistant). Lève ValueError (inconnu, non autorisé)."""
+        """Relie la session à un agent (None : retour à l'assistant).
+        Lève ValueError (inconnu, non autorisé, commande non installée : la session reste à l'assistant)."""
         session = self.get_session(session_id)
         if session is None:
             raise ValueError("Session inconnue.")
@@ -396,6 +401,9 @@ class AssistantCore:
                 raise ValueError(f"Agent « {name} » inconnu.")
             if not self.agents_allowed(session.user):
                 raise ValueError(Template(self.settings.AGENTS_DENIED_MESSAGE).safe_substitute(AGENT=spec.label))
+            if spec.executable(self.settings) is None:
+                print(f"⚠️ [AGENTS] {spec.label} : commande « {spec.command[0]} » introuvable")
+                raise ValueError(self.agent_error(spec, f"commande « {spec.command[0]} » introuvable"))
         previous = session.agent
         session.agent = spec.name if spec else None
         if previous != session.agent:
@@ -833,8 +841,11 @@ class AssistantCore:
             if requested is not None and not reply.end_conversation:
                 agent = self.agents.get(requested)
                 if agent is not None and self.agents_allowed(session.user):
-                    self.set_agent(sid, agent.name)
-                    announce = Template(s.AGENTS_SWITCH_MESSAGE).safe_substitute(AGENT=agent.label)
+                    try:
+                        self.set_agent(sid, agent.name)
+                        announce = Template(s.AGENTS_SWITCH_MESSAGE).safe_substitute(AGENT=agent.label)
+                    except ValueError as e:   # agent non installé : l'assistant garde la main
+                        announce = str(e)
                     say(announce)
                     reply.text = f"{reply.text} {announce}".strip()
 
@@ -907,7 +918,12 @@ class AssistantCore:
                 answer(Template(s.AGENTS_DENIED_MESSAGE).safe_substitute(AGENT=target.label))
                 return True
             if current is None or current.name != target.name or not switch.rest:
-                self.set_agent(sid, target.name)
+                try:
+                    self.set_agent(sid, target.name)
+                except ValueError as e:   # agent non installé : l'assistant garde (ou reprend) la main
+                    self.set_agent(sid, None)
+                    answer(str(e), error=True)
+                    return True
                 speaker.say(Template(s.AGENTS_SWITCH_MESSAGE).safe_substitute(AGENT=target.label))
             if not switch.rest:
                 reply.text = Template(s.AGENTS_SWITCH_MESSAGE).safe_substitute(AGENT=target.label)
@@ -941,9 +957,11 @@ class AssistantCore:
             emit("interrupted", sid)
             return
         except AgentError as e:
-            print(f"⚠️ [AGENTS] {agent.label} : {e}")
-            reply.text = Template(self.settings.AGENTS_ERROR_MESSAGE).safe_substitute(AGENT=agent.label, ERROR=str(e))
-            emit("response", sid, text=reply.text, tools=[], agent=agent.name, error=True)
+            # L'agent ne répond pas : la conversation revient à l'assistant (sinon chaque phrase suivante échouerait)
+            print(f"⚠️ [AGENTS] {agent.label} : {e} — retour à l'assistant")
+            self.set_agent(sid, None)
+            reply.text = self.agent_error(agent, e)
+            emit("response", sid, text=reply.text, tools=[], error=True)
             speaker.say(reply.text)
             return
         if result.session:

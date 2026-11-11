@@ -6,7 +6,9 @@ L'agent tourne en arrière-plan (journal dans ACTIONS_AGENT_LOG_DIR) ; une notif
 La nouvelle commande est chargée au prochain redémarrage de SmartHome.
 """
 
+import os
 import shlex
+import shutil
 import subprocess
 import sys
 import threading
@@ -125,8 +127,13 @@ class CreateCommandAction(BaseAction):
         log_file.flush()
         try:
             print(f"🤖 [ACTIONS] Agent lancé ({cmd[0]}, modèle {s.ACTIONS_AGENT_MODEL}) dans {directory}")
+            # Lancé par systemd, SmartHome n'a pas ~/.local/bin dans son PATH : même recherche que les agents
+            from core.agents import search_path
+            path = search_path(s)
+            cmd = [shutil.which(cmd[0], path=path) or cmd[0], *cmd[1:]]
             process = subprocess.Popen(
                 cmd, cwd=str(directory), stdin=subprocess.DEVNULL, stdout=log_file, stderr=subprocess.STDOUT,
+                env={**os.environ, "PATH": path},
                 **({"start_new_session": True} if sys.platform != "win32" else {}),
             )
         except OSError as e:

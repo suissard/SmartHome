@@ -58,6 +58,8 @@ class AgentAction(BaseAction):
         if spec is None:
             known = ", ".join(a.name for a in _directory().all()) or "aucun"
             return 1, "", f"Agent « {args} » inconnu. Agents disponibles : {known}."
+        if spec.executable() is None:
+            return 1, "", f"{spec.label} n'est pas installé (commande « {spec.command[0]} » introuvable)."
         return 0, f"Conversation reliée à {spec.label} : ses réponses arrivent directement.", ""
 
     def execute_sync(self, args: str = "", timeout: float = 10.0):

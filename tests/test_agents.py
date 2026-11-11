@@ -90,6 +90,7 @@ class AgentTestCase(unittest.TestCase):
             "voix": {"label": "Voixbot", "voice": "inexistante", "command": [sys.executable, str(script), "{prompt}"],
                      "output": "hermes"},
             "off": {"label": "Off", "command": ["true"], "enabled": False},
+            "absent": {"label": "Absentbot", "command": ["commande-agent-absente", "{prompt}"]},
         }}), encoding="utf-8")
         self.settings = Settings(LLM_STREAM=True, LLM_TOOL_CALLING="native", MCP_CLIENT_ENABLED=False,
                                  AGENTS_CONFIG_FILE=str(config), AGENTS_PROMPT_PREFIX="[voix]",
@@ -139,7 +140,7 @@ class TestParsers(unittest.TestCase):
 
 class TestDirectoryAndSwitch(AgentTestCase):
     def test_directory(self):
-        self.assertEqual(sorted(a.name for a in self.directory.all()), ["fake", "voix"])
+        self.assertEqual(sorted(a.name for a in self.directory.all()), ["absent", "fake", "voix"])
         self.assertEqual(self.directory.get("Faux Agent").name, "fake")
         self.assertEqual(self.directory.get("FAKEBOT").name, "fake")
         self.assertIsNone(self.directory.get("off"))
@@ -165,6 +166,19 @@ class TestDirectoryAndSwitch(AgentTestCase):
         self.assertEqual(spec.build_command("bonjour", "s1")[-2:], ["--resume", "s1"])
         with self.assertRaises(AgentError):
             AgentSpec("y", "Y", ["commande-qui-n-existe-pas"]).build_command("a")
+
+    def test_extra_path_finds_command_missing_from_path(self):
+        # Service systemd : ~/.local/bin absent du PATH, la commande est trouvée grâce à AGENTS_EXTRA_PATH
+        bin_dir = Path(self.tmp.name) / "bin"
+        bin_dir.mkdir()
+        exe = bin_dir / "agent-local"
+        exe.write_text("#!/bin/sh\necho ok\n")
+        exe.chmod(0o755)
+        spec = AgentSpec("l", "L", ["agent-local", "{prompt}"])
+        self.assertIsNone(spec.executable(self.settings))
+        settings = Settings(AGENTS_EXTRA_PATH=[str(bin_dir)])
+        self.assertEqual(spec.executable(settings), str(exe))
+        self.assertEqual(spec.build_command("a", settings=settings)[0], str(exe))
 
     def test_build_command_never_turns_text_into_options(self):
         spec = AgentSpec("x", "X", [sys.executable, "{prompt}"], resume_args=["--resume", "{session}"])
@@ -267,6 +281,21 @@ class TestCoreRouting(AgentTestCase):
         core.set_agent("s", "fake")
         reply = core.respond("s", text="plante")
         self.assertIn("Fakebot ne répond pas", reply.text)
+        # L'agent a échoué : l'assistant reprend la main, le message suivant va au LLM
+        self.assertIsNone(core.agent_info("s"))
+        core.respond("s", text="bonjour")
+        self.assertEqual(self.llm.calls, 1)
+
+    def test_missing_agent_command_stays_with_assistant(self):
+        core = self.make_core()
+        core.open_session("s")
+        reply = core.respond("s", text="J'aimerais parler à Absentbot")
+        self.assertIn("introuvable", reply.text)
+        self.assertIsNone(core.agent_info("s"))
+        with self.assertRaises(ValueError):
+            core.set_agent("s", "absent")
+        core.respond("s", text="bonjour")
+        self.assertEqual(self.llm.calls, 1)
 
     def test_roles(self):
         core = self.make_core()

@@ -301,7 +301,10 @@ class Settings(BaseModel):
     AGENTS_SWITCH_MESSAGE: str = "${AGENT} à l'écoute."
     AGENTS_RETURN_MESSAGE: str = "Me revoilà."
     AGENTS_DENIED_MESSAGE: str = "Je ne peux pas vous mettre en relation avec ${AGENT} : accès réservé aux administrateurs."
-    AGENTS_ERROR_MESSAGE: str = "${AGENT} ne répond pas : ${ERROR}"
+    # Réponse quand l'agent échoue (${AGENT}, ${ERROR}) : l'assistant reprend alors la main
+    AGENTS_ERROR_MESSAGE: str = "${AGENT} ne répond pas (${ERROR}). Je reprends la main."
+    # Dossiers où chercher la commande des agents en plus du PATH (un service systemd n'a pas ~/.local/bin)
+    AGENTS_EXTRA_PATH: CsvList = _parse_list("~/.local/bin,~/bin,~/.npm-global/bin,/usr/local/bin,/snap/bin")
     # Consigne ajoutée devant chaque message transmis à l'agent (sa réponse est lue à voix haute)
     AGENTS_PROMPT_PREFIX: str = (
         "[Message transmis par l'assistant vocal SmartHome : réponds brièvement, en texte simple sans markdown "

@@ -101,7 +101,11 @@ class AgentSpec:
         """Fiche transmise à la PWA (ni commande ni répertoire)."""
         return {"name": self.name, "label": self.label, "color": self.color, "description": self.description}
 
-    def build_command(self, prompt: str, session: str = "") -> list[str]:
+    def executable(self, settings: Optional[Settings] = None) -> Optional[str]:
+        """Chemin de la commande de l'agent (PATH + AGENTS_EXTRA_PATH), None si elle n'est pas installée."""
+        return shutil.which(self.command[0], path=search_path(settings))
+
+    def build_command(self, prompt: str, session: str = "", settings: Optional[Settings] = None) -> list[str]:
         # Un message (ou un identifiant renvoyé par l'agent) qui commence par « - » serait lu comme une option
         # de la commande (ex: « --dangerously-skip-permissions ») : il est décalé d'une espace, sans effet sur l'agent
         if prompt.startswith("-"):
@@ -112,10 +116,21 @@ class AgentSpec:
         resolved = [a.replace("{prompt}", prompt).replace("{session}", session) for a in args]
         if "{prompt}" not in " ".join(args):
             resolved.append(prompt)
-        exe = shutil.which(resolved[0])
+        exe = shutil.which(resolved[0], path=search_path(settings))
         if exe is None:
             raise AgentError(f"commande « {resolved[0]} » introuvable")
         return [exe, *resolved[1:]]
+
+
+def search_path(settings: Optional[Settings] = None) -> str:
+    """PATH complété par AGENTS_EXTRA_PATH : lancé par systemd, SmartHome n'a pas ~/.local/bin (agy, claude...)."""
+    s = settings or get_settings()
+    dirs = [d for d in os.environ.get("PATH", os.defpath).split(os.pathsep) if d]
+    for extra in s.AGENTS_EXTRA_PATH:
+        folder = os.path.expanduser(extra.strip())
+        if folder and folder not in dirs:
+            dirs.append(folder)
+    return os.pathsep.join(dirs)
 
 
 # ==========================================
@@ -360,7 +375,7 @@ class AgentRunner:
         levée par `on_text` (le processus est tué dans tous les cas)."""
         s = self.settings
         prompt = f"{s.AGENTS_PROMPT_PREFIX}\n{message}" if s.AGENTS_PROMPT_PREFIX.strip() else message
-        cmd = spec.build_command(prompt, session)
+        cmd = spec.build_command(prompt, session, s)
         cwd = Path(spec.cwd).expanduser() if spec.cwd else Path.home()
         parse = OUTPUT_PARSERS.get(spec.output, parse_text)
         timeout = spec.timeout or s.AGENTS_TIMEOUT
@@ -369,6 +384,7 @@ class AgentRunner:
             proc = subprocess.Popen(
                 cmd, cwd=str(cwd), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 text=True, encoding="utf-8", errors="replace", bufsize=1,
+                env={**os.environ, "PATH": search_path(s)},   # l'agent lance lui-même d'autres outils
                 **({"start_new_session": True} if os.name != "nt"
                    else {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}),
             )
@@ -470,7 +486,7 @@ if __name__ == "__main__":
     agents = directory.all()
     print(f"Fichier : {directory.path} — {len(agents)} agent(s)")
     for a in agents:
-        found = "✅" if shutil.which(a.command[0]) else "❌ introuvable"
+        found = f"✅ {a.executable()}" if a.executable() else "❌ introuvable"
         print(f"  • {a.label} ({a.name}) : {' '.join(a.command)} [{a.output}] {found}")
     for sample in ("J'aimerais parler à Hermes", "passe-moi claude, quelle heure est-il ?", "reviens à jarvis",
                    "baisse le son"):
