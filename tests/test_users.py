@@ -772,5 +772,37 @@ class TestPocketBaseLauncher(unittest.TestCase):
         self.assertIn("--automigrate=false", cmd)
 
 
+class TestHistoryStoreWrites(unittest.TestCase):
+    """Écritures de HistoryStore : repli sans « tools » seulement si PocketBase refuse l'enregistrement."""
+
+    def setUp(self):
+        from core.history import HistoryStore
+        self.store = HistoryStore(Settings(AUTH_PROVIDER="pocketbase", MCP_CLIENT_ENABLED=False))
+        self.user = User("pb_m", "Marie", "member", token="jeton")
+        self.message = [{"role": "assistant", "content": "ok", "turn": "t1", "tools": [{"name": "volume"}]}]
+
+    def run_append(self, errors):
+        bodies = []
+
+        def request(user, path="", **kwargs):
+            bodies.append(kwargs.get("body"))
+            if errors:
+                raise errors.pop(0)
+            return {}
+        with mock.patch.object(type(self.store), "_request", side_effect=request, autospec=False):
+            self.store.append(self.user, "c1", self.message).result(5)
+        return bodies
+
+    def test_refused_record_retried_without_tools(self):
+        from core.users import AuthError
+        bodies = self.run_append([AuthError("400")])
+        self.assertEqual(len(bodies), 2)
+        self.assertNotIn("tools", bodies[1])
+
+    def test_unreachable_server_not_retried(self):
+        from core.users import DirectoryUnavailable
+        self.assertEqual(len(self.run_append([DirectoryUnavailable("injoignable")])), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

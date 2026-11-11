@@ -223,14 +223,12 @@ class HistoryStore:
             for row in rows:
                 try:
                     self._request(user, body=row)
-                except Exception as e:
-                    # En cas de schéma PocketBase sans champ 'tools', on réessaie sans ce champ
-                    if "tools" in row:
-                        row_no_tools = dict(row)
-                        row_no_tools.pop("tools", None)
-                        self._request(user, body=row_no_tools)
-                    else:
-                        raise e
+                except AuthError:
+                    # Enregistrement refusé (400) : schéma PocketBase sans champ « tools » (migration non appliquée),
+                    # on réessaie sans ce champ. Un PocketBase injoignable n'est pas réessayé (message déjà doublé).
+                    if "tools" not in row:
+                        raise
+                    self._request(user, body={k: v for k, v in row.items() if k != "tools"})
         return self._submit("Échange", user, write)
 
     def delete_conversation(self, user: User, conversation_id: str) -> Optional[Future]:
