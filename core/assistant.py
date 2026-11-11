@@ -8,6 +8,7 @@ les actions dangereuses. Les étapes du pipeline sont publiées sur `core.events
 
 import io
 import sys
+from string import Template
 import threading
 import time
 import uuid
@@ -20,10 +21,12 @@ _ROOT_DIR = Path(__file__).resolve().parent.parent
 if str(_ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(_ROOT_DIR))
 
+from core.agents import ASSISTANT, AgentCancelled, AgentDirectory, AgentError, AgentRunner, AgentSpec, detect_switch
 from core.config import ENV_FILE, Settings, get_settings, set_settings
 from core.events import EventBus
 from core.history import HistoryStore, new_conversation_id
-from core.sentences import SentenceSplitter, matches_phrase
+from core.images import Image, ImageError, load_image, save_upload
+from core.sentences import SentenceSplitter, matches_phrase, strip_markdown
 from core.tools import ConfirmationHandler, ToolRegistry, ToolResult, build_tool_registry
 from core.users import User, tool_policy, user_prompt
 from llm.llm import Conversation, ResponseInterrupted
@@ -57,6 +60,26 @@ def _asks_to_sleep(raw: str, tools: list[dict]) -> bool:
     return bool(raw and SLEEP_ACTION.pattern.search(raw))
 
 
+def _shown_image(tool: dict) -> Optional[str]:
+    """Chemin de l'image que l'outil « show_image » (ou le tag [SHOW_IMAGE]) a validée, sinon None."""
+    from actions.modules.files import SHOW_IMAGE_TOOL
+    if tool.get("name") != SHOW_IMAGE_TOOL or not tool.get("executed"):
+        return None
+    args = tool.get("arguments") or {}
+    return str(args.get("args") or args.get("raw") or "") or None
+
+
+def _requested_agent(raw: str, tools: list[dict]) -> Optional[str]:
+    """Le LLM a relié la conversation à un agent externe : outil « agent » exécuté, ou tag [AGENT nom]."""
+    from actions.modules.agent import AGENT_ACTION
+    for t in tools:
+        if t["name"] == AGENT_ACTION.tool_name and t.get("executed"):
+            args = t.get("arguments") or {}
+            return str(args.get("args") or args.get("raw") or "")
+    match = AGENT_ACTION.pattern.search(raw or "")
+    return (match.group(1) or "").strip() if match else None
+
+
 @dataclass
 class Reply:
     session_id: str
@@ -66,6 +89,7 @@ class Reply:
     audio_wav: Optional[bytes] = None
     interrupted: bool = False     # génération abandonnée (barge-in, bouton stop)
     end_conversation: bool = False  # l'utilisateur a pris congé : retour en veille (phrase de fin ou outil « sleep »)
+    images: list[dict] = field(default_factory=list)  # images montrées par l'assistant (outil show_image)
 
 
 @dataclass
@@ -79,6 +103,20 @@ class Session:
     last_seen: float = field(default_factory=time.monotonic)
     lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
     cancel: threading.Event = field(default_factory=threading.Event, repr=False)
+    agent: Optional[str] = None   # agent externe relié à la conversation (None : l'assistant répond)
+    agent_sessions: dict[str, str] = field(default_factory=dict)  # identifiant de session de chaque agent
+
+
+@dataclass
+class _Speaker:
+    """Phrases d'un tour : prononcées au fil de l'eau (on_sentence) et retenues pour savoir si tout a été dit."""
+    on_sentence: Optional[Callable[[str], None]]
+    spoken: list[str] = field(default_factory=list)
+
+    def say(self, sentence: str):
+        if self.on_sentence and sentence.strip():
+            self.spoken.append(sentence)
+            self.on_sentence(sentence)
 
 
 # Préfixes des paramètres lus par le fournisseur LLM : le modifier impose de recréer le fournisseur
@@ -98,10 +136,14 @@ class AssistantCore:
         # Composants fournis par l'appelant (tests, main.py) : jamais recréés, seulement mis à jour
         self._injected = {"llm": llm is not None, "tools": tools is not None}
         self.env_file = env_file or ENV_FILE
+        # Micro de l'ordinateur à l'écoute du mot-clé (main.py) : sans lui, WAKEWORD_ENABLED n'a pas d'effet
+        self.local_microphone = False
         self._sessions: dict[str, Session] = {}
         self._sessions_lock = threading.Lock()
         # Historique persistant des comptes (PocketBase) ; inactif sans annuaire
         self.history = HistoryStore(self.settings)
+        # Agents externes (agents.json) que la conversation peut rejoindre
+        self._agents: Optional[AgentDirectory] = None
         # Outils [GET_SETTINGS] / [SET_SETTING] : l'assistant modifie ses paramètres à travers ce cœur
         from core import settings_store
         settings_store.set_owner(self)
@@ -142,6 +184,14 @@ class AssistantCore:
         llm = self.llm
         return passthrough and not llm.is_decision_model() and llm.accepts_audio()
 
+    def images_to_llm(self) -> bool:
+        """True si le modèle actif lit les images jointes (capacité « vision », LLM_IMAGE_INPUT)."""
+        try:
+            return self.settings.IMAGES_ENABLED and self.llm.accepts_images()
+        except Exception as e:
+            print(f"⚠️ [ASSISTANT] Capacité de vision inconnue : {e}")
+            return False
+
     @property
     def tts(self):
         if self._tts is None:
@@ -154,6 +204,12 @@ class AssistantCore:
         if self._tools is None:
             self._tools = build_tool_registry(self.settings)
         return self._tools
+
+    @property
+    def agents(self) -> AgentDirectory:
+        if self._agents is None:
+            self._agents = AgentDirectory(self.settings)
+        return self._agents
 
     def refresh_tools(self):
         """Reconstruit le registre d'outils (ex: après connexion du hub MCP) pour toutes les sessions."""
@@ -188,6 +244,8 @@ class AssistantCore:
                 self._llm.settings = settings
             else:
                 self._llm = None
+        if any(name.startswith("AGENTS_") for name in changed):
+            self._agents = None
         if "STT_FALLBACK_PROVIDER" in changed:
             self._fallback_stt = None
         if any(name.startswith("ACTIONS_") for name in changed):
@@ -210,7 +268,8 @@ class AssistantCore:
         """Modèle actif, pour l'affichage côté client."""
         llm = self.llm
         return {"provider": self.settings.LLM_PROVIDER, "model": llm.model, "decision": llm.is_decision_model(),
-                "audio_input": self.audio_to_llm()}
+                "audio_input": self.audio_to_llm(), "vision": self.images_to_llm(),
+                "images": self.settings.IMAGES_ENABLED}
 
     # ---- Sessions ----
     def open_session(
@@ -267,10 +326,75 @@ class AssistantCore:
             return []
 
     def session_voice(self, session_id: str) -> Optional[str]:
-        """Voix du compte de la session, si elle est encore installée (sinon None : voix configurée)."""
+        """Voix de la session : celle de l'agent relié, sinon celle du compte si elle est encore installée
+        (None : voix configurée)."""
         session = self.get_session(session_id)
+        agent = self._current_agent(session) if session else None
+        if agent is not None:
+            return self._agent_voice(agent, session)
         voice = session.user.voice if session and session.user else ""
         return voice if voice and voice in {v["id"] for v in self.voices()} else None
+
+    def _agent_voice(self, agent: AgentSpec, session: Optional[Session]) -> Optional[str]:
+        """Voix de l'agent (sa fiche, AGENTS_DEFAULT_VOICE, sinon une autre voix installée que l'assistant)."""
+        voices = self.voices()
+        installed = [v["id"] for v in voices]
+        for wanted in (agent.voice, self.settings.AGENTS_DEFAULT_VOICE):
+            if wanted and wanted in installed:
+                return wanted
+        user_voice = session.user.voice if session and session.user else ""
+        assistant = user_voice if user_voice in installed else next((v["id"] for v in voices if v.get("default")), "")
+        return next((v for v in installed if v != assistant), None)
+
+    # ---- Agents externes ----
+    def agents_allowed(self, user: Optional[User]) -> bool:
+        s = self.settings
+        if not s.AGENTS_ENABLED:
+            return False
+        return user is None or user.superadmin or user.role in s.AGENTS_ROLES
+
+    def available_agents(self, session_id: str) -> list[dict]:
+        """Agents que le compte de la session peut rejoindre (pour la PWA)."""
+        session = self.get_session(session_id)
+        if session is None or not self.agents_allowed(session.user):
+            return []
+        return [a.public() for a in self.agents.all()]
+
+    def _current_agent(self, session: Session) -> Optional[AgentSpec]:
+        if not session.agent:
+            return None
+        spec = self.agents.get(session.agent)
+        if spec is None or not self.agents_allowed(session.user):
+            session.agent = None   # agent retiré de agents.json ou droits perdus
+        return spec if session.agent else None
+
+    def agent_info(self, session_id: str) -> Optional[dict]:
+        """Agent relié à la session (fiche publique et voix), None si c'est l'assistant qui répond."""
+        session = self.get_session(session_id)
+        agent = self._current_agent(session) if session else None
+        if agent is None:
+            return None
+        return {**agent.public(), "voice": self._agent_voice(agent, session)}
+
+    def set_agent(self, session_id: str, name: Optional[str]) -> Optional[AgentSpec]:
+        """Relie la session à un agent (None : retour à l'assistant). Lève ValueError (inconnu, non autorisé)."""
+        session = self.get_session(session_id)
+        if session is None:
+            raise ValueError("Session inconnue.")
+        spec = None
+        if name:
+            spec = self.agents.get(name)
+            if spec is None:
+                raise ValueError(f"Agent « {name} » inconnu.")
+            if not self.agents_allowed(session.user):
+                raise ValueError(Template(self.settings.AGENTS_DENIED_MESSAGE).safe_substitute(AGENT=spec.label))
+        previous = session.agent
+        session.agent = spec.name if spec else None
+        if previous != session.agent:
+            print(f"🤝 [ASSISTANT {session.id}] " + (f"Conversation reliée à {spec.label}" if spec
+                                                      else "Retour à l'assistant"))
+            self.events.emit("agent_changed", session.id, agent=self.agent_info(session.id))
+        return spec
 
     def get_session(self, session_id: str) -> Optional[Session]:
         with self._sessions_lock:
@@ -398,6 +522,8 @@ class AssistantCore:
             with session.lock:
                 session.conversation.clear()
                 session.conversation_id = new_conversation_id()
+                session.agent_sessions.clear()
+            self.set_agent(session_id, None)
 
     def forget(self, session_id: str, turns: Iterable[str], role: Optional[str] = None):
         """Retire de l'historique les messages de ces échanges (seulement ceux de `role` s'il est précisé)."""
@@ -429,18 +555,22 @@ class AssistantCore:
         on_sentence: Optional[Callable[[str], None]] = None,
         turn: Optional[str] = None,
         forget: Iterable[str] = (),
+        images: Iterable[Image] = (),
     ) -> Reply:
         """Traite une demande (texte ou enregistrement WAV) et retourne la réponse. Bloquant : à appeler
         depuis un thread pour un serveur asyncio. Les demandes d'une même session sont traitées une à une.
         `on_sentence` reçoit chaque phrase à prononcer dès qu'elle est complète (parole en streaming).
         `turn` identifie l'échange (repris dans les événements et l'historique) ; `forget` retire d'abord
-        ces échanges de l'historique (relance d'un message : les suivants sont effacés)."""
+        ces échanges de l'historique (relance d'un message : les suivants sont effacés).
+        `images` (déjà validées, voir core.images.decode_uploads) accompagnent le message : envoyées au modèle s'il
+        a la vision (sinon événement « warning » et seul le texte est traité), ou transmises par chemin à un agent."""
         session = self.open_session(session_id)
         sid = session.id
 
         def emit(event_type: str, session_id: str, **data):
             self.events.emit(event_type, session_id, **data, **({"turn": turn} if turn else {}))
 
+        images = list(images)
         with session.lock:
             session.last_seen = time.monotonic()
             session.cancel.clear()
@@ -454,7 +584,8 @@ class AssistantCore:
             llm_audio = None
 
             if audio_wav is not None:
-                if self.audio_to_llm():
+                # Un agent externe ne reçoit que du texte : l'enregistrement est transcrit
+                if self.audio_to_llm() and self._current_agent(session) is None:
                     llm_audio = audio_wav
                 else:
                     try:
@@ -466,7 +597,7 @@ class AssistantCore:
                     emit("transcript", sid, text=reply.transcript)
                     print(f"🎙️ [STT {sid}] Transcription : « {reply.transcript} »")
 
-            if not reply.transcript and llm_audio is None:
+            if not reply.transcript and llm_audio is None and not images:
                 emit("response", sid, text="", tools=[])
                 return reply
 
@@ -474,15 +605,37 @@ class AssistantCore:
             s = self.settings
             if reply.transcript and matches_phrase(reply.transcript, s.CONVERSATION_END_PHRASES, s.CONVERSATION_END_FILLERS):
                 reply.end_conversation = True
+                if s.AGENTS_LEAVE_ON_SLEEP:
+                    self.set_agent(sid, None)
                 emit("response", sid, text="", tools=[], end_conversation=True)
                 return reply
 
-            splitter = SentenceSplitter(self.settings.TTS_STREAM_MIN_CHARS) if on_sentence else None
-            spoken: list[str] = []
+            speaker = _Speaker(on_sentence)
+            # Agent externe relié, ou demande de mise en relation (« passe-moi Hermes ») : le LLM n'est pas appelé
+            if self._route_to_agent(session, reply, emit, speaker, images):
+                self._finish_speech(sid, reply, speaker, synthesize, emit)
+                return reply
 
-            def say(sentence: str):
-                spoken.append(sentence)
-                on_sentence(sentence)
+            # Modèle sans vision : l'utilisateur est prévenu, seul le texte (ou la voix) est traité
+            if images and not self.images_to_llm():
+                warning = Template(s.IMAGES_NO_VISION_MESSAGE).safe_substitute(MODEL=self.llm.model)
+                print(f"🖼️ [ASSISTANT {sid}] {warning}")
+                images = []
+                if not reply.transcript and llm_audio is None:
+                    # Image seule : l'alerte est la réponse (affichée et dite), le modèle n'est pas appelé
+                    reply.text = warning
+                    emit("response", sid, text=warning, tools=[])
+                    self._finish_speech(sid, reply, speaker, synthesize, emit)
+                    return reply
+                emit("warning", sid, message=warning, kind="no_vision")
+
+            splitter = SentenceSplitter(self.settings.TTS_STREAM_MIN_CHARS) if on_sentence else None
+            spoken = speaker.spoken
+            say = speaker.say
+
+            def on_tool(tool_info: dict):
+                emit("tool", sid, **tool_info)
+                self._show_image(sid, tool_info, reply, emit)
 
             def on_token(token: str):
                 if session.cancel.is_set():
@@ -495,8 +648,9 @@ class AssistantCore:
             raw = session.conversation.ask(
                 prompt=reply.transcript or None,
                 audio_bytes=llm_audio,
+                images=images or None,
                 on_token=on_token,
-                on_tool=lambda r: emit("tool", sid, **_tool_summary(r)),
+                on_tool=lambda r: on_tool(_tool_summary(r)),
                 turn=stored_turn,
             )
             reply.tools = [_tool_summary(r) for r in session.conversation.last_tool_results]
@@ -512,7 +666,7 @@ class AssistantCore:
                 from actions.manager import get_action_manager
 
                 def on_tag_action(tool_info):
-                    emit("tool", sid, **tool_info)
+                    on_tool(tool_info)
                     reply.tools.append(tool_info)
 
                 reply.text = get_action_manager().process_response(
@@ -540,14 +694,132 @@ class AssistantCore:
             if on_sentence and not spoken and reply.text:
                 say(reply.text)
 
-            if synthesize and reply.text:
-                try:
-                    samples, sample_rate = self.tts.synthesize(reply.text, voice=self.session_voice(sid))
-                    if len(samples):
-                        reply.audio_wav = to_wav_bytes(samples, sample_rate)
-                except Exception as e:
-                    emit("error", sid, message=f"Erreur de synthèse vocale : {e}")
+            # Le LLM a choisi l'outil « agent » : la conversation passe à l'agent, qui s'annonce dans sa voix
+            requested = _requested_agent(raw, reply.tools)
+            if requested is not None and not reply.end_conversation:
+                agent = self.agents.get(requested)
+                if agent is not None and self.agents_allowed(session.user):
+                    self.set_agent(sid, agent.name)
+                    announce = Template(s.AGENTS_SWITCH_MESSAGE).safe_substitute(AGENT=agent.label)
+                    say(announce)
+                    reply.text = f"{reply.text} {announce}".strip()
+
+            self._finish_speech(sid, reply, speaker, synthesize, emit, live=False)
             return reply
+
+    def _show_image(self, sid: str, tool_info: dict, reply: Reply, emit):
+        """Outil « show_image » exécuté : l'image (relue et revérifiée) part vers le client."""
+        path = _shown_image(tool_info)
+        # L'action a déjà refusé le fichier (hors des dossiers permis...) : le LLM en est informé par sa sortie
+        if path is None or str(tool_info.get("output", "")).startswith("Échec"):
+            return
+        try:
+            image, shown = load_image(path, self.settings)
+        except (ImageError, OSError) as e:
+            emit("error", sid, message=f"Image non affichée : {e}")
+            return
+        data = image.public(path=shown)
+        reply.images.append(data)
+        print(f"🖼️ [ASSISTANT {sid}] Image montrée : {shown} ({len(image.data)} octets)")
+        emit("image", sid, **data)
+
+    def _finish_speech(self, sid: str, reply: Reply, speaker: _Speaker, synthesize: bool, emit, live: bool = True):
+        """Fin d'un tour : dit le texte s'il n'a pas été prononcé au fil de l'eau (`live`), puis synthèse en un bloc."""
+        if live and speaker.on_sentence and not speaker.spoken and reply.text:
+            speaker.say(strip_markdown(reply.text))
+        if synthesize and reply.text:
+            try:
+                samples, sample_rate = self.tts.synthesize(strip_markdown(reply.text), voice=self.session_voice(sid))
+                if len(samples):
+                    reply.audio_wav = to_wav_bytes(samples, sample_rate)
+            except Exception as e:
+                emit("error", sid, message=f"Erreur de synthèse vocale : {e}")
+
+    def _route_to_agent(self, session: Session, reply: Reply, emit, speaker: _Speaker, images: list[Image] = ()) -> bool:
+        """Traite le tour sans LLM quand un agent est relié ou demandé. False : l'assistant répond normalement."""
+        s = self.settings
+        sid = session.id
+        text = reply.transcript
+        current = self._current_agent(session)
+        agents = self.agents.all()
+        switch = detect_switch(text, agents, s) if text and agents else None
+        if current is None and (switch is None or switch.target == ASSISTANT):
+            return False
+
+        def answer(message: str, **extra):
+            reply.text = message
+            emit("response", sid, text=message, tools=[], **extra)
+            speaker.say(message)
+
+        if current is not None and (
+                (switch is not None and switch.target == ASSISTANT)
+                or (text and matches_phrase(text, s.AGENTS_RETURN_PHRASES, s.CONVERSATION_END_FILLERS))):
+            self.set_agent(sid, None)
+            answer(s.AGENTS_RETURN_MESSAGE)
+            return True
+
+        message = text
+        if images:
+            # Un agent ne reçoit que du texte : les images sont copiées sur le disque et il reçoit leur chemin
+            paths = ", ".join(str(save_upload(img, s)) for img in images)
+            note = f"[Image(s) jointe(s) par l'utilisateur : {paths}]"
+            message = f"{message}\n{note}".strip()
+            if switch is not None and switch.target != ASSISTANT:
+                # « Passe-moi Hermes » + image : l'image lui est transmise même sans autre demande
+                switch = type(switch)(switch.target, f"{switch.rest or text}\n{note}".strip())
+        if switch is not None and switch.target != ASSISTANT:
+            target = self.agents.get(switch.target)
+            if not self.agents_allowed(session.user):
+                answer(Template(s.AGENTS_DENIED_MESSAGE).safe_substitute(AGENT=target.label))
+                return True
+            if current is None or current.name != target.name or not switch.rest:
+                self.set_agent(sid, target.name)
+                speaker.say(Template(s.AGENTS_SWITCH_MESSAGE).safe_substitute(AGENT=target.label))
+            if not switch.rest:
+                reply.text = Template(s.AGENTS_SWITCH_MESSAGE).safe_substitute(AGENT=target.label)
+                emit("response", sid, text=reply.text, tools=[], agent=target.name)
+                return True
+            current, message = target, switch.rest
+        if not message:
+            emit("response", sid, text="", tools=[], agent=current.name)
+            return True
+        self._agent_turn(session, current, message, reply, emit, speaker)
+        return True
+
+    def _agent_turn(self, session: Session, agent: AgentSpec, message: str, reply: Reply, emit, speaker: _Speaker):
+        """Transmet le message à l'agent et relaie sa réponse au fil de l'eau (texte et voix)."""
+        sid = session.id
+        splitter = SentenceSplitter(self.settings.TTS_STREAM_MIN_CHARS) if speaker.on_sentence else None
+
+        def on_text(fragment: str):
+            if session.cancel.is_set():
+                raise ResponseInterrupted()
+            emit("token", sid, text=fragment)
+            if splitter:
+                for sentence in splitter.feed(fragment):
+                    speaker.say(strip_markdown(sentence))
+
+        try:
+            result = AgentRunner(self.settings).run(agent, message, session.agent_sessions.get(agent.name, ""),
+                                                    on_text=on_text, cancel=session.cancel)
+        except (AgentCancelled, ResponseInterrupted):
+            reply.interrupted = True
+            emit("interrupted", sid)
+            return
+        except AgentError as e:
+            print(f"⚠️ [AGENTS] {agent.label} : {e}")
+            reply.text = Template(self.settings.AGENTS_ERROR_MESSAGE).safe_substitute(AGENT=agent.label, ERROR=str(e))
+            emit("response", sid, text=reply.text, tools=[], agent=agent.name, error=True)
+            speaker.say(reply.text)
+            return
+        if result.session:
+            session.agent_sessions[agent.name] = result.session
+        if splitter:
+            for sentence in splitter.flush():
+                speaker.say(strip_markdown(sentence))
+        reply.text = result.text
+        print(f"📤 [AGENTS {sid}] {agent.label} : « {reply.text[:200]} »")
+        emit("response", sid, text=reply.text, tools=[], agent=agent.name)
 
 
 if __name__ == "__main__":

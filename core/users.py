@@ -43,6 +43,8 @@ class User:
     instructions: str = ""
     # Voix de synthèse choisie (identifiant de TextToSpeech.voices() ; vide : voix par défaut)
     voice: str = ""
+    # Nom donné à l'assistant par ce compte (vide : ASSISTANT_NAME)
+    assistant_name: str = ""
     # Adresse e-mail du compte dans l'annuaire
     email: str = ""
     # Compte référencé comme superadministrateur (_superusers) dans PocketBase
@@ -64,6 +66,7 @@ class User:
             "email": self.email,
             "instructions": self.instructions,
             "voice": self.voice,
+            "assistant_name": self.assistant_name,
             "profile": self.has_profile,
         }
 
@@ -98,17 +101,30 @@ def is_admin(user: Optional[User], settings: Optional[Settings] = None) -> bool:
     return user is not None and (user.superadmin or user.role in s.AUTH_ADMIN_ROLES)
 
 
-def user_prompt(user: Optional[User], settings: Optional[Settings] = None) -> str:
-    """Lignes ajoutées au prompt système pour ce compte : à qui l'assistant parle, et ses préférences.
-    Les consignes ne changent que le style : les droits restent ceux du rôle (ToolPolicy, vérifiés côté serveur)."""
-    if user is None or not user.has_profile:
-        return ""
+def assistant_name(user: Optional[User], settings: Optional[Settings] = None) -> str:
+    """Nom de l'assistant pour ce compte : celui de son profil, sinon ASSISTANT_NAME."""
     s = settings or get_settings()
+    return (user.assistant_name if user is not None else "") or s.ASSISTANT_NAME
+
+
+def user_prompt(user: Optional[User], settings: Optional[Settings] = None) -> str:
+    """Lignes ajoutées au prompt système pour ce compte : nom de l'assistant, à qui il parle, et ses préférences.
+    Les consignes ne changent que le style : les droits restent ceux du rôle (ToolPolicy, vérifiés côté serveur)."""
+    s = settings or get_settings()
+    name_line = Template(s.ASSISTANT_NAME_PROMPT).safe_substitute(
+        {"ASSISTANT_NAME": assistant_name(user, s)}).strip()
+    if user is None or not user.has_profile:
+        return name_line
     values = {"NAME": user.name, "INSTRUCTIONS": user.instructions}
-    lines = [Template(s.AUTH_USER_PROMPT).safe_substitute(values).strip()]
+    lines = [name_line, Template(s.AUTH_USER_PROMPT).safe_substitute(values).strip()]
     if user.instructions:
         lines.append(Template(s.AUTH_USER_INSTRUCTIONS_PROMPT).safe_substitute(values).strip())
     return "\n".join(line for line in lines if line)
+
+
+def clean_assistant_name(name: str) -> str:
+    """Nom de l'assistant saisi dans le profil (vide : nom par défaut)."""
+    return " ".join(str(name or "").split())[:40]
 
 
 def clean_profile(name: str, instructions: str, settings: Optional[Settings] = None) -> tuple[str, str]:
@@ -136,6 +152,9 @@ def tool_policy(user: Optional[User], settings: Optional[Settings] = None) -> Op
     if not is_admin(user, s):
         # Outils d'administration (paramètres de l'assistant) : réservés aux rôles AUTH_ADMIN_ROLES
         reserved |= frozenset(name.strip().lower() for name in s.AUTH_ADMIN_TOOLS if name.strip())
+    if user.role not in s.AGENTS_ROLES:
+        # Mise en relation avec un agent externe (actions/modules/agent.py) : réservée aux rôles AGENTS_ROLES
+        reserved |= {"agent"}
     return ToolPolicy(allowed=policy.allowed, denied=policy.denied | reserved)
 
 
@@ -191,9 +210,11 @@ class UserDirectory:
         """Vérifie un jeton de compte et en renvoie un neuf. Lève AuthError ou DirectoryUnavailable."""
         raise NotImplementedError
 
-    def update_profile(self, user: User, name: str, instructions: str, voice: str = "") -> User:
+    def update_profile(self, user: User, name: str, instructions: str, voice: str = "",
+                       assistant_name: Optional[str] = None) -> User:
         """Enregistre le prénom, les consignes et la voix du compte (avec ses propres droits, jamais ceux d'un admin).
-        La voix doit avoir été validée par l'appelant (voix installées sur cette machine)."""
+        La voix doit avoir été validée par l'appelant (voix installées sur cette machine).
+        `assistant_name` : nom donné à l'assistant (None : inchangé, vide : nom par défaut)."""
         raise NotImplementedError
 
     def list_users(self, admin: User) -> list[dict]:
@@ -230,7 +251,8 @@ class NoDirectory(UserDirectory):
     def refresh(self, token: str) -> User:
         raise AuthError("Les comptes utilisateurs sont désactivés (AUTH_PROVIDER=none) : utilisez le jeton.")
 
-    def update_profile(self, user: User, name: str, instructions: str, voice: str = "") -> User:
+    def update_profile(self, user: User, name: str, instructions: str, voice: str = "",
+                       assistant_name: Optional[str] = None) -> User:
         raise AuthError("Les comptes utilisateurs sont désactivés (AUTH_PROVIDER=none).")
 
 
@@ -297,7 +319,8 @@ class PocketBaseDirectory(UserDirectory):
             role = raw_role or self.settings.AUTH_DEFAULT_ROLE
         instructions = str(record.get("instructions") or "")[:self.settings.AUTH_INSTRUCTIONS_MAX_CHARS]
         voice = str(record.get("voice") or "")[:100]
-        return User(user_id, str(name), role, token, instructions, voice, email=email, superadmin=is_super)
+        return User(user_id, str(name), role, token, instructions, voice, email=email, superadmin=is_super,
+                    assistant_name=clean_assistant_name(record.get("assistant_name") or ""))
 
     def _find_or_create_superuser_profile(self, su_record: dict, su_token: str, password: str = "") -> dict:
         """Associe un superadmin `_superusers` à son enregistrement dans `users` (pour profil et historique)."""
@@ -387,14 +410,18 @@ class PocketBaseDirectory(UserDirectory):
             profile_record = self._find_or_create_superuser_profile(su_record, su_token)
             return self._from_record(profile_record, su_token, superadmin=True)
 
-    def update_profile(self, user: User, name: str, instructions: str, voice: str = "") -> User:
+    def update_profile(self, user: User, name: str, instructions: str, voice: str = "",
+                       assistant_name: Optional[str] = None) -> User:
         if not user.has_profile or not user.token:
             raise AuthError("Ce compte n'a pas de profil modifiable.")
         name, instructions = clean_profile(name, instructions, self.settings)
         record_id = urllib.parse.quote(user.id.removeprefix("pb_"), safe="")
         # Jeton du compte lui-même : la règle de la collection lui interdit de toucher à son rôle
         try:
-            record = self._post(f"records/{record_id}", {"name": name, "instructions": instructions, "voice": voice},
+            body = {"name": name, "instructions": instructions, "voice": voice}
+            if assistant_name is not None:
+                body["assistant_name"] = clean_assistant_name(assistant_name)
+            record = self._post(f"records/{record_id}", body,
                                 token=user.token, method="PATCH", not_found_is_refusal=True)
         except AuthError as e:
             raise AuthError("Profil refusé par PocketBase (session expirée ? reconnectez-vous).") from e

@@ -167,7 +167,9 @@ def main():
     # Le micro n'identifie pas la voix : compte fixe « Foyer » (rôle AUTH_LOCAL_ROLE)
     local = core.open_session(LOCAL_SESSION, persistent=True, user=local_user(settings))
     # Voix en streaming (phrase par phrase, interruptible) et micro partagé entre écoute et confirmation
-    speech = SpeechPipeline(tts, output_device=settings.AUDIO_OUTPUT_DEVICE_INDEX)
+    # La voix suit la session : voix alternative quand un agent externe (Hermes, Claude...) est relié
+    speech = SpeechPipeline(tts, output_device=settings.AUDIO_OUTPUT_DEVICE_INDEX,
+                            voice=lambda: core.session_voice(LOCAL_SESSION))
     mic_lock = threading.Lock()
     barge_in = BargeInDetector(settings, detector)
     # Micro du téléphone utilisé : l'ordinateur entend la même voix mais doit rester en veille
@@ -225,9 +227,22 @@ def main():
         print("  • Passerelle    : Désactivée (GATEWAY_ENABLED=false)")
     print(f"  • Veille active : {FOLLOW_UP_TIMEOUT}s\n")
 
+    core.local_microphone = True
+    wakeword_on = settings.WAKEWORD_ENABLED
+    if not wakeword_on:
+        print("🔇 Écoute du mot-clé désactivée (WAKEWORD_ENABLED=false) : réactivable depuis les réglages de la PWA.")
+
     try:
         while True:
             data = stream.read(CHUNK, exception_on_overflow=False)
+            # Écoute du mot-clé coupée depuis l'interface (faux positifs) : le flux est lu mais pas analysé
+            enabled = core.settings.WAKEWORD_ENABLED
+            if enabled != wakeword_on:
+                wakeword_on = enabled
+                detector.oww.reset()
+                print("\n👂 Écoute du mot-clé réactivée." if enabled else "\n🔇 Écoute du mot-clé désactivée.")
+            if not wakeword_on:
+                continue
             chunk = np.frombuffer(data, dtype=np.int16)
             detected, score = detector.process_chunk(chunk)
 
@@ -299,6 +314,8 @@ def main():
                             # Signal / Phrase de mise en veille
                             feedback.on_timeout()
                             in_conversation = False
+                            if settings.AGENTS_LEAVE_ON_SLEEP:
+                                core.set_agent(LOCAL_SESSION, None)
 
                 except Exception as e:
                     print(f"\n⚠️ [ERREUR] Échange interrompu : {e}")

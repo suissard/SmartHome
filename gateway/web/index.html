@@ -7,11 +7,11 @@
   <meta name="theme-color" content="#eef2f7" media="(prefers-color-scheme: light)">
   <meta name="description" content="Piloter son ordinateur à la voix, depuis n'importe quel appareil.">
   <title>SmartHome</title>
-  <link rel="manifest" href="manifest.webmanifest?v=17">
+  <link rel="manifest" href="manifest.webmanifest?v=18">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icon-192.png">
-  <link rel="stylesheet" href="style.css?v=17">
-  <script src="app.js?v=17" type="module"></script>
+  <link rel="stylesheet" href="style.css?v=18">
+  <script src="app.js?v=18" type="module"></script>
 </head>
 <body>
   <header class="topbar">
@@ -23,7 +23,11 @@
       <span>SmartHome</span>
     </div>
     <span id="conv-active-title" class="conv-active-title" title="Conversation courante"></span>
-    <span id="model-badge" class="model-badge" hidden></span>
+    <!-- Pastille du modèle, remplacée par celle de l'agent externe relié (Hermes, Claude...) : cliquer pour changer -->
+    <button id="model-badge" class="model-badge" type="button" aria-haspopup="menu" aria-expanded="false" hidden>
+      <span class="badge-dot" aria-hidden="true"></span>
+      <span id="model-badge-label" class="badge-label"></span>
+    </button>
 
     <!-- Pastille de mise à jour GitHub (affichée si différence entre la version locale et le dépôt GitHub) -->
     <button id="update-pill" class="update-pill" type="button" aria-label="Mise à jour disponible sur GitHub" title="Différence de version détectée avec le dépôt GitHub — cliquer pour mettre à jour" hidden>
@@ -51,6 +55,11 @@
     </button>
     <button id="new-chat-btn" class="icon-btn" type="button" aria-label="Nouvelle conversation" title="Nouvelle conversation">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path fill-rule="evenodd" d="M22 4c0-1.1-.9-2-2-2H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h14l4 4V4zm-5 7h-4v4h-2v-4H7V9h4V5h2v4h4v2z"/></svg>
+    </button>
+    <!-- Affichée quand l'écoute du mot-clé est coupée sur l'ordinateur : cliquer pour la réactiver -->
+    <button id="wakeword-pill" class="wakeword-pill" type="button" title="Écoute du mot-clé coupée sur l'ordinateur — cliquer pour la réactiver" hidden>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 11h-1.7c0 .74-.16 1.43-.43 2.05l1.23 1.23c.56-.98.9-2.09.9-3.28zm-4.02.17c0-.06.02-.11.02-.17V5c0-1.66-1.34-3-3-3S9 3.34 9 5v.18l5.98 5.99zM4.27 3 3 4.27l6.01 6.01V11c0 1.66 1.33 3 2.99 3 .22 0 .44-.03.65-.08l1.66 1.66c-.71.33-1.5.52-2.31.52-2.76 0-5.3-2.1-5.3-5.1H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c.91-.13 1.77-.45 2.54-.9L19.73 21 21 19.73 4.27 3z"/></svg>
+      <span>Mot-clé coupé</span>
     </button>
     <button id="settings-btn" class="icon-btn settings-gear-btn" type="button" aria-label="Réglages" title="Réglages">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
@@ -128,7 +137,16 @@
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
   <footer class="composer">
+    <!-- Images jointes au prochain message (trombone, coller, glisser-déposer) -->
+    <div id="attachments" class="attachments" hidden>
+      <div id="attachments-list" class="attachments-list"></div>
+      <p id="attachments-note" class="attachments-note" role="status"></p>
+    </div>
     <form id="text-form" class="text-form" autocomplete="off">
+      <button id="attach-btn" class="attach-btn" type="button" aria-label="Joindre une image" title="Joindre une image (ou coller, glisser-déposer)" disabled>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16.5 6v11.5a4 4 0 0 1-8 0V5a2.5 2.5 0 0 1 5 0v10.5a1 1 0 0 1-2 0V6H10v9.5a2.5 2.5 0 0 0 5 0V5a4 4 0 0 0-8 0v12.5a5.5 5.5 0 0 0 11 0V6h-1.5z"/></svg>
+      </button>
+      <input id="attach-input" type="file" accept="image/png,image/jpeg,image/gif,image/webp,image/bmp" multiple hidden>
       <input id="text" type="text" placeholder="Écrire une demande…" aria-label="Demande écrite" enterkeyhint="send" disabled>
     </form>
     <!-- Visible tant que l'assistant parle : indicateur de voix et bouton pour la couper -->
@@ -203,6 +221,23 @@
         </button>
       </div>
 
+      <!-- Écoute du mot-clé par le micro de l'ordinateur : coupée en cas de faux positifs (WAKEWORD_ENABLED) -->
+      <section id="wakeword-card" class="wakeword-card" data-state="on" aria-labelledby="wakeword-title">
+        <span class="wakeword-icon" aria-hidden="true">
+          <svg class="ww-on" viewBox="0 0 24 24"><path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.3-3c0 3-2.54 5.1-5.3 5.1S6.7 14 6.7 11H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c3.28-.48 6-3.3 6-6.72h-1.7z"/></svg>
+          <svg class="ww-off" viewBox="0 0 24 24"><path d="M19 11h-1.7c0 .74-.16 1.43-.43 2.05l1.23 1.23c.56-.98.9-2.09.9-3.28zm-4.02.17c0-.06.02-.11.02-.17V5c0-1.66-1.34-3-3-3S9 3.34 9 5v.18l5.98 5.99zM4.27 3 3 4.27l6.01 6.01V11c0 1.66 1.33 3 2.99 3 .22 0 .44-.03.65-.08l1.66 1.66c-.71.33-1.5.52-2.31.52-2.76 0-5.3-2.1-5.3-5.1H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c.91-.13 1.77-.45 2.54-.9L19.73 21 21 19.73 4.27 3z"/></svg>
+        </span>
+        <div class="wakeword-text">
+          <h3 id="wakeword-title">Écoute du mot-clé sur l'ordinateur</h3>
+          <p id="wakeword-state" class="meta">—</p>
+          <p id="wakeword-hint" class="meta wakeword-hint" hidden></p>
+        </div>
+        <label class="switch" title="Activer / couper l'écoute du mot-clé">
+          <input id="wakeword-toggle" type="checkbox" role="switch" aria-labelledby="wakeword-title" checked>
+          <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
+        </label>
+      </section>
+
       <!-- Carte d'informations de connexion repensée -->
       <section class="conn-card" id="conn-card" aria-label="Informations de connexion">
         <div class="conn-card-top">
@@ -276,6 +311,9 @@
         <h3 id="profile-title">Mon profil</h3>
         <label for="profile-name">Prénom</label>
         <input id="profile-name" type="text" maxlength="80" autocomplete="given-name">
+        <label for="profile-assistant-name">Nom de l'assistant</label>
+        <input id="profile-assistant-name" type="text" maxlength="40" autocomplete="off" aria-describedby="profile-assistant-help">
+        <p id="profile-assistant-help" class="meta">Affiché dans la conversation et donné à l'assistant. Vide : nom par défaut.</p>
         <label for="profile-instructions">Consignes pour l'assistant</label>
         <textarea id="profile-instructions" rows="3" maxlength="1000" aria-describedby="profile-help"
                   placeholder="Ex : tutoie-moi, réponses courtes, explique les termes techniques"></textarea>
@@ -319,7 +357,7 @@
         <button type="button" id="advanced-btn" class="admin-only">Paramètres avancés…</button>
         <button type="button" id="reset-btn">Nouvelle conversation</button>
         <button type="button" id="restart-btn" class="admin-only">Redémarrer SmartHome</button>
-        <button type="button" id="force-reload-btn" class="secondary">Vider le cache et recharger l'app <small class="version-tag" id="version-tag-label">v17</small></button>
+        <button type="button" id="force-reload-btn" class="secondary">Vider le cache et recharger l'app <small class="version-tag" id="version-tag-label">v18</small></button>
         <button type="submit" class="secondary">Fermer</button>
       </div>
     </form>
@@ -566,5 +604,12 @@
       </div>
     </form>
   </dialog>
+  <!-- Choix de l'interlocuteur : l'assistant ou un agent externe (core/agents.py) -->
+  <!-- Image en grand (clic sur une image de la conversation) -->
+  <dialog id="image-viewer" class="image-viewer" aria-label="Image">
+    <img id="image-viewer-img" alt="">
+    <p id="image-viewer-caption" class="image-viewer-caption"></p>
+  </dialog>
+  <div id="agent-menu" class="agent-menu" role="menu" aria-label="Interlocuteur" hidden></div>
 </body>
 </html>

@@ -3,27 +3,31 @@ Passerelle réseau de SmartHome : permet de piloter l'assistant depuis un autre 
 
 Routes :
 - GET  /health   : état (sans authentification)
-- POST /api/ask  : {"text" | "audio" (WAV base64), "session"?, "speak"?} -> réponse JSON (sans confirmation possible :
-                   les actions dangereuses sont refusées)
+- POST /api/ask  : {"text" | "audio" (WAV base64), "images"?, "session"?, "speak"?} -> réponse JSON (sans confirmation
+                   possible : les actions dangereuses sont refusées)
 - WS   /ws       : session interactive (streaming, outils, confirmations). Protocole JSON :
     client -> serveur : {"type": "auth", "token"?, "session"?}  (premier message si pas d'en-tête Authorization)
                         Comptes (AUTH_PROVIDER, voir core/users.py) : {"type": "auth", "identity", "password", "session"?}
                         ou {"type": "auth", "user_token", "session"?} ; le jeton maître ("token") donne l'accès administrateur
                         {"type": "text", "text", "speak"?} | {"type": "audio", "data": <WAV base64>, "speak"?}
                         (avec "turn"? : identifiant de l'échange, repris dans ses événements et "done" ; "forget"? : échanges
-                        à retirer d'abord de l'historique, pour relancer à partir d'un message)
+                        à retirer d'abord de l'historique, pour relancer à partir d'un message ; "images"? :
+                        [{"data": base64 | data URL, "name"?}] jointes au message, voir core/images.py)
                         {"type": "forget", "turns", "role"?} | {"type": "edit_answer", "turn", "text", "forget"?}
                         {"type": "confirm_response", "id", "accepted": bool} | {"type": "stop"} | {"type": "reset"}
+                        | {"type": "set_agent", "agent": nom | null} (relie la conversation à un agent externe, voir
+                        core/agents.py ; null : retour à l'assistant) -> {"type": "agent_changed", "agent": {...} | null}
                         | {"type": "ping"} | {"type": "listening", "active": bool} (micro du client ouvert / fermé :
                         le micro de l'ordinateur ignore alors le mot-clé et repasse en veille, voir core/remote_voice.py)
-                        Profil du compte connecté : {"type": "update_profile", "name", "instructions", "voice"?}
+                        Profil du compte connecté : {"type": "update_profile", "name", "instructions", "voice"?, "assistant_name"?}
                         | {"type": "preview_voice", "voice"} (phrase d'essai renvoyée en {"type": "voice_preview", "data"})
                         Paramètres (voir core/settings_store.py) : {"type": "get_settings"} | {"type": "list_models", "provider"?: nom}
                         | {"type": "update_settings", "values": {VARIABLE: valeur}} | {"type": "restart"}
     serveur -> client : {"type": "ready", "session", "user", "tools", "audio", "confirm_timeout", "llm"} puis les événements du cœur
                         ("user" : {"id", "name", "role", "admin", "token"?} ; "token" = jeton du compte à réutiliser,
                         refus : {"type": "error", "message", "accounts"} puis fermeture 4401)
-                        (transcript, token, tool, confirm_request, response, interrupted, error), la voix si speak :
+                        (transcript, token, tool, confirm_request, response, interrupted, error, warning ;
+                        image : {"name", "mime", "data", "path"} montrée par l'assistant, outil show_image), la voix si speak :
                         {"type": "audio_chunk", "seq", "format": "wav", "data"} phrase par phrase (TTS_STREAMING)
                         ou {"type": "audio", ...} en un bloc, et {"type": "done"} à la fin de chaque demande.
                         Paramètres : {"type": "settings", "groups", "llm"} | {"type": "models", "models", "error"?}
@@ -31,6 +35,11 @@ Routes :
                         | {"type": "profile_saved", "user"} | {"type": "profile_error", "message"}
                         ; "ready.history" : [{role, content, turn?}] (conversation en cours, rechargée depuis
                         l'historique du compte si la session est neuve)
+                        ; "ready.agents" / "ready.agent" : agents externes permis et agent relié (les réponses d'un agent
+                        portent "agent" dans l'événement "response")
+                        ; "ready", "profile_saved" et "settings_changed" portent "assistant" ({"name", "default_name"} :
+                        nom affiché sur les bulles) et "wakeword" ({"enabled", "available"} : écoute du mot-clé
+                        par le micro de l'ordinateur, coupée avec update_settings {"WAKEWORD_ENABLED": false})
                         ; "settings_changed" est diffusé à tous les clients après une modification,
                         "restarting" juste avant un redémarrage demandé par un client.
                         Paramètres, liste des modèles et redémarrage sont réservés aux rôles AUTH_ADMIN_ROLES.
@@ -62,10 +71,12 @@ from audio.confirm import classify_confirmation
 from core.assistant import AssistantCore, Reply, to_wav_bytes
 from core import restart, settings_store
 from core.config import Settings
+from core.images import ImageError, decode_uploads
 from core.security import (
     BearerTokenMiddleware, LocalOnlyMiddleware, SecurityHeadersMiddleware, bearer_from_headers, token_matches,
 )
-from core.users import AuthError, DirectoryUnavailable, User, admin_user, create_directory, is_admin
+from core.users import (AuthError, DirectoryUnavailable, User, admin_user, assistant_name, create_directory,
+                        is_admin)
 from core.version import check_version, local_version_info, pull_update
 
 # Interface web (PWA) servie à la racine : publique, elle ne contient aucun secret (le jeton est saisi par l'utilisateur)
@@ -79,7 +90,8 @@ ADMIN_ONLY_MESSAGE = "Réservé aux administrateurs."
 
 
 def _reply_to_dict(reply: Reply) -> dict:
-    data = {"session": reply.session_id, "transcript": reply.transcript, "text": reply.text, "tools": reply.tools}
+    data = {"session": reply.session_id, "transcript": reply.transcript, "text": reply.text, "tools": reply.tools,
+            "images": reply.images}
     if reply.audio_wav:
         data["audio"] = {"format": "wav", "data": base64.b64encode(reply.audio_wav).decode()}
     return data
@@ -121,12 +133,17 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
             audio = base64.b64decode(body["audio"]) if body.get("audio") else None
         except Exception:
             return JSONResponse({"error": "Corps JSON invalide."}, status_code=400)
-        if not body.get("text") and audio is None:
-            return JSONResponse({"error": "Champ 'text' ou 'audio' requis."}, status_code=400)
+        try:
+            images = decode_uploads(body.get("images"), core.settings)
+        except ImageError as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+        if not body.get("text") and audio is None and not images:
+            return JSONResponse({"error": "Champ 'text', 'audio' ou 'images' requis."}, status_code=400)
         # Seul le jeton maître protège /api/ask : c'est l'administrateur
         session = core.open_session(body.get("session"), user=admin_user(core.settings))
         reply = await asyncio.to_thread(
-            core.respond, session.id, text=body.get("text"), audio_wav=audio, synthesize=bool(body.get("speak"))
+            core.respond, session.id, text=body.get("text"), audio_wav=audio, synthesize=bool(body.get("speak")),
+            images=images,
         )
         return JSONResponse(_reply_to_dict(reply))
 
@@ -199,8 +216,17 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
         print(f"🔌 [GATEWAY {session.id}] {user.name} (rôle {user.role}) connecté depuis {client_ip}")
         unsubscribe = core.events.subscribe(lambda e: push(e.to_dict()), session_id=session.id)
         # Modifications de paramètres faites depuis un autre appareil : chaque client recharge son formulaire
+        # Nom de l'assistant et écoute du mot-clé : état affiché en permanence par la PWA, renvoyé à chaque changement
+        def public_state() -> dict:
+            s = core.settings
+            return {
+                "assistant": {"name": assistant_name(user, s), "default_name": s.ASSISTANT_NAME},
+                "wakeword": {"enabled": s.WAKEWORD_ENABLED, "available": core.local_microphone},
+            }
+
         unsubscribe_settings = core.events.subscribe(
-            lambda e: push(e.to_dict()) if e.type in ("settings_changed", "restarting") else None
+            lambda e: push({**e.to_dict(), **(public_state() if e.type == "settings_changed" else {})})
+            if e.type in ("settings_changed", "restarting") else None
         )
 
         async def sender():
@@ -216,15 +242,17 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
             def send_chunk(samples, sample_rate):
                 push({"type": "audio_chunk", "seq": next(seq), "format": "wav",
                       "data": base64.b64encode(to_wav_bytes(samples, sample_rate)).decode()})
-            return SpeechPipeline(core.tts, sink=send_chunk, voice=core.session_voice(session.id))
+            # Voix résolue à chaque phrase : un agent externe relié en cours de réponse parle avec sa propre voix
+            return SpeechPipeline(core.tts, sink=send_chunk, voice=lambda: core.session_voice(session.id))
 
-        def run_request(text, audio, speak, turn, forget) -> Reply:
+        def run_request(text, audio, speak, turn, forget, images=()) -> Reply:
             speech = streamed_speech() if speak and core.settings.TTS_STREAMING else None
             if speech:
                 speeches.add(speech)
             try:
                 reply = core.respond(session.id, text=text, audio_wav=audio, synthesize=speak and not speech,
-                                     on_sentence=speech.say if speech else None, turn=turn, forget=forget)
+                                     on_sentence=speech.say if speech else None, turn=turn, forget=forget,
+                                     images=images)
                 if speech:
                     speech.wait()
                 return reply
@@ -238,8 +266,9 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
             tag = {"turn": turn} if turn else {}
             try:
                 audio = base64.b64decode(message["data"]) if message["type"] == "audio" else None
+                images = decode_uploads(message.get("images"), core.settings)
                 reply = await asyncio.to_thread(run_request, message.get("text"), audio, bool(message.get("speak")),
-                                                turn, message.get("forget") or ())
+                                                turn, message.get("forget") or (), images)
                 if reply.audio_wav:
                     push({"type": "audio", "format": "wav", "data": base64.b64encode(reply.audio_wav).decode()})
             except Exception as e:
@@ -288,12 +317,15 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
                 push({"type": "profile_error", "message": f"Voix « {voice} » non installée sur cette machine."})
                 return
             try:
+                # Nom de l'assistant : seulement s'il est envoyé (sinon inchangé)
+                extra = {"assistant_name": str(message.get("assistant_name") or "")} \
+                    if "assistant_name" in message else {}
                 updated = await asyncio.to_thread(directory.update_profile, user, message.get("name", ""),
-                                                  message.get("instructions", ""), voice)
+                                                  message.get("instructions", ""), voice, **extra)
                 core.set_session_user(session.id, updated)
                 user = updated
                 print(f"👤 [GATEWAY {session.id}] Profil de {user.name} mis à jour")
-                push({"type": "profile_saved", "user": user.public(core.settings)})
+                push({"type": "profile_saved", "user": user.public(core.settings), **public_state()})
             except (ValueError, AuthError, DirectoryUnavailable) as e:
                 push({"type": "profile_error", "message": str(e)})
             except Exception as e:
@@ -434,7 +466,14 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
                 "max_speech_duration": s.MAX_SPEECH_DURATION,
             },
             "confirm_timeout": s.GATEWAY_CONFIRM_TIMEOUT,
+            # Images jointes : le navigateur les réduit avant l'envoi (plus grand côté max_side, en pixels)
+            "images": {"enabled": s.IMAGES_ENABLED, "max_bytes": s.IMAGES_MAX_BYTES,
+                       "max_per_message": s.IMAGES_MAX_PER_MESSAGE, "max_side": s.IMAGES_MAX_SIDE},
             "llm": core.model_info(),
+            # Agents externes que ce compte peut rejoindre, et celui relié à la session (None : l'assistant)
+            "agents": core.available_agents(session.id),
+            "agent": core.agent_info(session.id),
+            **public_state(),
         })
         sender_task = asyncio.create_task(sender())
         tasks: set[asyncio.Task] = set()
@@ -502,6 +541,8 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
                             continue
                 if kind in ("text", "audio"):
                     txt_prev = f"texte='{message.get('text')}'" if kind == "text" else f"audio={len(message.get('data',''))}b"
+                    if message.get("images"):
+                        txt_prev += f", {len(message['images'])} image(s)"
                     print(f"📩 [GATEWAY {session.id}] Message entrant : {kind} ({txt_prev})")
                     task = asyncio.create_task(handle(message))
                     tasks.add(task)
@@ -551,6 +592,12 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
                     core.events.emit("restarting", None)
                     # Laisse partir l'annonce aux clients avant l'arrêt
                     asyncio.get_running_loop().call_later(RESTART_DELAY_SECONDS, restart.request_restart)
+                elif kind == "set_agent":
+                    # Choix depuis la pastille de la PWA (null : retour à l'assistant)
+                    try:
+                        core.set_agent(session.id, message.get("agent") or None)
+                    except ValueError as e:
+                        push({"type": "toast", "message": str(e), "kind": "warn"})
                 elif kind == "listening":
                     mic_open = bool(message.get("active", True))
                     core.events.emit("remote_listening", session.id, active=mic_open)

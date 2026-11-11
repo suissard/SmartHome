@@ -117,12 +117,12 @@ class TestAssistantCore(unittest.TestCase):
                              tools=ToolRegistry(SETTINGS), llm=llm)
         core._fallback_stt = FakeSTT()
 
-        llm._audio_input[llm.model] = True
+        llm._input_support[("audio", llm.model)] = True
         reply = core.respond("s", audio_wav=b"RIFF")
         self.assertEqual((received[-1], reply.transcript), (b"RIFF", ""))
         self.assertTrue(core.model_info()["audio_input"])
 
-        llm._audio_input[llm.model] = False
+        llm._input_support[("audio", llm.model)] = False
         reply = core.respond("s", audio_wav=b"RIFF")
         self.assertEqual((received[-1], reply.transcript), (None, "transcription factice"))
         self.assertFalse(core.model_info()["audio_input"])

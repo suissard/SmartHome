@@ -11,7 +11,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Optional, Union
 
 import numpy as np
 
@@ -24,9 +24,11 @@ _POLL_SECONDS = 0.02
 
 
 class SpeechPipeline:
-    def __init__(self, tts, sink: Optional[AudioSink] = None, output_device=None, voice: Optional[str] = None):
+    def __init__(self, tts, sink: Optional[AudioSink] = None, output_device=None,
+                 voice: Union[str, Callable[[], Optional[str]], None] = None):
         self.tts = tts
-        # Voix du compte de la session (None : voix configurée)
+        # Voix de la session (None : voix configurée). Une fonction est appelée à chaque phrase demandée : la voix
+        # suit la session (agent externe relié en cours de réponse, voir AssistantCore.session_voice)
         self.voice = voice
         self.output_device = output_device
         self.sink = sink or self._play_local
@@ -46,7 +48,8 @@ class SpeechPipeline:
             return
         with self._idle:
             self._pending += 1
-        self._texts.put((self._generation, text))
+        voice = self.voice() if callable(self.voice) else self.voice
+        self._texts.put((self._generation, text, voice))
 
     def wait(self, timeout: Optional[float] = None) -> bool:
         """Attend la fin de tout ce qui a été demandé. Retourne False si le délai expire."""
@@ -82,12 +85,12 @@ class SpeechPipeline:
             if item is None:
                 self._audio.put(None)
                 return
-            generation, text = item
+            generation, text, voice = item
             if generation != self._generation:
                 self._done()
                 continue
             try:
-                samples, sample_rate = (self.tts.synthesize(text, voice=self.voice) if self.voice
+                samples, sample_rate = (self.tts.synthesize(text, voice=voice) if voice
                                         else self.tts.synthesize(text))
             except Exception as e:
                 print(f"⚠️ [SPEECH] Synthèse impossible : {e}")

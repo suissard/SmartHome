@@ -180,6 +180,7 @@ class Conversation:
         self,
         prompt: Optional[str] = None,
         audio_bytes: Optional[bytes] = None,
+        images: Optional[list] = None,
         model: Optional[str] = None,
         system_prompt: Optional[str] = None,
         stream: Optional[bool] = None,
@@ -191,7 +192,8 @@ class Conversation:
         turn: Optional[str] = None,
     ) -> str:
         """Envoie un prompt texte ou un enregistrement audio et retourne la réponse (ou un message ⚠️ en cas d'erreur).
-        `on_token` reçoit les fragments en streaming (affichage console par défaut), `on_tool` chaque outil exécuté."""
+        `on_token` reçoit les fragments en streaming (affichage console par défaut), `on_tool` chaque outil exécuté.
+        `images` (core.images.Image) accompagnent ce tour seulement : l'historique n'en garde que la mention."""
         stream = self.settings.LLM_STREAM if stream is None else stream
         think = self.settings.LLM_THINK if think is None else think
         self.last_tool_results = []
@@ -214,6 +216,8 @@ class Conversation:
         self._on_tool = on_tool
         options = dict(audio_wav=audio_bytes, model=model, stream=stream, think=think,
                        on_token=(on_token or _print_token) if stream else None)
+        if images:
+            options["images"] = list(images)
         try:
             try:
                 full_text = self._run(build_messages(use_tags=not native), native, options)
@@ -238,7 +242,11 @@ class Conversation:
         full_text = _THINK_TAGS.sub("", full_text).strip()
 
         if use_history and full_text:
-            self.add_message("user", prompt or ("🎙️ [Message vocal]" if audio_bytes else ""), turn)
+            content = prompt or ("🎙️ [Message vocal]" if audio_bytes else "")
+            if images:
+                mention = ", ".join(img.name for img in images)
+                content = f"{content}\n🖼️ [Image(s) jointe(s) : {mention}]".strip()
+            self.add_message("user", content, turn)
             self.add_message("assistant", full_text, turn)
         return full_text
 

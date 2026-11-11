@@ -18,6 +18,26 @@ def clean_for_speech(text: str) -> str:
     return re.sub(r"\s+", " ", _TAGS.sub("", text)).strip()
 
 
+_MD_CODE_BLOCK = re.compile(r"```.*?(?:```|$)", re.DOTALL)
+_MD_LINK = re.compile(r"!?\[([^\]]*)\]\([^)]*\)")
+_MD_URL = re.compile(r"https?://\S+")
+_MD_MARKS = re.compile(r"(\*\*|__|\*|`|~~)")
+_MD_LINE_PREFIX = re.compile(r"^\s*(?:#{1,6}\s+|>\s*|[-*+]\s+|\d+[.)]\s+|\|)", re.MULTILINE)
+_MD_TABLE_RULE = re.compile(r"^\s*\|?[\s:|-]+\|[\s:|-]*$", re.MULTILINE)
+
+
+def strip_markdown(text: str) -> str:
+    """Retire la mise en forme Markdown d'un texte à prononcer (réponses des agents externes) :
+    blocs de code, liens (le libellé est gardé), adresses, emphase, titres, puces, tableaux."""
+    text = _MD_CODE_BLOCK.sub(" (code) ", text or "")
+    text = _MD_LINK.sub(r"\1", text)
+    text = _MD_URL.sub("", text)
+    text = _MD_TABLE_RULE.sub("", text)
+    text = _MD_LINE_PREFIX.sub("", text)
+    text = _MD_MARKS.sub("", text).replace(" | ", ", ").replace("|", " ")
+    return re.sub(r"[ \t]+", " ", text).strip()
+
+
 def normalize_utterance(text: str) -> str:
     """Minuscules, apostrophes unifiées, ponctuation retirée : « Au revoir ! » -> « au revoir »."""
     text = (text or "").lower().replace("’", "'")

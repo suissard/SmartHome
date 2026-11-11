@@ -1,0 +1,40 @@
+{
+  "agents": {
+    "hermes": {
+      "label": "Hermes",
+      "aliases": ["hermès", "hermes agent", "air mess", "hermesse"],
+      "color": "#a855f7",
+      "voice": "fr_FR-siwis-medium",
+      "command": ["hermes", "chat", "-q", "{prompt}", "--format", "stream-json"],
+      "resume_args": ["--resume", "{session}"],
+      "output": "hermes",
+      "cwd": "",
+      "enabled": true,
+      "description": "Hermes Agent (Nous Research) : agent généraliste avec outils"
+    },
+    "claude": {
+      "label": "Claude",
+      "aliases": ["claude code", "clode", "clod"],
+      "color": "#d97757",
+      "voice": "fr_FR-upmc-medium",
+      "command": ["claude", "-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "{prompt}"],
+      "resume_args": ["--resume", "{session}"],
+      "output": "claude",
+      "cwd": "",
+      "enabled": true,
+      "description": "Claude Code (Anthropic) en mode non interactif"
+    },
+    "antigravity": {
+      "label": "Antigravity",
+      "aliases": ["anti gravity", "anti-gravity", "agy"],
+      "color": "#14b8a6",
+      "voice": "fr_FR-siwis-medium",
+      "command": ["agy", "-p", "{prompt}", "--output-format", "stream-json"],
+      "resume_args": ["--conversation", "{session}"],
+      "output": "antigravity",
+      "cwd": "",
+      "enabled": true,
+      "description": "Antigravity (Google) en mode non interactif"
+    }
+  }
+}

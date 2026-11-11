@@ -45,8 +45,8 @@ class LLMProvider:
     def __init__(self, settings: Settings):
         self.settings = settings
         self.model = ""
-        # Entrée audio détectée par modèle (nom -> bool), interrogée une seule fois
-        self._audio_input: dict[str, bool] = {}
+        # Entrées audio / image détectées par modèle ((type, nom) -> bool), interrogées une seule fois
+        self._input_support: dict[tuple[str, str], bool] = {}
 
     @classmethod
     def describe(cls, settings: Settings) -> str:
@@ -68,21 +68,36 @@ class LLMProvider:
     def accepts_audio(self, model: Optional[str] = None) -> bool:
         """True si le modèle (actif par défaut) comprend un enregistrement audio (mode STT direct).
         `LLM_AUDIO_INPUT` force la réponse ("on" / "off") ; "auto" interroge les capacités du modèle."""
-        mode = self.settings.LLM_AUDIO_INPUT
+        return self._supports("audio", self.settings.LLM_AUDIO_INPUT, model, self._detect_audio_input,
+                              "l'audio sera transcrit")
+
+    def accepts_images(self, model: Optional[str] = None) -> bool:
+        """True si le modèle (actif par défaut) comprend les images (vision). `LLM_IMAGE_INPUT` force la réponse."""
+        if self.is_decision_model(model):
+            return False
+        return self._supports("image", self.settings.LLM_IMAGE_INPUT, model, self._detect_image_input,
+                              "les images ne lui seront pas envoyées")
+
+    def _supports(self, kind: str, mode: str, model: Optional[str], detect, fallback: str) -> bool:
         if mode != "auto":
             return mode == "on"
         name = model or self.model
-        if name not in self._audio_input:
+        key = (kind, name)
+        if key not in self._input_support:
             try:
-                self._audio_input[name] = self._detect_audio_input(name)
+                self._input_support[key] = bool(detect(name))
             except Exception as e:
                 # Non mémorisé : nouvelle tentative à la prochaine demande
-                print(f"\n⚠️ [LLM] Capacités de {name} inconnues ({e}) : l'audio sera transcrit.")
+                print(f"\n⚠️ [LLM] Capacités de {name} inconnues ({e}) : {fallback}.")
                 return False
-        return self._audio_input[name]
+        return self._input_support[key]
 
     def _detect_audio_input(self, model: str) -> bool:
         """Interroge le fournisseur : le modèle accepte-t-il l'audio en entrée ? Peut lever."""
+        return False
+
+    def _detect_image_input(self, model: str) -> bool:
+        """Interroge le fournisseur : le modèle accepte-t-il les images en entrée ? Peut lever."""
         return False
 
     def chat(
@@ -91,12 +106,14 @@ class LLMProvider:
         *,
         tools: Optional[list[dict]] = None,
         audio_wav: Optional[bytes] = None,
+        images: Optional[list] = None,
         model: Optional[str] = None,
         stream: bool = False,
         think: bool = False,
         on_token: Optional[TokenCallback] = None,
     ) -> LLMResponse:
         """Envoie les messages (le dernier étant le tour utilisateur ou un résultat d'outil).
+        `images` (core.images.Image) sont jointes au dernier tour utilisateur, comme `audio_wav`.
         En streaming, chaque fragment de texte est transmis à `on_token`. Lève une exception en cas d'échec,
         `ToolsNotSupportedError` si le modèle ne gère pas les outils."""
         raise NotImplementedError
@@ -185,12 +202,18 @@ class OllamaLLM(LLMProvider):
     def _detect_audio_input(self, model: str) -> bool:
         return "audio" in self.capabilities(model)
 
-    def chat(self, messages, *, tools=None, audio_wav=None, model=None, stream=False, think=False, on_token=None) -> LLMResponse:
-        if audio_wav:
-            # Le dernier tour utilisateur porte l'enregistrement (Ollama refuse si le modèle n'a pas la capacité audio)
+    def _detect_image_input(self, model: str) -> bool:
+        return "vision" in self.capabilities(model)
+
+    def chat(self, messages, *, tools=None, audio_wav=None, images=None, model=None, stream=False, think=False,
+             on_token=None) -> LLMResponse:
+        if audio_wav or images:
+            # Le dernier tour utilisateur porte l'enregistrement et les images (champ « images » d'Ollama ;
+            # refusé si le modèle n'a pas la capacité audio / vision)
             messages = list(messages)
             idx = max(i for i, m in enumerate(messages) if m["role"] == "user")
-            messages[idx] = {**messages[idx], "images": [audio_wav]}
+            attached = [img.data for img in images or []] + ([audio_wav] if audio_wav else [])
+            messages[idx] = {**messages[idx], "images": attached}
         kwargs = {"model": model or self.model, "messages": messages, "stream": stream}
         if tools:
             kwargs["tools"] = tools
@@ -271,23 +294,33 @@ class OpenRouterLLM(LLMProvider):
             models.append({"name": m["id"], "capabilities": capabilities, "size": 0})
         return sorted(models, key=lambda m: m["name"])
 
-    def _detect_audio_input(self, model: str) -> bool:
+    def _accepts_modality(self, model: str, modality: str) -> bool:
         if self._input_modalities is None:
             self._input_modalities = {
                 m["id"]: (m.get("architecture") or {}).get("input_modalities") or [] for m in self._fetch_catalog()
             }
         # Modèle absent du catalogue (alias, modèle privé...) : on laisse l'API trancher
         modalities = self._input_modalities.get(model)
-        return modalities is None or "audio" in modalities
+        return modalities is None or modality in modalities
 
-    def chat(self, messages, *, tools=None, audio_wav=None, model=None, stream=False, think=False, on_token=None) -> LLMResponse:
+    def _detect_audio_input(self, model: str) -> bool:
+        return self._accepts_modality(model, "audio")
+
+    def _detect_image_input(self, model: str) -> bool:
+        return self._accepts_modality(model, "image")
+
+    def chat(self, messages, *, tools=None, audio_wav=None, images=None, model=None, stream=False, think=False,
+             on_token=None) -> LLMResponse:
         require_openrouter_key(self.settings)
 
-        if audio_wav:
-            # Le dernier tour utilisateur devient multimodal : texte éventuel + audio base64
+        if audio_wav or images:
+            # Le dernier tour utilisateur devient multimodal : texte éventuel + images (data URL) + audio base64
             messages = list(messages)
             idx = max(i for i, m in enumerate(messages) if m["role"] == "user")
-            content = [{"type": "input_audio", "input_audio": {"data": base64.b64encode(audio_wav).decode("utf-8"), "format": "wav"}}]
+            content = [{"type": "image_url", "image_url": {"url": img.data_url}} for img in images or []]
+            if audio_wav:
+                content.append({"type": "input_audio",
+                                "input_audio": {"data": base64.b64encode(audio_wav).decode("utf-8"), "format": "wav"}})
             if messages[idx].get("content"):
                 content.insert(0, {"type": "text", "text": messages[idx]["content"]})
             messages[idx] = {"role": "user", "content": content}
