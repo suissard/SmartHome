@@ -183,6 +183,31 @@ function scrollDown(force = false) {
   }
 }
 
+// Bulle « en train d'écrire » (trois points animés) : visible tant qu'une demande est en cours
+// et qu'aucun texte de réponse n'arrive, toujours en bas du fil
+let typingIndicator = null;
+function updateTypingIndicator() {
+  const streaming = state.botBubble && state.botBubble.textContent.trim();
+  const show = state.ready && state.busy > 0 && !streaming;
+  if (!show) {
+    typingIndicator?.remove();
+    return;
+  }
+  if (!typingIndicator) {
+    typingIndicator = document.createElement("div");
+    typingIndicator.className = "typing-indicator";
+    typingIndicator.setAttribute("role", "status");
+    typingIndicator.setAttribute("aria-label", "L'assistant réfléchit");
+    typingIndicator.innerHTML = "<span></span><span></span><span></span>";
+  }
+  if (state.agent) typingIndicator.style.setProperty("--bubble-agent-color", state.agent.color);
+  else typingIndicator.style.removeProperty("--bubble-agent-color");
+  if (ui.log.lastElementChild !== typingIndicator) {
+    ui.log.append(typingIndicator);
+    scrollDown();
+  }
+}
+
 function addBubble(kind, text) {
   ui.empty.hidden = true;
   const el = document.createElement("div");
@@ -564,6 +589,7 @@ function connect() {
     state.eventTurn = event.turn ?? null;
     handleEvent(event);
     state.eventTurn = null;
+    updateTypingIndicator();
   });
 
   ws.addEventListener("close", (e) => {
@@ -1443,6 +1469,7 @@ function sendText(text, forget = [], images = []) {
   if (images.length) attachImagesToBubble(bubble, images);
   state.busy += 1;
   refreshControls();
+  updateTypingIndicator();
   // Les images ne sont pas gardées dans l'historique de l'appareil (trop lourdes) : seule leur mention l'est
   const mention = images.length ? `\n🖼️ [Image(s) jointe(s) : ${images.map((i) => i.name).join(", ")}]` : "";
   recordMessageInCurrentConversation("user", `${text}${mention}`.trim(), turn);
@@ -1458,6 +1485,7 @@ function sendAudio(wavBytes) {
   state.pendingUser.dataset.turn = turn;
   state.busy += 1;
   refreshControls();
+  updateTypingIndicator();
   send({ type: "audio", data: toBase64(wavBytes), speak: ui.speak.checked, turn });
 }
 
