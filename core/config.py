@@ -267,7 +267,8 @@ class Settings(BaseModel):
     ACTIONS_AGENT_MAX_REQUEST_CHARS: int = Field(2000, gt=0)
     # Paramètres que l'assistant ne peut ni lire ni modifier lui-même ([GET_SETTINGS] / [SET_SETTING])
     ACTIONS_SETTINGS_BLOCKED: CsvList = Field(
-        default_factory=lambda: ["OPENROUTER_API_KEY", "ACTIONS_CONFIRM_DANGEROUS", "FILES_SEARCH_DIRS"])
+        default_factory=lambda: ["OPENROUTER_API_KEY", "ACTIONS_CONFIRM_DANGEROUS", "FILES_SEARCH_DIRS",
+                                 "ACTIONS_OPEN_ALLOWED_APPS"])
     # Longueur maximale d'une valeur affichée par [GET_SETTINGS] (caractères, au-delà : tronquée)
     ACTIONS_SETTINGS_MAX_VALUE_CHARS: int = Field(200, gt=0)
 
