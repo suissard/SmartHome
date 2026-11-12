@@ -206,6 +206,8 @@ class TestSafeDirectExecution(unittest.TestCase):
         """Exécute l'action MEDIA_PLAY_PAUSE (contrôle multimédia / D-Bus)."""
         action = get_command_by_tag("MEDIA_PLAY_PAUSE")
         code, stdout, stderr = action.execute_sync()
+        if code != 0 and "Aucun lecteur" in stderr:
+            self.skipTest("aucun lecteur multimédia actif (CI)")
         self.assertEqual(code, 0, f"MEDIA_PLAY_PAUSE a échoué : {stderr}")
 
     def test_safe_action_volume_reversible(self):
