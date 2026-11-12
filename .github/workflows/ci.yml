@@ -42,7 +42,13 @@ jobs:
           cache-dependency-path: requirements*.txt
       - name: Paquets système (audio)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y portaudio19-dev libportaudio2 libsndfile1
+        run: sudo apt-get update && sudo apt-get install -y portaudio19-dev libportaudio2 libsndfile1 pulseaudio
+      - name: Serveur audio factice (sounddevice initialise PortAudio dès l'import)
+        if: runner.os == 'Linux'
+        run: |
+          pulseaudio -D --exit-idle-time=-1
+          pactl load-module module-null-sink sink_name=ci
+          pactl info
       - run: pip install -r requirements-dev.txt
       - name: Tests
         env:
