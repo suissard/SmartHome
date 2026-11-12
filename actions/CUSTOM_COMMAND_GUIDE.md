@@ -99,6 +99,13 @@ Facultatif : `decision_choices()` renvoie `{valeur: description prononçable}` (
 pour que les modèles de décision, qui ne rédigent pas de texte, puissent utiliser la commande. Sans elle, une
 commande à argument libre ne leur est pas proposée. Exemple : `percent_choices()` de `actions/base.py`.
 
+**Commande écrite en Python** (aucun script : logique en Python, mêmes résultats sous Linux et Windows) : hérite de
+`PythonAction` (`actions/base.py`) au lieu de `BaseAction`, garde `script_code="exit 0"` et
+`script_code_windows="exit 0"`, et implémente `run(self, args) -> (code, sortie, erreur)`. Une `ValueError` levée
+dans `run()` devient un échec dont le message est rendu au LLM. Le compte pour lequel l'outil s'exécute est donné par
+`core.turn_context.current_user()` (None hors d'un tour). Exemples : `actions/modules/reminder.py`,
+`actions/modules/memory.py`. Préfère un script bash simple quand il suffit.
+
 ## 4. Sécurité du script
 
 - Toujours citer les variables (`"$1"`, `"$ARG"`), jamais d'`eval`, jamais de `sh -c "$1"`.

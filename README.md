@@ -16,6 +16,9 @@ SmartHome est un assistant vocal intelligent, modulaire, ultra-réactif et enti�
 - **✋ Barge-in** : redites le mot-clé pendant qu'il parle (ou touchez le micro sur le téléphone) pour lui couper la parole et enchaîner.
 - **💤 Fin de conversation** : dites « au revoir », « c'est tout » ou « stop » (liste `CONVERSATION_END_PHRASES`) pour le remettre en veille aussitôt ; les formulations libres (« je vais me coucher ») passent par l'outil `sleep` du LLM.
 - **🔇 Résistant au bruit** : la détection de voix Silero (locale) ignore ventilateur, musique ou claquements ; les phrases inventées par Whisper dans le bruit sont écartées (`VAD_ENGINE`, `STT_IGNORED_PHRASES`). Testez votre micro avec `python audio/vad.py`.
+- **⏰ Rappels & Routines** : « rappelle-moi dans 20 minutes de sortir le gâteau », « tous les matins à 7h, donne-moi la météo ». Dits à voix haute sur l'ordinateur et notifiés sur le téléphone, ils survivent au redémarrage (`core/scheduler.py`).
+- **🧠 Mémoire à long terme** : « retiens que ma fille s'appelle Léa ». Chaque compte a ses souvenirs, donnés à l'assistant quand ils sont utiles, visibles et effaçables dans les réglages de la PWA (`core/memory.py`, embeddings Ollama facultatifs).
+- **⏱️ Latence mesurée** : chaque tour est chronométré étape par étape (transcription, 1re phrase, génération, synthèse) ; affiché aux admins sous chaque réponse, rapport avec `python core/metrics.py`.
 - **💬 Mode Conversation Suivie (*Follow-up*)** : Après le réveil par mot-clé, l'assistant reste en veille active pendant 30 secondes pour enchaîner les questions sans répéter le mot d'activation.
 
 ---
@@ -192,6 +195,16 @@ Chaque fichier peut être exécuté de manière autonome pour tester et régler 
 | **LLM (Ollama)** | `python llm.py` | Ouvre un chat textuel dans le terminal avec le modèle. |
 | **Synthèse (TTS)** | `python tts.py` | Demande une phrase au clavier et la prononce vocalement. |
 | **Feedbacks & Sons** | `python feedback.py` | Teste les sons procéduraux (chimes, ding, beep) et les retours configurés. |
+| **Rappels** | `python core/scheduler.py` | Montre la lecture des dates en français et les rappels en attente. |
+| **Mémoire** | `python core/memory.py [compte] [question]` | Liste les souvenirs d'un compte et ceux retenus pour une question. |
+| **Latence** | `python core/metrics.py [jours]` | Médiane et 90e centile de chaque étape, par modèle. |
+
+Suite automatique (lancée par la CI GitHub à chaque push, avec `ruff`) :
+
+```bash
+pip install -r requirements-dev.txt
+ruff check . && python -m pytest -q
+```
 
 ---
 

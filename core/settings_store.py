@@ -8,12 +8,11 @@ L'aide affichée est le commentaire qui précède la variable dans `.env.example
 """
 
 import json
-import os
 import re
 import sys
 import typing
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import annotated_types
 from pydantic import ValidationError
@@ -131,6 +130,18 @@ EDITABLE_GROUPS: list[tuple[str, list[tuple[str, str, bool]]]] = [
         ("FEEDBACK_TIMEOUT_TEXT", "Phrase de mise en veille", RESTART),
         ("FEEDBACK_SOUND_VOLUME", "Volume des effets sonores", RESTART),
     ]),
+    ("7. Mémoire, Rappels & Mesures", [
+        ("MEMORY_ENABLED", "Mémoire à long terme (souvenirs par compte)", RESTART),
+        ("MEMORY_EMBED_MODEL", "Modèle d'embeddings Ollama (vide : mots communs)", LIVE),
+        ("MEMORY_ALWAYS_INCLUDE", "Souvenirs toujours tous donnés jusqu'à", LIVE),
+        ("MEMORY_RECALL_LIMIT", "Souvenirs donnés au plus (au-delà)", LIVE),
+        ("SCHEDULER_ENABLED", "Rappels et routines programmés", RESTART),
+        ("SCHEDULER_LOCAL_ANNOUNCE", "Rappels dits sur l'ordinateur", LIVE),
+        ("SCHEDULER_SOUND", "Son avant un rappel", LIVE),
+        ("SCHEDULER_REMINDER_TEMPLATE", "Phrase d'un rappel", LIVE),
+        ("SCHEDULER_DEFAULT_HOUR", "Heure d'un rappel donné sans heure", LIVE),
+        ("METRICS_ENABLED", "Mesure de la latence de chaque tour", LIVE),
+    ]),
 ]
 
 # Champs affichés seulement si le réglage correspond : liste d'alternatives {variable: valeurs admises}.
@@ -155,6 +166,13 @@ VISIBLE_WHEN: dict[str, list[dict]] = {
     "REMOTE_VOICE_HOLD": [{"REMOTE_VOICE_SLEEP": [True]}],
     "FEEDBACK_WAKEWORD_SOUND": [{"FEEDBACK_WAKEWORD_TYPE": ["sound"]}],
     "FEEDBACK_WAKEWORD_TEXT": [{"FEEDBACK_WAKEWORD_TYPE": ["phrase"]}],
+    "MEMORY_EMBED_MODEL": [{"MEMORY_ENABLED": [True]}],
+    "MEMORY_ALWAYS_INCLUDE": [{"MEMORY_ENABLED": [True]}],
+    "MEMORY_RECALL_LIMIT": [{"MEMORY_ENABLED": [True]}],
+    "SCHEDULER_LOCAL_ANNOUNCE": [{"SCHEDULER_ENABLED": [True]}],
+    "SCHEDULER_SOUND": [{"SCHEDULER_ENABLED": [True]}],
+    "SCHEDULER_REMINDER_TEMPLATE": [{"SCHEDULER_ENABLED": [True]}],
+    "SCHEDULER_DEFAULT_HOUR": [{"SCHEDULER_ENABLED": [True]}],
 
     # 2. STT
     "STT_FALLBACK_PROVIDER": [{"STT_PROVIDER": _DIRECT_STT}],

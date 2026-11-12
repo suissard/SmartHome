@@ -43,11 +43,13 @@ def main():
     print(f"  • Écoute      : ws://{s.GATEWAY_HOST}:{s.GATEWAY_PORT}/ws — {auth}")
     print_pairing(s)
     print()
+    core.start_scheduler()
     try:
         build_server(core, s).run()
     except KeyboardInterrupt:
         pass
     finally:
+        core.stop_scheduler()
         if hub:
             hub.disconnect_all()
         if pocketbase:

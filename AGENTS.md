@@ -83,6 +83,20 @@ Ce document est destiné aux agents IA (et aux développeurs) qui lisent, mainti
 - **Notes des réponses** (`FEEDBACK_ENABLED`) : pouce sous chaque réponse de la PWA → échelle -2…+2 (enregistrée dès le clic) → commentaire facultatif (`FEEDBACK_COMMENT_MAX_CHARS`). Message WS `feedback` → `AssistantCore.set_feedback()` : on ne note que ce qu'on peut lire (sa conversation, ou celles du micro si visibles) ; un échange antérieur à l'archive est copié depuis PocketBase. Une note par personne et par réponse (la nouvelle remplace l'ancienne), renvoyée avec les messages (`feedback: {rating, comment}`).
 - **Export** : `python core/archive.py export fichier.jsonl [--visible]` (une ligne par conversation, versions masquées/corrigées comprises sauf `--visible`, notes jointes aux réponses).
 
+### 2.2 sexies [core/scheduler.py](file:///home/suissard/PROGRAMMATIONS/SmartHome/core/scheduler.py) — Rappels & Routines
+- **Outils** ([actions/modules/reminder.py](file:///home/suissard/PROGRAMMATIONS/SmartHome/actions/modules/reminder.py)) : `remind` (`[REMIND quand | message | répétition]`), `routine` (consigne exécutée par l'assistant à l'échéance, session `routine-<n>`, droits du compte créateur, sans confirmation possible), `list_reminders`, `cancel_reminder`. Chaque compte ne voit et n'annule que les siens (`core/turn_context.py`, micro = foyer).
+- **Dates** : `parse_when()` lit le français (« dans 1h30 », « demain 7h », « lundi à 9h15 », « ce soir à 8h », « le 24 décembre ») ou l'ISO 8601 ; `split_repeat()` / `next_occurrence()` gèrent `daily`, `weekdays`, `weekly`.
+- **Exécution** : `ReminderStore` (SQLite `SCHEDULER_DB_PATH`) + `Scheduler` (fil `start_scheduler()`, lancé par `main.py` et `python -m gateway` seulement ; relecture `SCHEDULER_POLL_SECONDS` pour les ajouts d'autres processus ; rappels manqués dits s'ils datent de moins de `SCHEDULER_MISSED_GRACE`). À l'échéance : événement global `reminder` → `main.py` le dit en veille (`SCHEDULER_LOCAL_ANNOUNCE`, `SCHEDULER_SOUND`), la passerelle le relaie au compte créateur (rappels du foyer : comptes qui voient le foyer), la PWA affiche une pastille et une notification système.
+
+### 2.2 septies [core/memory.py](file:///home/suissard/PROGRAMMATIONS/SmartHome/core/memory.py) — Mémoire à Long Terme
+- **Outils** ([actions/modules/memory.py](file:///home/suissard/PROGRAMMATIONS/SmartHome/actions/modules/memory.py)) : `remember`, `list_memories`, `forget_memory` ; souvenirs par compte (SQLite `MEMORY_DB_PATH`), un souvenir presque identique remplace l'ancien.
+- **Rappel au LLM** : à chaque tour, `AssistantCore._respond()` pose `Conversation.memory_prompt` = `MemoryStore.prompt_for(user, demande)` (gabarit `MEMORY_PROMPT`) : tous les souvenirs jusqu'à `MEMORY_ALWAYS_INCLUDE`, sinon les `MEMORY_RECALL_LIMIT` plus proches (embeddings Ollama `MEMORY_EMBED_MODEL`, sinon mots communs).
+- **PWA** : carte « Ce que l'assistant a retenu » des réglages ; messages WS `list_memories` / `add_memory` / `delete_memory` → `memories` | `memory_error`.
+
+### 2.2 octies [core/metrics.py](file:///home/suissard/PROGRAMMATIONS/SmartHome/core/metrics.py) & [core/turn_context.py](file:///home/suissard/PROGRAMMATIONS/SmartHome/core/turn_context.py) — Latence & Contexte du Tour
+- **Latence** (`METRICS_ENABLED`) : `respond()` enveloppe `_respond()` dans un `TurnTimer` (étapes `stt`, `first_token`, `first_sentence`, `llm`, `tts`, `total`, en ms) ; `Reply.timings`, événement `timings` (affiché aux admins sous la réponse), table `timings` de l'archive, rapport `python core/metrics.py [jours]`.
+- **Contexte du tour** : `session_context(session)` (ContextVar) est posé pendant `_respond()` ; un outil Python lit `current_user()` pour savoir pour quel compte il agit. Les actions écrites en Python héritent de `PythonAction` (`actions/base.py`, méthode `run()`).
+
 ### 2.2 bis [core/tools.py](file:///home/suissard/PROGRAMMATIONS/SmartHome/core/tools.py) & [audio/confirm.py](file:///home/suissard/PROGRAMMATIONS/SmartHome/audio/confirm.py) — Registre d'Outils Unifié & Confirmation
 - **Registre** : `build_tool_registry()` réunit les actions locales et les outils des serveurs MCP connectés (schéma JSON, danger, exécuteur). Le propre serveur MCP de SmartHome est ignoré (doublons), ainsi que tout serveur marqué `"expose_to_llm": false` dans `mcp_servers.json`.
 - **Danger des outils MCP** : `"tool_danger": "safe" | "confirm"` dans la config du serveur, sinon déduit des annotations MCP (`read_only_hint` / `destructive_hint` ; sans annotation → `confirm`, conformément à la spécification).
@@ -219,7 +233,7 @@ stateDiagram-v2
 Lors de toute intervention sur ce codebase, veillez à respecter les règles suivantes :
 
 ### 1. Préservation des Points d'Entrée de Test Autonomes
-Chaque module Python (`config.py`, `wakeword.py`, `transcribe.py`, `stt.py`, `llm.py`, `providers.py`, `tts.py`, `speech.py`, `barge_in.py`, `vad.py`, `sentences.py`, `feedback.py`, `ducking.py`, `confirm.py`, `tools.py`, `events.py`, `agents.py`, `images.py`, `profiles.py`, `remote_voice.py`, `menu.py`, `wizard.py`, `restart.py`, `assistant.py`, `decision.py`, `settings_store.py`, `users.py`, `pocketbase.py`, `history.py`, `archive.py`, `test_sound.py`) **doit impérativement conserver son bloc `if __name__ == "__main__":`**. Ces blocs permettent un diagnostic isolé sans charger toute la pile applicative.
+Chaque module Python (`config.py`, `wakeword.py`, `transcribe.py`, `stt.py`, `llm.py`, `providers.py`, `tts.py`, `speech.py`, `barge_in.py`, `vad.py`, `sentences.py`, `feedback.py`, `ducking.py`, `confirm.py`, `tools.py`, `events.py`, `agents.py`, `images.py`, `profiles.py`, `remote_voice.py`, `menu.py`, `wizard.py`, `restart.py`, `assistant.py`, `decision.py`, `settings_store.py`, `users.py`, `pocketbase.py`, `history.py`, `archive.py`, `metrics.py`, `scheduler.py`, `memory.py`, `turn_context.py`, `test_sound.py`) **doit impérativement conserver son bloc `if __name__ == "__main__":`**. Ces blocs permettent un diagnostic isolé sans charger toute la pile applicative.
 
 
 
@@ -239,7 +253,12 @@ Chaque module Python (`config.py`, `wakeword.py`, `transcribe.py`, `stt.py`, `ll
 - **Aucune variable de paramétrage ne doit être écrite en dur** directement dans les fonctions ou classes.
 - Déclarez toujours les nouvelles variables dans `.env.example`, `.env` et comme champ typé (avec valeur par défaut et contraintes) du modèle `Settings` de `config.py`.
 
-### 6. Accès Git
+### 6. Qualité & CI
+- `ruff check .` (règles dans `pyproject.toml`) et `python -m pytest -q` doivent passer avant tout commit : la CI GitHub (`.github/workflows/ci.yml`) les lance sous Linux (bloquant) et Windows (informatif). Outils : `pip install -r requirements-dev.txt`.
+- Un test ne doit jamais écrire dans `data/` : `tests/__init__.py` redirige les bases (archive, rappels, mémoire) vers un dossier temporaire ; toute nouvelle base SQLite doit y être ajoutée.
+- Les secrets ne vont jamais dans un fichier versionné : `mcp_servers.json` référence `${NOM}`, remplacé par la variable de `.env` (`core/mcp_hub.expand_env()`).
+
+### 7. Accès Git
 - La connexion à GitHub se fait **uniquement en SSH** : `origin` est `git@github.com:suissard/SmartHome.git`. Ne jamais utiliser l'URL HTTPS ni un jeton.
 
 

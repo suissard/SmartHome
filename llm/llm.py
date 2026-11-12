@@ -102,6 +102,8 @@ class Conversation:
         self._restricted: Optional[tuple] = None
         # Lignes propres à l'utilisateur de la session (prénom, préférences), ajoutées au prompt système
         self.user_prompt = ""
+        # Souvenirs du compte utiles à ce tour (core/memory.py), recalculés à chaque demande
+        self.memory_prompt = ""
         self.max_messages = self.settings.LLM_HISTORY_MESSAGES
         self.history: list[dict] = []
         # Messages sortis de la fenêtre : ils y reviennent si une suppression ou une relance y refait de la place
@@ -204,6 +206,8 @@ class Conversation:
             system = system_prompt or get_default_system_prompt(self.settings, use_tags, self.tool_policy)
             if self.user_prompt:
                 system = f"{system.rstrip()}\n\n{self.user_prompt}"
+            if self.memory_prompt:
+                system = f"{system.rstrip()}\n\n{self.memory_prompt}"
             messages = [{"role": "system", "content": system}]
             if use_history:
                 messages.extend({"role": m["role"], "content": m["content"]} for m in self.history)

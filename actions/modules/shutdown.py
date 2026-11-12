@@ -4,7 +4,6 @@ Contient les métadonnées et le script d'extinction sécurisé (Linux et Window
 """
 
 import subprocess
-import sys
 from typing import Tuple
 from actions.base import BaseAction
 

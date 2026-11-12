@@ -14,7 +14,6 @@ dans le menu s'applique (`profiles/.last`, non versionné), sinon le profil par 
 """
 
 import os
-import sys
 from pathlib import Path
 from typing import Optional
 

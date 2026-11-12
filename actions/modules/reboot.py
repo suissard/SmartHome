@@ -4,7 +4,6 @@ Contient les métadonnées et le script de redémarrage (Linux et Windows).
 """
 
 import subprocess
-import sys
 from typing import Tuple
 from actions.base import BaseAction
 

@@ -73,7 +73,8 @@ class TimerAction(BaseAction):
         super().__init__(
             tag="TIMER",
             done_message="Minuteur de ${ARGS} lancé.",
-            description="Lancer un minuteur ou un rappel (notification et son à la fin). Durée puis message optionnel.",
+            description=("Lancer un minuteur court (notification et son à la fin). Durée puis message optionnel. "
+                         "Pour un rappel à une heure donnée, répété, ou dit à voix haute, utiliser remind."),
             script_code=_TIMER_SCRIPT,
             has_args=True,
             args_hint="<durée ex: 10m, 1h30, 45s> [message]",

@@ -1,6 +1,6 @@
 // Service worker minimal : rend l'interface installable et disponible au démarrage même si le réseau tarde.
 // Stratégie « réseau d'abord » : la version du serveur est toujours préférée ; seul le squelette est mis en cache.
-const CACHE = "smarthome-shell-v24";
+const CACHE = "smarthome-shell-v25";
 const SHELL = [
   "./",
   "index.html",
@@ -54,5 +54,16 @@ self.addEventListener("fetch", (event) => {
         return response;
       })
       .catch(() => caches.match(event.request)),
+  );
+});
+
+// Clic sur la notification d'un rappel : retour à l'application (onglet existant, sinon nouvel onglet)
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  event.waitUntil(
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((windows) => {
+      const open = windows.find((w) => w.url.startsWith(self.registration.scope));
+      return open ? open.focus() : self.clients.openWindow(self.registration.scope);
+    }),
   );
 });

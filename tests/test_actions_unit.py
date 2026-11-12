@@ -13,7 +13,7 @@ import tempfile
 import unittest
 import subprocess
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 # Inclusion de la racine du projet
 ROOT_DIR = Path(__file__).resolve().parent.parent
@@ -21,11 +21,9 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 
-from actions.base import BaseAction, CommandDefinition
+from actions.base import BaseAction
 from actions.registry import (
     COMMAND_REGISTRY,
-    ActionRegistry,
-    get_all_commands,
     get_command_by_tag,
     register_action
 )

@@ -10,19 +10,32 @@ Vérifie :
 - La déconnexion propre et la gestion des erreurs
 """
 
-import asyncio
-import json
 import sys
 import unittest
 from pathlib import Path
-from unittest.mock import patch, MagicMock
 
 # Inclusion de la racine du projet
 ROOT_DIR = Path(__file__).resolve().parent.parent
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from core.mcp_hub import MCPClientHub, MCPServerConnection
+from core.mcp_hub import MCPClientHub, expand_env
+
+
+class TestExpandEnv(unittest.TestCase):
+    """Les secrets de mcp_servers.json viennent de .env via ${NOM}."""
+
+    def test_nested_values_are_expanded(self):
+        cfg = {"headers": {"Authorization": "Bearer ${TOK}"}, "args": ["-k", "${KEY}"], "enabled": True}
+        out = expand_env(cfg, {"TOK": "abc", "KEY": "k1"})
+        self.assertEqual(out["headers"]["Authorization"], "Bearer abc")
+        self.assertEqual(out["args"], ["-k", "k1"])
+        self.assertIs(out["enabled"], True)
+
+    def test_missing_variable_is_reported_and_emptied(self):
+        missing = set()
+        self.assertEqual(expand_env("x${NOPE}y $HOME", {}, missing), "xy $HOME")
+        self.assertEqual(missing, {"NOPE"})
 
 
 class TestMCPClientHub(unittest.IsolatedAsyncioTestCase):
