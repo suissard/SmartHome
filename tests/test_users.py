@@ -743,12 +743,13 @@ class TestPocketBaseLauncher(unittest.TestCase):
         def fake_download(digest):
             return lambda url: f"{digest}  {name}\n".encode() if url.endswith("checksums.txt") else archive
 
+        binary = pb.binary_path().name  # pocketbase.exe sous Windows
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(pb, "PB_DIR", Path(tmp)), \
-                mock.patch.object(pb, "binary_path", return_value=Path(tmp) / "pocketbase"), \
+                mock.patch.object(pb, "binary_path", return_value=Path(tmp) / binary), \
                 mock.patch.object(pb, "installed_version", return_value=None):
             with mock.patch.object(pb, "_download", fake_download("0" * 64)), self.assertRaises(RuntimeError):
                 pb.install(s)
-            self.assertFalse((Path(tmp) / "pocketbase").exists())
+            self.assertFalse((Path(tmp) / binary).exists())
             with mock.patch.object(pb, "_download", fake_download(hashlib.sha256(archive).hexdigest())):
                 target = pb.install(s)
             self.assertEqual(target.read_bytes(), b"binaire")

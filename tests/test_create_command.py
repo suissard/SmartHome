@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Tests de [CREATE_COMMAND] : droits réservés aux superadmins, consigne envoyée à l'agent, lancement en arrière-plan."""
 
+import shlex
 import sys
 import tempfile
 import time
@@ -66,8 +67,11 @@ class TestAgentLaunch(unittest.TestCase):
 
     def test_launch_runs_agent_in_directory(self):
         with tempfile.TemporaryDirectory() as work, tempfile.TemporaryDirectory() as logs:
-            # Faux agent : écrit son répertoire et ses arguments dans le journal
-            s = Settings(MCP_CLIENT_ENABLED=False, ACTIONS_AGENT_COMMAND="bash -c 'pwd; echo \"$@\"' agent",
+            # Faux agent (Python, pour Linux comme Windows) : écrit son répertoire et ses arguments dans le journal
+            script = Path(logs) / "fake_agent.py"
+            script.write_text("import sys\nfrom pathlib import Path\nprint(Path.cwd().resolve())\nprint(' '.join(sys.argv[1:]))\n")
+            quote = (lambda x: x) if sys.platform == "win32" else shlex.quote
+            s = Settings(MCP_CLIENT_ENABLED=False, ACTIONS_AGENT_COMMAND=f"{quote(sys.executable)} {quote(str(script))}",
                          ACTIONS_AGENT_DIR=work, ACTIONS_AGENT_LOG_DIR=logs, ACTIONS_AGENT_MODEL="m1")
             self.assertEqual(agent_directory(s), Path(work))
             with patch("actions.modules.create_command._notify") as notify:
