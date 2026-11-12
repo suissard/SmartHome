@@ -24,3 +24,29 @@ def _isolated_init(self, settings=None, path=None):
 
 
 core.archive.ConversationArchive.__init__ = _isolated_init
+
+# Même chose pour les rappels programmés (core/scheduler.py) : une base temporaire par magasin
+import core.scheduler
+
+core.scheduler.SCHEDULER_ROOT = _ARCHIVE_TMP
+_original_store_init = core.scheduler.ReminderStore.__init__
+
+
+def _isolated_store_init(self, settings=None, path=None):
+    _original_store_init(self, settings, path or _ARCHIVE_TMP / f"scheduler-{next(_numbers)}.sqlite3")
+
+
+core.scheduler.ReminderStore.__init__ = _isolated_store_init
+
+# Et pour la mémoire à long terme (core/memory.py)
+import core.memory
+
+core.memory.MEMORY_ROOT = _ARCHIVE_TMP
+_original_memory_init = core.memory.MemoryStore.__init__
+
+
+def _isolated_memory_init(self, settings=None, path=None, embedder=None):
+    _original_memory_init(self, settings, path or _ARCHIVE_TMP / f"memory-{next(_numbers)}.sqlite3", embedder)
+
+
+core.memory.MemoryStore.__init__ = _isolated_memory_init

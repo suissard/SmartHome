@@ -27,6 +27,10 @@ from core.config import ENV_FILE, Settings, get_settings, set_settings
 from core.events import EventBus
 from core.history import HistoryStore, is_safe_id, new_conversation_id, sanitize_messages
 from core.images import Image, ImageError, load_image, save_upload
+from core.memory import MemoryStore
+from core.metrics import TurnTimer, format_timings
+from core.scheduler import Scheduler
+from core.turn_context import session_context
 from core.sentences import SentenceSplitter, matches_phrase, strip_markdown
 from core.tools import ConfirmationHandler, ToolRegistry, ToolResult, build_tool_registry
 from core.users import LOCAL_USER_ID, User, tool_policy, user_prompt
@@ -91,6 +95,8 @@ class Reply:
     interrupted: bool = False     # génération abandonnée (barge-in, bouton stop)
     end_conversation: bool = False  # l'utilisateur a pris congé : retour en veille (phrase de fin ou outil « sleep »)
     images: list[dict] = field(default_factory=list)  # images montrées par l'assistant (outil show_image)
+    turn: str = ""                # numéro de l'échange dans l'historique
+    timings: dict = field(default_factory=dict)  # latence par étape, en ms (core/metrics.py)
 
 
 @dataclass
@@ -114,9 +120,12 @@ class _Speaker:
     """Phrases d'un tour : prononcées au fil de l'eau (on_sentence) et retenues pour savoir si tout a été dit."""
     on_sentence: Optional[Callable[[str], None]]
     spoken: list[str] = field(default_factory=list)
+    timer: Optional[TurnTimer] = None
 
     def say(self, sentence: str):
         if self.on_sentence and sentence.strip():
+            if self.timer:
+                self.timer.mark("first_sentence")
             self.spoken.append(sentence)
             self.on_sentence(sentence)
 
@@ -148,6 +157,10 @@ class AssistantCore:
         self.archive = ConversationArchive(self.settings)
         # Agents externes (agents.json) que la conversation peut rejoindre
         self._agents: Optional[AgentDirectory] = None
+        # Rappels et routines (outils remind / routine) : le fil d'échéances démarre avec start_scheduler()
+        self.scheduler = Scheduler(self)
+        # Souvenirs de chaque compte (outils remember / forget_memory), ajoutés au prompt système de ses tours
+        self.memory = MemoryStore(self.settings)
         # Outils [GET_SETTINGS] / [SET_SETTING] : l'assistant modifie ses paramètres à travers ce cœur
         from core import settings_store
         settings_store.set_owner(self)
@@ -252,6 +265,7 @@ class AssistantCore:
             self._agents = None
         if "STT_FALLBACK_PROVIDER" in changed:
             self._fallback_stt = None
+        self.memory.update_settings(settings)
         if any(name.startswith("ACTIONS_") for name in changed):
             if self._injected["tools"]:
                 self._tools.settings = settings
@@ -694,6 +708,77 @@ class AssistantCore:
         images: Iterable[Image] = (),
         user: Optional[User] = None,
     ) -> Reply:
+        """Traite une demande et mesure sa latence étape par étape (voir `_respond` et core/metrics.py)."""
+        timer = TurnTimer()
+        reply = self._respond(session_id, text, audio_wav, synthesize, on_sentence, turn, forget, images, user, timer)
+        timer.mark("total")
+        self._record_timings(reply, timer, turn)
+        return reply
+
+    # ---- Mémoire à long terme (vue de l'utilisateur : PWA) ----
+    def _memory_owner(self, session_id: str) -> str:
+        session = self.get_session(session_id)
+        user = session.user if session is not None else None
+        return user.id if user is not None else LOCAL_USER_ID
+
+    def list_memories(self, session_id: str) -> list[dict]:
+        if not self.memory.enabled:
+            return []
+        return [m.public() for m in self.memory.all(self._memory_owner(session_id))]
+
+    def add_memory(self, session_id: str, text: str) -> dict:
+        """Souvenir ajouté à la main (PWA). ValueError si vide, trop long ou mémoire pleine."""
+        if not self.memory.enabled:
+            raise ValueError("Mémoire désactivée (MEMORY_ENABLED=false).")
+        memory, _ = self.memory.remember(self._memory_owner(session_id), text)
+        return memory.public()
+
+    def delete_memory(self, session_id: str, memory_id) -> bool:
+        try:
+            memory_id = int(memory_id)
+        except (TypeError, ValueError):
+            return False
+        return self.memory.forget(self._memory_owner(session_id), memory_id)
+
+    def start_scheduler(self):
+        """Déclenche les rappels à l'échéance (main.py, python -m gateway). Un seul processus doit l'appeler."""
+        self.scheduler.start()
+
+    def stop_scheduler(self):
+        self.scheduler.stop()
+
+    def _record_timings(self, reply: Reply, timer: TurnTimer, turn: Optional[str]):
+        """Publie et archive la latence d'un tour qui a produit une réponse (ni vide, ni interrompu)."""
+        if not self.settings.METRICS_ENABLED or reply.interrupted or not (reply.text or reply.tools):
+            return
+        reply.timings = timer.as_ms()
+        session = self.get_session(reply.session_id)
+        if session is not None and session.agent:
+            model = f"agent:{session.agent}"
+        else:
+            try:
+                model = self.llm.model
+            except Exception:
+                model = ""
+        print(f"⏱️ [METRICS {reply.session_id}] {format_timings(reply.timings)}")
+        self.events.emit("timings", reply.session_id, timings=reply.timings, model=model,
+                         **({"turn": turn} if turn else {}))
+        if session is not None:
+            self.archive.add_timings(session.conversation_id, reply.turn, self._source(session), model, reply.timings)
+
+    def _respond(
+        self,
+        session_id: str,
+        text: Optional[str],
+        audio_wav: Optional[bytes],
+        synthesize: bool,
+        on_sentence: Optional[Callable[[str], None]],
+        turn: Optional[str],
+        forget: Iterable[str],
+        images: Iterable[Image],
+        user: Optional[User],
+        timer: TurnTimer,
+    ) -> Reply:
         """Traite une demande (texte ou enregistrement WAV) et retourne la réponse. Bloquant : à appeler
         depuis un thread pour un serveur asyncio. Les demandes d'une même session sont traitées une à une.
         `on_sentence` reçoit chaque phrase à prononcer dès qu'elle est complète (parole en streaming).
@@ -711,7 +796,8 @@ class AssistantCore:
             self.events.emit(event_type, session_id, **data, **({"turn": turn} if turn else {}))
 
         images = list(images)
-        with session.lock:
+        # Les outils exécutés pendant ce tour savent pour quel compte ils agissent (rappels, souvenirs)
+        with session.lock, session_context(session):
             session.last_seen = time.monotonic()
             session.cancel.clear()
             forget = list(forget)
@@ -721,7 +807,7 @@ class AssistantCore:
             # Échange toujours numéroté dans l'historique (pour l'enregistrer, puis l'effacer ou le corriger)
             stored_turn = turn or uuid.uuid4().hex[:12]
             print(f"\n📥 [ASSISTANT {sid}] Nouveau tour (texte: « {text or ''} », audio: {len(audio_wav) if audio_wav else 0} octets)")
-            reply = Reply(sid, transcript=(text or "").strip())
+            reply = Reply(sid, transcript=(text or "").strip(), turn=stored_turn)
             llm_audio = None
 
             if audio_wav is not None:
@@ -732,6 +818,7 @@ class AssistantCore:
                     try:
                         stt = self.fallback_stt if self.stt.passthrough else self.stt
                         reply.transcript = stt.transcribe(audio_wav)
+                        timer.mark("stt")
                     except Exception as e:
                         emit("error", sid, message=f"Erreur de transcription : {e}")
                         return reply
@@ -751,7 +838,7 @@ class AssistantCore:
                 emit("response", sid, text="", tools=[], end_conversation=True)
                 return reply
 
-            speaker = _Speaker(on_sentence)
+            speaker = _Speaker(on_sentence, timer=timer)
             # Agent externe relié, ou demande de mise en relation (« passe-moi Hermes ») : le LLM n'est pas appelé
             if self._route_to_agent(session, reply, emit, speaker, images):
                 self._finish_speech(sid, reply, speaker, synthesize, emit)
@@ -779,6 +866,7 @@ class AssistantCore:
                 self._show_image(sid, tool_info, reply, emit)
 
             def on_token(token: str):
+                timer.mark("first_token")
                 if session.cancel.is_set():
                     raise ResponseInterrupted()
                 emit("token", sid, text=token)
@@ -786,6 +874,8 @@ class AssistantCore:
                     for sentence in splitter.feed(token):
                         say(sentence)
 
+            # Souvenirs du compte utiles à cette demande (en audio direct, faute de texte : les plus récents)
+            session.conversation.memory_prompt = self.memory.prompt_for(session.user, reply.transcript)
             raw = session.conversation.ask(
                 prompt=reply.transcript or None,
                 audio_bytes=llm_audio,
@@ -794,6 +884,7 @@ class AssistantCore:
                 on_tool=lambda r: on_tool(_tool_summary(r)),
                 turn=stored_turn,
             )
+            timer.mark("llm")
             reply.tools = [_tool_summary(r) for r in session.conversation.last_tool_results]
 
             if session.cancel.is_set():
@@ -877,6 +968,8 @@ class AssistantCore:
                 samples, sample_rate = self.tts.synthesize(strip_markdown(reply.text), voice=self.session_voice(sid))
                 if len(samples):
                     reply.audio_wav = to_wav_bytes(samples, sample_rate)
+                if speaker.timer:
+                    speaker.timer.mark("tts")
             except Exception as e:
                 emit("error", sid, message=f"Erreur de synthèse vocale : {e}")
 

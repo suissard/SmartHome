@@ -8,8 +8,8 @@ _ROOT_DIR = Path(__file__).resolve().parent.parent
 if str(_ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(_ROOT_DIR))
 
-from actions.base import BaseAction, CommandDefinition
-from actions.registry import COMMAND_REGISTRY, get_all_commands, get_command_by_tag
+from actions.base import BaseAction
+from actions.registry import get_all_commands, get_command_by_tag
 
 
 class ActionManager:

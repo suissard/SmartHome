@@ -6,6 +6,7 @@ routage par AssistantCore (bascule sans LLM, retour, voix alternative, droits) e
 """
 
 import json
+import os
 import sys
 import tempfile
 import textwrap
@@ -171,14 +172,16 @@ class TestDirectoryAndSwitch(AgentTestCase):
         # Service systemd : ~/.local/bin absent du PATH, la commande est trouvée grâce à AGENTS_EXTRA_PATH
         bin_dir = Path(self.tmp.name) / "bin"
         bin_dir.mkdir()
-        exe = bin_dir / "agent-local"
-        exe.write_text("#!/bin/sh\necho ok\n")
+        # Windows ne lance qu'un fichier à extension connue (PATHEXT)
+        exe = bin_dir / ("agent-local.cmd" if sys.platform == "win32" else "agent-local")
+        exe.write_text("@echo ok\n" if sys.platform == "win32" else "#!/bin/sh\necho ok\n")
         exe.chmod(0o755)
         spec = AgentSpec("l", "L", ["agent-local", "{prompt}"])
         self.assertIsNone(spec.executable(self.settings))
         settings = Settings(AGENTS_EXTRA_PATH=[str(bin_dir)])
-        self.assertEqual(spec.executable(settings), str(exe))
-        self.assertEqual(spec.build_command("a", settings=settings)[0], str(exe))
+        same = lambda found: os.path.normcase(found or "")  # noqa: E731
+        self.assertEqual(same(spec.executable(settings)), same(str(exe)))
+        self.assertEqual(same(spec.build_command("a", settings=settings)[0]), same(str(exe)))
 
     def test_build_command_never_turns_text_into_options(self):
         spec = AgentSpec("x", "X", [sys.executable, "{prompt}"], resume_args=["--resume", "{session}"])

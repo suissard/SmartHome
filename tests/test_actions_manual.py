@@ -17,8 +17,8 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 
-from actions.manager import ActionManager, get_action_manager
-from actions.registry import COMMAND_REGISTRY, get_all_commands, get_command_by_tag
+from actions.manager import ActionManager
+from actions.registry import get_command_by_tag
 
 # Couleurs ANSI
 GREEN = "\033[92m"

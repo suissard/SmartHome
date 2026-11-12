@@ -9,7 +9,6 @@ Vérifie :
 - L'absence d'effets de bord destructeurs
 """
 
-import asyncio
 import json
 import sys
 import unittest
@@ -21,8 +20,7 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from mcp_server import app, _get_tts, _get_feedback, _get_ducker, _get_transcriber
-from actions.registry import COMMAND_REGISTRY
+from mcp_server import app
 
 
 class TestSmartHomeMCPServer(unittest.IsolatedAsyncioTestCase):
@@ -88,10 +86,10 @@ class TestSmartHomeMCPServer(unittest.IsolatedAsyncioTestCase):
         with patch("mcp_server.execute_action") as mock_exec:
             mock_exec.return_value = "Volume réglé"
             from mcp_server import set_volume
-            out = set_volume("40")
+            self.assertEqual(set_volume("40"), "Volume réglé")
             mock_exec.assert_called_with("VOLUME", "40")
 
-            out_mute = set_volume("mute")
+            self.assertEqual(set_volume("mute"), "Volume réglé")
             mock_exec.assert_called_with("MUTE")
 
     async def test_media_control_tool(self):

@@ -12,12 +12,9 @@ Transports supportés :
 """
 
 import argparse
-import io
 import json
-import os
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional
 
 # Assure la résolution des modules depuis la racine du projet
 BASE_DIR = Path(__file__).resolve().parent
@@ -56,7 +53,6 @@ from llm.llm import (
     get_conversation,
     get_history,
     clear_history,
-    add_history_message,
     get_default_system_prompt,
 )
 

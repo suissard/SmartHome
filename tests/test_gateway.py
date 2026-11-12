@@ -137,7 +137,25 @@ class TestAssistantCore(unittest.TestCase):
         self.assertTrue(reply.audio_wav.startswith(b"RIFF"))
         self.assertEqual(events[0], "transcript")
         self.assertIn("token", events)
-        self.assertEqual(events[-1], "response")
+        # La latence du tour est publiée en dernier, une fois la synthèse terminée
+        self.assertEqual(events[-2:], ["response", "timings"])
+        self.assertEqual(list(reply.timings), ["stt", "first_token", "llm", "tts", "total"])
+        self.assertTrue(all(isinstance(ms, int) and ms >= 0 for ms in reply.timings.values()))
+
+    def test_timings_are_archived_and_can_be_disabled(self):
+        core = make_core([])
+        reply = core.respond("s", text="Bonjour")
+        conversation = core.get_session("s").conversation_id
+        rows = [r for r in core.archive.timings_since(1) if r["conversation"] == conversation]
+        self.assertEqual([r["turn"] for r in rows], [reply.turn])
+        self.assertIn("total", rows[0]["timings"])
+
+        core.settings = core.settings.model_copy(update={"METRICS_ENABLED": False})
+        events = []
+        core.events.subscribe(lambda e: events.append(e.type), session_id="s")
+        reply = core.respond("s", text="Encore")
+        self.assertNotIn("timings", events)
+        self.assertEqual(reply.timings, {})
 
     def test_dangerous_tool_refused_without_session_confirmation(self):
         executed = []

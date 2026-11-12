@@ -3,7 +3,6 @@ Module d'action pour la mise en veille / extinction des écrans.
 Contient les métadonnées et le script d'exécution (Linux et Windows).
 """
 
-import sys
 from typing import Tuple
 from actions.base import BaseAction
 

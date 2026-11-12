@@ -5,12 +5,10 @@ Prend en charge Linux (bash) et Windows (PowerShell / Win32).
 """
 
 from dataclasses import dataclass, field
-import os
 import re
 import shlex
 import subprocess
 import sys
-from pathlib import Path
 from typing import Dict, Optional, List, Tuple
 
 if sys.platform == "win32":
@@ -181,6 +179,35 @@ class BaseAction:
         except Exception as e:
             print(f"❌ [ACTIONS] Erreur Windows [{self.tag}] : {e}")
             return -1, "", str(e)
+
+
+class PythonAction(BaseAction):
+    """Action écrite en Python (aucun script) : mêmes résultats sous Linux et Windows, en function calling comme en
+    mode tags. Les sous-classes implémentent `run(args) -> (code, sortie, erreur)` ; une ValueError devient un échec
+    lisible par le LLM."""
+
+    def run(self, args: str) -> Tuple[int, str, str]:
+        raise NotImplementedError
+
+    def execute_sync(self, args: str = "", timeout: float = 10.0) -> Tuple[int, str, str]:
+        try:
+            return self.run(args)
+        except ValueError as e:
+            return 1, "", str(e)
+
+    def execute_sync_windows(self, args: str = "", timeout: float = 10.0) -> Tuple[int, str, str]:
+        return self.execute_sync(args, timeout)
+
+    def execute(self, args: str = "", dry_run: bool = False) -> bool:
+        if dry_run:
+            print(f"🧪 [DRY-RUN] [{self.tag}] {args}")
+            return True
+        code, out, err = self.execute_sync(args)
+        print(f"{'✅' if code == 0 else '⚠️'} [ACTIONS] [{self.tag}] {out or err}")
+        return code == 0
+
+    def execute_windows(self, args: str = "", dry_run: bool = False) -> bool:
+        return self.execute(args, dry_run)
 
 
 # Alias de compatibilité

@@ -22,7 +22,7 @@ from core.archive import SOURCE_LOCAL, SOURCE_PWA, ConversationArchive, clean_ra
 from core.config import Settings
 from core.users import User, admin_user, local_user
 from gateway.app import create_app
-from tests.test_gateway import SETTINGS, TOKEN, collect_until_done, make_core
+from tests.test_gateway import SETTINGS, collect_until_done, make_core
 from tests.test_users import ACCOUNT_SETTINGS, MemoryHistory
 
 

@@ -1,3 +1,4 @@
+import queue
 import sys
 import threading
 
@@ -34,7 +35,7 @@ from core.mcp_hub import get_mcp_hub
 from core.remote_voice import RemoteVoiceGuard
 from core.restart import restart_if_requested
 from core.security import require_token_for_host
-from core.users import local_user
+from core.users import LOCAL_USER_ID, local_user
 
 LOCAL_SESSION = "local"
 
@@ -67,6 +68,44 @@ def _print_event(event):
         print(f"\n{tag} 🤖 « {event.data['text']} »")
     elif event.type == "confirm_request":
         print(f"\n{tag} ❓ {event.data['question']} (en attente du client)")
+
+
+def watch_reminders(core) -> "queue.Queue[str]":
+    """Rappels à dire sur l'ordinateur (SCHEDULER_LOCAL_ANNOUNCE) : mis en file, dits dès que l'assistant est en veille."""
+    pending: "queue.Queue[str]" = queue.Queue()
+
+    def on_event(event):
+        if event.type != "reminder" or not event.data.get("text"):
+            return
+        mode = core.settings.SCHEDULER_LOCAL_ANNOUNCE
+        household = (event.data.get("user_id") or LOCAL_USER_ID) == LOCAL_USER_ID
+        if mode == "all" or (mode == "household" and household):
+            pending.put(event.data["text"])
+
+    core.events.subscribe(on_event)
+    return pending
+
+
+def announce_reminders(pending, speech, feedback, media_pauser, ducker, stream, detector, settings):
+    """Dit les rappels en attente (son, puis la phrase), médias en pause, puis purge l'écho du micro."""
+    media_pauser.pause()
+    ducker.duck()
+    try:
+        while True:
+            try:
+                text = pending.get_nowait()
+            except queue.Empty:
+                break
+            print(f"\n⏰ {text}")
+            if settings.SCHEDULER_SOUND:
+                feedback.play_sound(settings.SCHEDULER_SOUND)
+            speech.say_and_wait(text)
+    finally:
+        if ducker.enabled:
+            ducker.unduck()
+        media_pauser.resume()
+        flush_stream(stream)
+        detector.oww.reset()
 
 
 def run_local_turn(core, speech, stream, mic_lock, barge_in, user_input, remote=None) -> Reply:
@@ -181,6 +220,8 @@ def main():
     )
     core.events.subscribe(_print_event)
     conversation = local.conversation
+    reminders = watch_reminders(core)
+    core.start_scheduler()
 
     llm_info = LLM_PROVIDERS.get(settings.LLM_PROVIDER).describe(settings)
     stt_info = transcriber.stt.describe(settings)
@@ -199,7 +240,7 @@ def main():
         if settings.LLM_TOOL_CALLING != "tags" else "tags [ACTION] dans le texte"
     )
 
-    print(f"\n🟢 Démarrage de SmartHome")
+    print("\n🟢 Démarrage de SmartHome")
     print(f"  • Profil        : {active_profile()} — {describe_profile(active_profile())}")
     warn_shadowed_profile()
     print(f"  • Cerveau LLM   : {llm_info} (Mémoire: {LLM_HISTORY_MESSAGES} msgs)")
@@ -209,6 +250,7 @@ def main():
     print(f"  • Actions OS    : {actions_info}")
     print(f"  • Appel d'outils: {tools_info}")
     print(f"  • Hub MCP       : {mcp_info}")
+    print(f"  • Rappels       : {'Actifs (annonce : ' + settings.SCHEDULER_LOCAL_ANNOUNCE + ')' if settings.SCHEDULER_ENABLED else 'Désactivés'}")
 
     gateway = None
     pocketbase = None
@@ -235,6 +277,10 @@ def main():
     try:
         while True:
             data = stream.read(CHUNK, exception_on_overflow=False)
+            # Rappels arrivés à échéance pendant la veille (ceux d'une conversation attendent sa fin)
+            if not reminders.empty():
+                announce_reminders(reminders, speech, feedback, media_pauser, ducker, stream, detector, core.settings)
+                continue
             # Écoute du mot-clé coupée depuis l'interface (faux positifs) : le flux est lu mais pas analysé
             enabled = core.settings.WAKEWORD_ENABLED
             if enabled != wakeword_on:
@@ -333,6 +379,7 @@ def main():
     except KeyboardInterrupt:
         print("\nArrêt de l'assistant.")
     finally:
+        core.stop_scheduler()
         remote.close()
         if gateway:
             gateway.should_exit = True

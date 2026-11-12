@@ -9,7 +9,7 @@
     "home-assistant": {
       "url": "http://homeassistant.local:8123/api/mcp/sse",
       "headers": {
-        "Authorization": "Bearer VOTRE_TOKEN_LONGUE_DUREE_ICI"
+        "Authorization": "Bearer ${HOME_ASSISTANT_TOKEN}"
       },
       "enabled": false,
       "description": "Serveur MCP Home Assistant pour le contrôle des lumières, volets, prises et capteurs"
@@ -24,7 +24,7 @@
       "command": "npx",
       "args": ["-y", "@modelcontextprotocol/server-brave-search"],
       "env": {
-        "BRAVE_API_KEY": "VOTRE_CLE_BRAVE_ICI"
+        "BRAVE_API_KEY": "${BRAVE_API_KEY}"
       },
       "enabled": false,
       "description": "Serveur MCP Brave Search pour recherche d'informations sur le web"

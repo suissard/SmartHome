@@ -107,6 +107,7 @@ const state = {
   authError: "",
   busy: 0,                 // demandes en cours (chaque demande se termine par {"type": "done"})
   botBubble: null,         // bulle de réponse en cours de streaming
+  lastBotBubble: null,     // dernière réponse terminée (latence affichée dessous)
   pendingUser: null,       // bulle « audio envoyé » à remplacer par la transcription
   audioConfig: null,
   confirmTimeout: 20,
@@ -141,12 +142,13 @@ const state = {
   pbUsers: [],             // liste des comptes PocketBase (superadmin)
   versionInfo: null,       // informations de version locale vs dépôt GitHub
   feedback: { enabled: false, comment_max: 2000 }, // pouce sous les réponses (ready.feedback)
+  memory: { enabled: false, max_chars: 300 },       // souvenirs du compte (ready.memory)
   household: false,        // ce compte voit les conversations tenues au micro de l'ordinateur
   readonlyConversation: null, // conversation du micro affichée (lecture seule) ; null : conversation de la session
 };
 
 // Éléments du fil de conversation (effacés ensemble au changement de conversation)
-const LOG_ITEMS = ".msg, .tool, .tool-pastille, .feedback, .readonly-banner";
+const LOG_ITEMS = ".msg, .tool, .tool-pastille, .feedback, .timings, .readonly-banner";
 const HOUSEHOLD_AUTHOR = "Foyer (micro)";
 
 // ---- Synchronisation de la hauteur visible (évite que la barre de saisie en bas sorte de l'écran) ----
@@ -306,12 +308,19 @@ const TOOL_ICONS = {
   timer: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 1H9v2h6V1zm-4 13h2V8h-2v6zm8.03-6.61 1.42-1.42c-.43-.51-.9-.99-1.41-1.41l-1.42 1.42C16.07 4.74 14.12 4 12 4c-4.97 0-9 4.03-9 9s4.02 9 9 9 9-4.03 9-9c0-2.12-.74-4.07-1.97-5.61zM12 20c-3.87 0-7-3.13-7-7s3.13-7 7-7 7 3.13 7 7-3.13 7-7 7z"/></svg>`,
   system_info: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-7 14h-2v-4h2v4zm0-6h-2V7h2v4z"/></svg>`,
   audio_output: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 0 0-9 9v7c0 1.66 1.34 3 3 3h3v-8H5v-2c0-3.87 3.13-7 7-7s7 3.13 7 7v2h-4v8h3c1.66 0 3-1.34 3-3v-7a9 9 0 0 0-9-9z"/></svg>`,
+  remember: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 3a9 9 0 0 0-9 9H1l3.89 3.89.07.14L9 12H6c0-3.87 3.13-7 7-7s7 3.13 7 7-3.13 7-7 7c-1.93 0-3.68-.79-4.94-2.06l-1.42 1.42A8.954 8.954 0 0 0 13 21a9 9 0 0 0 0-18zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H12z"/></svg>`,
+  remind: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m22 5.72-4.6-3.86-1.29 1.53 4.6 3.86L22 5.72zM7.88 3.39 6.6 1.86 2 5.71l1.29 1.53 4.59-3.85zM12.5 8H11v6l4.75 2.85.75-1.23-4-2.37V8zM12 4c-4.97 0-9 4.03-9 9s4.02 9 9 9a9 9 0 0 0 0-18zm0 16c-3.87 0-7-3.13-7-7s3.13-7 7-7 7 3.13 7 7-3.13 7-7 7z"/></svg>`,
+  routine: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m22 5.72-4.6-3.86-1.29 1.53 4.6 3.86L22 5.72zM7.88 3.39 6.6 1.86 2 5.71l1.29 1.53 4.59-3.85zM12.5 8H11v6l4.75 2.85.75-1.23-4-2.37V8zM12 4c-4.97 0-9 4.03-9 9s4.02 9 9 9a9 9 0 0 0 0-18zm0 16c-3.87 0-7-3.13-7-7s3.13-7 7-7 7 3.13 7 7-3.13 7-7 7z"/></svg>`,
+  list_reminders: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m22 5.72-4.6-3.86-1.29 1.53 4.6 3.86L22 5.72zM7.88 3.39 6.6 1.86 2 5.71l1.29 1.53 4.59-3.85zM12.5 8H11v6l4.75 2.85.75-1.23-4-2.37V8zM12 4c-4.97 0-9 4.03-9 9s4.02 9 9 9a9 9 0 0 0 0-18zm0 16c-3.87 0-7-3.13-7-7s3.13-7 7-7 7 3.13 7 7-3.13 7-7 7z"/></svg>`,
+  cancel_reminder: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m22 5.72-4.6-3.86-1.29 1.53 4.6 3.86L22 5.72zM7.88 3.39 6.6 1.86 2 5.71l1.29 1.53 4.59-3.85zM12.5 8H11v6l4.75 2.85.75-1.23-4-2.37V8zM12 4c-4.97 0-9 4.03-9 9s4.02 9 9 9a9 9 0 0 0 0-18zm0 16c-3.87 0-7-3.13-7-7s3.13-7 7-7 7 3.13 7 7-3.13 7-7 7z"/></svg>`,
   sleep: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12.3 2a10 10 0 0 0-1.9 20 10.04 10.04 0 0 0 9.6-7.2A8 8 0 0 1 12.3 2z"/></svg>`,
   search_files: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>`,
   show_image: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/></svg>`,
   notify: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.89 2 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/></svg>`,
   default: `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>`
 };
+
+TOOL_ICONS.list_memories = TOOL_ICONS.forget_memory = TOOL_ICONS.remember;
 
 function getToolIcon(name) {
   const key = (name || "").toLowerCase().trim();
@@ -402,6 +411,30 @@ function formatActionLabel(name, args = {}, executed = true) {
       label = s ? `Minuteur : ${s} s` : "Minuteur programmé";
       break;
     }
+    case "remind":
+    case "routine": {
+      const what = (args?.args || rawArg || "").split("|").map((x) => x.trim());
+      const kind = key === "routine" ? "Routine" : "Rappel";
+      label = what[1] ? `${kind} ${what[0]} : ${what[1]}` : `${kind} programmé${key === "routine" ? "e" : ""}`;
+      break;
+    }
+    case "list_reminders":
+      label = "Rappels consultés";
+      break;
+    case "remember": {
+      const fact = args?.args || rawArg;
+      label = fact ? `Retenu : ${fact}` : "Souvenir enregistré";
+      break;
+    }
+    case "list_memories":
+      label = "Souvenirs consultés";
+      break;
+    case "forget_memory":
+      label = "Souvenir oublié";
+      break;
+    case "cancel_reminder":
+      label = "Rappel annulé";
+      break;
     case "search_files": {
       const q = args?.args || rawArg;
       label = q ? `Recherche de fichiers : « ${q} »` : "Recherche de fichiers";
@@ -641,6 +674,9 @@ function handleEvent(event) {
       if (event.images) state.imageConfig = event.images;
       if (event.pocketbase_url) state.pocketbaseUrl = event.pocketbase_url;
       state.feedback = { enabled: false, comment_max: 2000, ...(event.feedback || {}) };
+      state.memory = { enabled: false, max_chars: 300, ...(event.memory || {}) };
+      $("memory-card").hidden = !state.memory.enabled;
+      $("memory-input").maxLength = state.memory.max_chars;
       state.household = Boolean(event.household);
       state.readonlyConversation = null;
       if (!state.household) state.conversations = state.conversations.filter((c) => c.source !== "local");
@@ -763,6 +799,7 @@ function handleEvent(event) {
       scrollDown();
       break;
     case "tool":
+      if (["remind", "routine"].includes(event.name)) askNotificationPermission();
       // L'outil s'exécute pendant la réponse : la suite du texte part dans une nouvelle bulle
       if (state.botBubble && !state.botBubble.textContent.trim()) state.botBubble.remove();
       state.botBubble?.classList.remove("pending");
@@ -821,6 +858,18 @@ function handleEvent(event) {
         ui.log.append(el);
         scrollDown();
       }
+      break;
+    case "timings":
+      showTimings(event.timings);
+      break;
+    case "reminder":
+      showReminder(event);
+      break;
+    case "memories":
+      renderMemories(event.memories || []);
+      break;
+    case "memory_error":
+      $("memory-msg").textContent = event.message;
       break;
     case "audio":
     case "audio_chunk":
@@ -939,11 +988,96 @@ function finishBotBubble(text) {
   const target = bubble || addBubble("bot", "");
   target.classList.remove("pending");
   target.textContent = text;
+  state.lastBotBubble = target;
   state.speakingBubble = target;
   if (isSpeaking()) updateSpeakingState();
   scrollDown();
   announce(text);
 }
+
+// Latence du tour (core/metrics.py), sous la réponse : réservée aux administrateurs
+const TIMING_LABELS = { stt: "transcription", first_sentence: "1re phrase", llm: "génération", tts: "synthèse", total: "total" };
+function formatMs(ms) {
+  return ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(1).replace(".", ",")} s`;
+}
+function showTimings(timings) {
+  const bubble = state.lastBotBubble;
+  if (!state.admin || !timings || !bubble?.isConnected) return;
+  const parts = Object.entries(TIMING_LABELS)
+    .filter(([key]) => Number.isFinite(timings[key]))
+    .map(([key, label]) => `${label} ${formatMs(timings[key])}`);
+  if (!parts.length) return;
+  const el = document.createElement("div");
+  el.className = "timings";
+  el.textContent = `⏱ ${parts.join(" · ")}`;
+  el.title = "Temps écoulé depuis la réception de la demande";
+  bubble.after(el);
+  state.lastBotBubble = null;
+}
+
+// Rappel ou routine arrivé à échéance (core/scheduler.py) : pastille dans la conversation et notification système
+function askNotificationPermission() {
+  if ("Notification" in window && Notification.permission === "default") Notification.requestPermission().catch(() => {});
+}
+function showReminder(event) {
+  const text = event.text || event.message || "Rappel";
+  const el = document.createElement("div");
+  el.className = "tool-pastille reminder";
+  el.innerHTML = `<span class="pastille-tool-icon" aria-hidden="true">${TOOL_ICONS.remind}</span><span class="pastille-label"></span>`;
+  el.querySelector(".pastille-label").textContent = text;
+  ui.log.append(el);
+  ui.empty.hidden = true;
+  scrollDown();
+  announce(text);
+  // Vibration refusée par le navigateur tant que l'utilisateur n'a pas touché la page
+  if (navigator.userActivation?.hasBeenActive) navigator.vibrate?.([200, 100, 200]);
+  if ("Notification" in window && Notification.permission === "granted" && document.visibilityState !== "visible") {
+    const title = event.kind === "routine" ? "⏰ Routine" : "⏰ Rappel";
+    // Service worker d'abord (notifications d'une PWA installée sur mobile), sinon notification de la page
+    navigator.serviceWorker?.ready
+      .then((reg) => reg.showNotification(title, { body: text, tag: `reminder-${event.id}`, icon: "icon-192.png" }))
+      .catch(() => new Notification(title, { body: text, icon: "icon-192.png" }));
+  }
+}
+
+// Souvenirs du compte (core/memory.py), dans les réglages : liste, ajout, effacement
+function renderMemories(memories) {
+  const list = $("memory-list");
+  list.replaceChildren();
+  $("memory-msg").textContent = "";
+  $("memory-card-state").textContent = memories.length
+    ? `${memories.length} souvenir${memories.length > 1 ? "s" : ""}, donné${memories.length > 1 ? "s" : ""} à l'assistant quand c'est utile`
+    : "Rien pour l'instant. Dites « retiens que… » ou ajoutez-en un ici.";
+  for (const memory of memories) {
+    const item = document.createElement("li");
+    const text = document.createElement("span");
+    text.textContent = memory.text;
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "icon-btn memory-delete";
+    remove.title = "Oublier";
+    remove.setAttribute("aria-label", `Oublier : ${memory.text}`);
+    remove.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true" width="16" height="16"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>`;
+    remove.addEventListener("click", () => send({ type: "delete_memory", id: memory.id }));
+    item.append(text, remove);
+    list.append(item);
+  }
+}
+function addMemory() {
+  const input = $("memory-input");
+  const text = input.value.trim();
+  if (!text) return;
+  send({ type: "add_memory", text });
+  input.value = "";
+}
+$("memory-add-btn").addEventListener("click", addMemory);
+$("memory-input").addEventListener("keydown", (e) => {
+  // Le champ est dans le formulaire du dialogue : Entrée ajoute le souvenir au lieu de fermer les réglages
+  if (e.key === "Enter") {
+    e.preventDefault();
+    addMemory();
+  }
+});
 
 // ---- Demandes ----
 function interruptAssistant() {
@@ -2246,6 +2380,7 @@ ui.profileVoicePlay.addEventListener("click", () => {
 
 function openSettingsModal() {
   renderAgentChoices();
+  if (state.memory.enabled) send({ type: "list_memories" });
   ui.settings.showModal();
   ui.modelMsg.textContent = "";
   if (!state.admin) return;

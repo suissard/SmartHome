@@ -103,7 +103,6 @@ class ProfilesTest(unittest.TestCase):
 
     def test_wizard_saves_key_in_env_and_settings_in_profile(self):
         with tempfile.TemporaryDirectory() as tmp, patch.object(profiles, "PROFILES_DIR", Path(tmp)):
-            env = Path(tmp) / ".env"
             w = self._wizard([])
             w.new_key = "sk-secret"
             w.values = {"step_brain": {"LLM_PROVIDER": "openrouter"}, "step_voice": {"TTS_PROVIDER": "piper"}}

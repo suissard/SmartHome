@@ -3,7 +3,6 @@ Module d'action pour la gestion du volume audio (Volume, Mute, Unmute).
 Contient les métadonnées et le script d'exécution embarqué (Linux et Windows).
 """
 
-import sys
 from typing import List, Tuple
 from actions.base import BaseAction, percent_choices
 

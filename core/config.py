@@ -420,6 +420,58 @@ class Settings(BaseModel):
     ARCHIVE_DB_PATH: str = "data/archive.sqlite3"
     # Rôles qui voient dans la PWA les conversations tenues au micro de l'ordinateur (superadmins toujours)
     ARCHIVE_HOUSEHOLD_ROLES: CsvList = Field(default_factory=lambda: ["admin", "member"])
+    # Latence de chaque tour, étape par étape (console, événement « timings », table de l'archive : core/metrics.py)
+    METRICS_ENABLED: EnvBool = True
+
+    # 🧠 Mémoire à long terme par compte (core/memory.py, outils remember / list_memories / forget_memory)
+    MEMORY_ENABLED: EnvBool = True
+    # Base SQLite des souvenirs (relative au projet, non versionnée)
+    MEMORY_DB_PATH: str = "data/memory.sqlite3"
+    # Modèle d'embeddings Ollama (ex: nomic-embed-text) ; vide ou absent : proximité par mots communs
+    MEMORY_EMBED_MODEL: str = ""
+    # Délai d'un calcul d'embeddings (s), et pause avant de réessayer après un échec (s)
+    MEMORY_EMBED_TIMEOUT: float = Field(5.0, gt=0)
+    MEMORY_EMBED_RETRY: float = Field(300.0, ge=0)
+    # Longueur maximale d'un souvenir (caractères) et nombre maximal de souvenirs par compte
+    MEMORY_MAX_CHARS: int = Field(300, ge=10)
+    MEMORY_MAX_PER_USER: int = Field(200, ge=1)
+    # Jusqu'à N souvenirs, tous sont donnés au LLM à chaque tour (aucun calcul) ; au-delà, les plus proches
+    MEMORY_ALWAYS_INCLUDE: int = Field(30, ge=0)
+    # Nombre maximal de souvenirs donnés au LLM quand il faut choisir
+    MEMORY_RECALL_LIMIT: int = Field(8, ge=1)
+    # Proximité minimale d'un souvenir avec la demande : embeddings (cosinus) et mots communs (0 à 1)
+    MEMORY_MIN_SIMILARITY: float = Field(0.45, ge=0, le=1)
+    MEMORY_MIN_KEYWORD_SCORE: float = Field(0.15, ge=0, le=1)
+    # Un nouveau souvenir aussi proche d'un existant le remplace (0 à 1)
+    MEMORY_DUPLICATE_SIMILARITY: float = Field(0.92, ge=0, le=1)
+    # Ajouté au prompt système (${NAME} : le compte, ${MEMORIES} : un souvenir par ligne)
+    MEMORY_PROMPT: str = (
+        "Ce que tu as retenu de tes échanges avec ${NAME} (à utiliser seulement quand c'est utile, sans le réciter) :\n"
+        "${MEMORIES}"
+    )
+
+    # ⏰ Rappels et routines programmés (core/scheduler.py, outils remind / routine / list_reminders / cancel_reminder)
+    SCHEDULER_ENABLED: EnvBool = True
+    # Base SQLite des rappels en attente (relative au projet, non versionnée)
+    SCHEDULER_DB_PATH: str = "data/scheduler.sqlite3"
+    # Nombre maximal de rappels en attente par compte
+    SCHEDULER_MAX_PER_USER: int = Field(50, ge=1)
+    # Longueur maximale du message d'un rappel ou de la consigne d'une routine (caractères)
+    SCHEDULER_MESSAGE_MAX_CHARS: int = Field(500, ge=1)
+    # Relecture de la base (s) : rappels ajoutés par un autre processus (serveur MCP)
+    SCHEDULER_POLL_SECONDS: float = Field(15.0, gt=0)
+    # Rappel manqué pendant un arrêt : encore dit au retour s'il date de moins de N secondes (6 h par défaut)
+    SCHEDULER_MISSED_GRACE: int = Field(21600, ge=0)
+    # Heure (0-23) d'un rappel donné sans heure (« demain », « lundi »)
+    SCHEDULER_DEFAULT_HOUR: int = Field(9, ge=0, le=23)
+    # Phrases dites à l'échéance (${MESSAGE} : le rappel, ${TIME} : l'heure prévue)
+    SCHEDULER_REMINDER_TEMPLATE: str = "Petit rappel : ${MESSAGE}"
+    SCHEDULER_LATE_TEMPLATE: str = "Rappel prévu à ${TIME} : ${MESSAGE}"
+    SCHEDULER_ROUTINE_ERROR: str = "La routine « ${MESSAGE} » n'a pas pu s'exécuter : ${ERROR}"
+    # Rappels dits à voix haute sur l'ordinateur : all (tous), household (créés au micro de l'ordinateur), off
+    SCHEDULER_LOCAL_ANNOUNCE: Literal["all", "household", "off"] = "all"
+    # Son joué avant un rappel sur l'ordinateur (son procédural ou fichier WAV ; vide : aucun)
+    SCHEDULER_SOUND: str = "wake"
     # Note des réponses (pouce sous chaque réponse : échelle de -2 à +2 et commentaire facultatif)
     FEEDBACK_ENABLED: EnvBool = True
     # Longueur maximale du commentaire accompagnant une note (caractères)

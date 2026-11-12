@@ -1,0 +1,26 @@
+# Outillage du projet (lint, tests). Les dépendances restent dans requirements.txt
+# (lues par install.sh / install.ps1) ; requirements-dev.txt ajoute les outils de développement.
+
+[project]
+name = "smarthome"
+version = "0.1.0"
+description = "Assistant vocal domotique 100 % local"
+requires-python = ">=3.10"
+
+[tool.ruff]
+line-length = 140
+target-version = "py310"
+extend-exclude = [".venv", "venv", "env", "pocketbase", "voices", "wakewords", "data", "logs"]
+
+[tool.ruff.lint]
+# Pyflakes (noms indéfinis, imports morts…), erreurs de syntaxe, et quelques bugs classiques
+# (arguments par défaut mutables, comparaisons à None).
+select = ["F", "E9", "E711", "E712", "B006", "B008"]
+# `from core.config import *` dans core/__init__.py : réexport voulu.
+per-file-ignores = { "core/__init__.py" = ["F403"] }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+# Tests manuels (vraies actions sur la machine) : lancés à la main uniquement.
+addopts = "--ignore=tests/test_actions_manual.py --ignore=tests/test_sound.py"

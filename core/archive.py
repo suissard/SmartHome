@@ -68,6 +68,16 @@ CREATE TABLE IF NOT EXISTS feedback (
     updated_at    TEXT NOT NULL,
     PRIMARY KEY (conversation, turn, user_id)
 );
+CREATE TABLE IF NOT EXISTS timings (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    conversation  TEXT NOT NULL DEFAULT '',
+    turn          TEXT NOT NULL DEFAULT '',
+    source        TEXT NOT NULL,
+    model         TEXT NOT NULL DEFAULT '',
+    timings       TEXT NOT NULL,
+    created_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_timings_created ON timings (created_at);
 """
 
 
@@ -161,6 +171,21 @@ class ConversationArchive:
                   source, session, user_id, user_name, model if m["role"] == "assistant" else "", now)
                  for m in rows])
         return self._write(write)
+
+    def add_timings(self, conversation: str, turn: str, source: str, model: str, timings: dict) -> bool:
+        """Latence d'un tour, étape par étape (voir core/metrics.py)."""
+        if not timings:
+            return False
+        payload = json.dumps(timings)
+        return self._write(lambda conn: conn.execute(
+            "INSERT INTO timings (conversation, turn, source, model, timings, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (conversation, turn, source, model, payload, _now())))
+
+    def timings_since(self, days: float = 7) -> list[dict]:
+        """Mesures des `days` derniers jours : [{conversation, turn, model, source, timings: {étape: ms}, at}]."""
+        since = datetime.fromtimestamp(time.time() - days * 86400, timezone.utc).isoformat(timespec="milliseconds")
+        return [{"conversation": r["conversation"], "turn": r["turn"], "model": r["model"], "source": r["source"], "timings": json.loads(r["timings"]), "at": r["created_at"]}
+                for r in self._read("SELECT * FROM timings WHERE created_at >= ? ORDER BY id", (since,))]
 
     def hide_turns(self, conversation: str, turns: Iterable[str], role: Optional[str] = None) -> bool:
         """Masque les messages de ces échanges (suppression dans la PWA) : ils restent dans l'archive."""

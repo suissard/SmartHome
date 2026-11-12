@@ -19,6 +19,11 @@ Routes :
                         core/agents.py ; null : retour à l'assistant) -> {"type": "agent_changed", "agent": {...} | null}
                         | {"type": "feedback", "conversation_id", "turn", "rating": -2..2, "comment"?}
                           -> {"type": "feedback_saved", "conversation_id", "turn", "rating", "comment"} | {"type": "feedback_error", "message"}
+                        | {"type": "list_memories"} | {"type": "add_memory", "text"} | {"type": "delete_memory", "id"}
+                          (souvenirs du compte, core/memory.py) -> {"type": "memories", "memories": [{id, text, updated_at}]}
+                          | {"type": "memory_error", "message"} ; {"type": "reminder", "id", "kind", "text", ...} à
+                          l'échéance d'un rappel du compte (core/scheduler.py) ; {"type": "timings", "timings"} après
+                          chaque réponse (latence par étape, core/metrics.py)
                         | {"type": "load_conversation", "conversation_id", "source": "local"} (conversation du micro, lecture
                           seule, ARCHIVE_HOUSEHOLD_ROLES) ; {"type": "history_updated", "conversation_id", "source"} à chaque échange au micro
                         | {"type": "ping"} | {"type": "listening", "active": bool} (micro du client ouvert / fermé :
@@ -80,7 +85,7 @@ from core.security import (
     BearerTokenMiddleware, LocalOnlyMiddleware, SecurityHeadersMiddleware, bearer_from_headers, token_matches,
 )
 from core.users import (AuthError, DirectoryUnavailable, User, admin_user, assistant_name, create_directory,
-                        is_admin)
+                        is_admin, LOCAL_USER_ID)
 from core.version import check_version, local_version_info, pull_update
 
 # Interface web (PWA) servie à la racine : publique, elle ne contient aucun secret (le jeton est saisi par l'utilisateur)
@@ -229,11 +234,18 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
                 "wakeword": {"enabled": s.WAKEWORD_ENABLED, "available": core.local_microphone},
             }
 
+        def reminder_visible(owner, data: dict) -> bool:
+            creator = data.get("user_id") or LOCAL_USER_ID
+            return creator == owner.id or (creator == LOCAL_USER_ID and core.sees_household(owner))
+
         def on_global(e):
             if e.type in ("settings_changed", "restarting"):
                 push({**e.to_dict(), **(public_state() if e.type == "settings_changed" else {})})
             elif e.type == "history_updated" and e.session_id != session.id and core.sees_household(user):
                 # Échange au micro de l'ordinateur : la liste des conversations (et la conversation affichée) suit
+                push(e.to_dict())
+            elif e.type == "reminder" and reminder_visible(user, e.data):
+                # Rappel ou routine à échéance : au compte qui l'a créé (ceux du foyer : à qui voit le foyer)
                 push(e.to_dict())
 
         unsubscribe_settings = core.events.subscribe(on_global)
@@ -320,6 +332,20 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
                     push({"type": "conversation_deleted", "conversation_id": cid, "success": ok})
             except Exception as e:
                 push({"type": "error", "message": f"Erreur conversation : {e}"})
+
+        async def handle_memories(message: dict):
+            """Souvenirs du compte : liste, ajout à la main, effacement."""
+            kind = message["type"]
+            try:
+                if kind == "add_memory":
+                    await asyncio.to_thread(core.add_memory, session.id, str(message.get("text") or ""))
+                elif kind == "delete_memory":
+                    if not await asyncio.to_thread(core.delete_memory, session.id, message.get("id")):
+                        raise ValueError("Souvenir introuvable.")
+                memories = await asyncio.to_thread(core.list_memories, session.id)
+                push({"type": "memories", "memories": memories})
+            except ValueError as e:
+                push({"type": "memory_error", "message": str(e)})
 
         async def handle_feedback(message: dict):
             """Note d'une réponse (-2 à +2) et commentaire facultatif, enregistrés dans l'archive."""
@@ -533,6 +559,7 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
             "agent": core.agent_info(session.id),
             # Pouce sous les réponses (note de -2 à +2, commentaire) et conversations du micro dans le tiroir
             "feedback": {"enabled": core.feedback_available(), "comment_max": s.FEEDBACK_COMMENT_MAX_CHARS},
+            "memory": {"enabled": core.memory.enabled, "max_chars": s.MEMORY_MAX_CHARS},
             "household": core.sees_household(user),
             **public_state(),
         })
@@ -583,6 +610,10 @@ def create_app(core: AssistantCore, settings: Optional[Settings] = None):
                     push({"type": "reset_done", "conversation_id": session.conversation_id})
                 elif kind in ("list_conversations", "load_conversation", "delete_conversation"):
                     task = asyncio.create_task(handle_conversations(message))
+                    tasks.add(task)
+                    task.add_done_callback(tasks.discard)
+                elif kind in ("list_memories", "add_memory", "delete_memory"):
+                    task = asyncio.create_task(handle_memories(message))
                     tasks.add(task)
                     task.add_done_callback(tasks.discard)
                 elif kind == "feedback":

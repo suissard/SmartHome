@@ -9,11 +9,12 @@ de découvrir automatiquement tous leurs outils et de router les appels d'outils
 import asyncio
 import json
 import os
+import re
 import sys
 import threading
 from contextlib import AsyncExitStack
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 # Inclusion de la racine du projet
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -26,10 +27,43 @@ from mcp.client.stdio import stdio_client
 from mcp.client.sse import sse_client
 from mcp.client.streamable_http import streamable_http_client
 
+from dotenv import dotenv_values
+
 from core.config import (
+    ENV_FILE,
     MCP_CLIENT_ENABLED,
     MCP_SERVERS_CONFIG_PATH,
 )
+
+_ENV_REF = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+
+
+def expand_env(value: Any, env: Dict[str, str], missing: Optional[set] = None) -> Any:
+    """Remplace les `${NOM}` des chaînes (récursivement dans listes et dictionnaires).
+
+    Les secrets (jetons, clés) restent ainsi dans `.env`, jamais dans `mcp_servers.json` versionné.
+    Une variable absente devient une chaîne vide et son nom est ajouté à `missing`.
+    """
+    if isinstance(value, str):
+        def _sub(match: "re.Match[str]") -> str:
+            name = match.group(1)
+            if name not in env and missing is not None:
+                missing.add(name)
+            return env.get(name, "")
+        return _ENV_REF.sub(_sub, value)
+    if isinstance(value, list):
+        return [expand_env(v, env, missing) for v in value]
+    if isinstance(value, dict):
+        return {k: expand_env(v, env, missing) for k, v in value.items()}
+    return value
+
+
+def config_env() -> Dict[str, str]:
+    """Variables disponibles pour `${NOM}` : celles de `.env`, sinon celles de la machine."""
+    env = dict(os.environ)
+    if ENV_FILE.exists():
+        env.update({k: v for k, v in dotenv_values(ENV_FILE, interpolate=False).items() if v is not None})
+    return env
 
 
 class MCPServerConnection:
@@ -211,10 +245,19 @@ class MCPClientHub:
         try:
             with open(cfg_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                return data.get("mcpServers", data)
         except Exception as e:
             print(f"⚠️ [MCP-HUB] Erreur lecture configuration {cfg_file} : {e}", file=sys.stderr)
             return {}
+        servers = data.get("mcpServers", data)
+        env = config_env()
+        expanded = {}
+        for name, cfg in servers.items():
+            missing: set = set()
+            expanded[name] = expand_env(cfg, env, missing)
+            if missing and isinstance(cfg, dict) and cfg.get("enabled", True):
+                print(f"⚠️ [MCP-HUB] Serveur '{name}' : variable(s) absente(s) de .env : {', '.join(sorted(missing))}",
+                      file=sys.stderr)
+        return expanded
 
     async def connect_all_async(self) -> Dict[str, bool]:
         """Se connecte à tous les serveurs activés (asynchrone)."""
