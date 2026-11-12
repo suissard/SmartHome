@@ -6,13 +6,16 @@ L'agent tourne en arrière-plan (journal dans ACTIONS_AGENT_LOG_DIR) ; une notif
 La nouvelle commande est chargée au prochain redémarrage de SmartHome.
 """
 
+import atexit
 import os
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import threading
 import time
+import uuid
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -71,10 +74,42 @@ def _notify(message: str):
         notify.execute(message)
 
 
+_ACTIVE_LOCK = threading.Lock()
+_ACTIVE_PROCESSES: set[subprocess.Popen] = set()
+
+
+def active_agent_count() -> int:
+    with _ACTIVE_LOCK:
+        return sum(1 for proc in _ACTIVE_PROCESSES if proc.poll() is None)
+
+
+def stop_active_agents():
+    """Termine proprement les agents create_command lancés par ce processus à l'arrêt."""
+    with _ACTIVE_LOCK:
+        procs = list(_ACTIVE_PROCESSES)
+    for proc in procs:
+        if proc.poll() is not None:
+            continue
+        try:
+            if sys.platform != "win32":
+                os.killpg(proc.pid, signal.SIGTERM)
+            else:
+                proc.terminate()
+        except OSError:
+            pass
+
+
+atexit.register(stop_active_agents)
+
+
 def _watch(process: subprocess.Popen, log_path: Path, log_file):
     """Attend la fin de l'agent (thread d'arrière-plan) et prévient l'utilisateur."""
-    code = process.wait()
-    log_file.close()
+    try:
+        code = process.wait()
+    finally:
+        with _ACTIVE_LOCK:
+            _ACTIVE_PROCESSES.discard(process)
+        log_file.close()
     if code == 0:
         print(f"✅ [ACTIONS] Agent terminé : {log_path}")
         _notify("Nouvelle commande prête : redémarre SmartHome pour la charger.")
@@ -121,7 +156,7 @@ class CreateCommandAction(BaseAction):
             return 1, "", f"Guide illisible : {e}"
         log_dir = _resolve(s.ACTIONS_AGENT_LOG_DIR)
         log_dir.mkdir(parents=True, exist_ok=True)
-        log_path = log_dir / f"create_command_{time.strftime('%Y%m%d_%H%M%S')}.log"
+        log_path = log_dir / f"create_command_{time.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}.log"
         log_file = open(log_path, "w", encoding="utf-8")
         log_file.write(f"# Consigne : {request}\n# Modèle : {s.ACTIONS_AGENT_MODEL}\n# Répertoire : {directory}\n\n")
         log_file.flush()
@@ -139,6 +174,8 @@ class CreateCommandAction(BaseAction):
         except OSError as e:
             log_file.close()
             return 1, "", f"Impossible de lancer l'agent « {cmd[0]} » : {e}"
+        with _ACTIVE_LOCK:
+            _ACTIVE_PROCESSES.add(process)
         threading.Thread(target=_watch, args=(process, log_path, log_file), daemon=True,
                          name="create-command-agent").start()
         return 0, f"Agent lancé, journal : {log_path}", ""

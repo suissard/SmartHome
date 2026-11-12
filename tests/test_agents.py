@@ -31,7 +31,7 @@ from core.assistant import AssistantCore
 from core.config import Settings
 from core.sentences import strip_markdown
 from core.tools import ToolRegistry
-from core.users import User, tool_policy
+from core.users import User, admin_user, tool_policy
 from gateway.app import create_app
 from tests.test_gateway import FakeSTT, RuleLLM
 
@@ -231,7 +231,7 @@ class TestRunner(AgentTestCase):
 class TestCoreRouting(AgentTestCase):
     def test_switch_talk_and_return(self):
         core = self.make_core()
-        core.open_session("s")
+        core.open_session("s", user=admin_user(self.settings))
         events = []
         core.events.subscribe(events.append, session_id="s")
         spoken = []
@@ -264,7 +264,7 @@ class TestCoreRouting(AgentTestCase):
 
     def test_switch_with_request(self):
         core = self.make_core()
-        core.open_session("s")
+        core.open_session("s", user=admin_user(self.settings))
         spoken = []
         reply = core.respond("s", text="Passe-moi Fakebot, dis bonjour", on_sentence=spoken.append)
         self.assertIn("Reçu : ", reply.text)
@@ -272,7 +272,7 @@ class TestCoreRouting(AgentTestCase):
 
     def test_end_phrase_leaves_agent(self):
         core = self.make_core()
-        core.open_session("s")
+        core.open_session("s", user=admin_user(self.settings))
         core.set_agent("s", "fake")
         reply = core.respond("s", text="Au revoir")
         self.assertTrue(reply.end_conversation)
@@ -280,7 +280,7 @@ class TestCoreRouting(AgentTestCase):
 
     def test_agent_error_is_spoken(self):
         core = self.make_core()
-        core.open_session("s")
+        core.open_session("s", user=admin_user(self.settings))
         core.set_agent("s", "fake")
         reply = core.respond("s", text="plante")
         self.assertIn("Fakebot ne répond pas", reply.text)
@@ -291,7 +291,7 @@ class TestCoreRouting(AgentTestCase):
 
     def test_missing_agent_command_stays_with_assistant(self):
         core = self.make_core()
-        core.open_session("s")
+        core.open_session("s", user=admin_user(self.settings))
         reply = core.respond("s", text="J'aimerais parler à Absentbot")
         self.assertIn("introuvable", reply.text)
         self.assertIsNone(core.agent_info("s"))
@@ -302,6 +302,7 @@ class TestCoreRouting(AgentTestCase):
 
     def test_roles(self):
         core = self.make_core()
+        self.assertFalse(core.agents_allowed(None))
         member = User("u1", "Léo", "member")
         core.open_session("m", user=member)
         reply = core.respond("m", text="parler à Fakebot")
@@ -315,7 +316,7 @@ class TestCoreRouting(AgentTestCase):
 
     def test_reset_returns_to_assistant(self):
         core = self.make_core()
-        core.open_session("s")
+        core.open_session("s", user=admin_user(self.settings))
         core.set_agent("s", "fake")
         core.reset("s")
         self.assertIsNone(core.agent_info("s"))

@@ -29,7 +29,7 @@ class TestSmartHomeMCPServer(unittest.IsolatedAsyncioTestCase):
     async def test_server_metadata_and_tools_count(self):
         """Vérifie que le serveur MCP expose tous les outils attendus."""
         self.assertEqual(app.name, "smarthome")
-        
+
         tools = await app.list_tools()
         tool_names = {t.name for t in tools}
 
@@ -80,6 +80,12 @@ class TestSmartHomeMCPServer(unittest.IsolatedAsyncioTestCase):
         res = await app.call_tool("execute_action", {"tag": "NON_EXISTENT_TAG"})
         first_text = res.content[0].text
         self.assertIn("Action inconnue", first_text)
+
+    async def test_execute_action_blocks_confirm_and_admin_actions(self):
+        """Vérifie que execute_action bloque les actions nécessitant confirmation ou réservées aux admins."""
+        from mcp_server import execute_action
+        self.assertIn("confirmation", execute_action("SHUTDOWN"))
+        self.assertIn("réservée", execute_action("SET_SETTING", "LLM_HISTORY_MESSAGES=5"))
 
     async def test_set_volume_tool(self):
         """Vérifie l'outil set_volume avec dry_run/mock."""

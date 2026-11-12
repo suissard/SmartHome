@@ -21,6 +21,7 @@ from core import settings_store
 from core.assistant import AssistantCore
 from core.config import Settings, load_settings
 from core.tools import Tool, ToolRegistry, _action_tool
+from core.users import admin_user
 from gateway.app import create_app
 from llm.decision import NO_COMMAND, argument_questions, decidable_tools, tool_label
 from llm.llm import Conversation
@@ -220,7 +221,7 @@ class TestSettingsStore(unittest.TestCase):
         decider = FakeDecider({"command": choice("volume"), "args": choice("up")},
                               Settings(**{**SETTINGS.model_dump(), "OLLAMA_MODEL": "qwen2.5:7b"}))
         core = AssistantCore(decider.settings, tools=registry([]), llm=decider, env_file=self.env)
-        session = core.open_session("s")
+        session = core.open_session("s", user=admin_user(decider.settings))
         self.assertEqual(core.respond("s", text="monte le son").text, "réponse rédigée")
 
         result = core.update_settings({"OLLAMA_MODEL": "nimble", "LLM_HISTORY_MESSAGES": 2, "VAD_ENGINE": "energy"})

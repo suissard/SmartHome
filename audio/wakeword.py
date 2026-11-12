@@ -25,7 +25,10 @@ FORMAT = pyaudio.paInt16
 
 class WakeWordDetector:
     def __init__(self, model_path=WAKEWORD_MODEL_PATH, threshold=WAKEWORD_THRESHOLD):
-        self.oww = Model(wakeword_model_paths=[model_path])
+        resolved = Path(model_path).expanduser()
+        if not resolved.is_absolute() and not resolved.exists():
+            resolved = _ROOT_DIR / resolved
+        self.oww = Model(wakeword_model_paths=[str(resolved)])
         # Récupération du nom du modèle depuis le dictionnaire des modèles chargés
         self.model_name = list(self.oww.models.keys())[0]
         self.threshold = threshold

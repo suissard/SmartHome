@@ -19,7 +19,12 @@ cd "$ROOT_DIR"
 PY="$ROOT_DIR/.venv/bin/python"
 [[ -x "$PY" ]] || { echo "❌ Environnement absent : lancez d'abord ./install.sh" >&2; exit 1; }
 
-# Profil : --profile <nom> > SMARTHOME_PROFILE > menu (terminal interactif) > dernier choix > défaut (mix)
+if [[ -x "$ROOT_DIR/.venv/bin/smarthome" ]]; then
+    exec "$ROOT_DIR/.venv/bin/smarthome" start "$@"
+fi
+
+# Repli si l'environnement n'a pas encore été réinstallé avec la commande `smarthome`
+# Profil : --profile <nom> > SMARTHOME_PROFILE > menu (terminal interactif) > dernier choix > défaut (hybrid)
 args=()
 menu=true
 setup=False

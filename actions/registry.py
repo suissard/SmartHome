@@ -52,7 +52,7 @@ class ActionRegistry:
 
         # Parcours des modules python dans actions/modules/
         package_prefix = "actions.modules."
-        for finder, module_name, is_pkg in pkgutil.iter_modules([str(self.modules_dir)]):
+        for _finder, module_name, _is_pkg in pkgutil.iter_modules([str(self.modules_dir)]):
             if module_name.startswith("__"):
                 continue
 
@@ -70,7 +70,7 @@ class ActionRegistry:
                             self.register(act)
 
                 # 2. Découverte automatique des classes dérivées de BaseAction
-                for name, obj in inspect.getmembers(module, inspect.isclass):
+                for _name, obj in inspect.getmembers(module, inspect.isclass):
                     if issubclass(obj, BaseAction) and obj is not BaseAction:
                         try:
                             instance = obj()

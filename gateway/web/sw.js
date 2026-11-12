@@ -1,17 +1,21 @@
 // Service worker minimal : rend l'interface installable et disponible au démarrage même si le réseau tarde.
 // Stratégie « réseau d'abord » : la version du serveur est toujours préférée ; seul le squelette est mis en cache.
-const CACHE = "smarthome-shell-v25";
+const CACHE = "smarthome-shell-v27";
 const SHELL = [
   "./",
   "index.html",
-  "style.css?v=18",
-  "app.js?v=18",
+  "style.css?v=19",
+  "app.js?v=19",
+  "modules/tools_ui.js",
+  "modules/images.js",
+  "modules/version.js",
+  "modules/pb_admin.js",
   "recorder.js",
   "recorder-worklet.js",
   "icon.svg",
   "icon-192.png",
   "icon-512.png",
-  "manifest.webmanifest?v=18",
+  "manifest.webmanifest?v=19",
 ];
 
 self.addEventListener("install", (event) => {

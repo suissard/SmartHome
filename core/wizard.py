@@ -123,6 +123,7 @@ class Wizard:
             Option("Désactivé", "off", "Attendre que l'assistant finisse de parler"),
         ]).value
         self.values["step_audio_in"] = {
+            "WAKEWORD_ENABLED": to_env_value(wake),
             "VAD_ENGINE": vad,
             "BARGE_IN_MODE": barge,
         }
@@ -310,8 +311,10 @@ class Wizard:
     def save(self) -> str:
         if self.new_key:
             save_to_env(self.settings.model_copy(update={"OPENROUTER_API_KEY": self.new_key}), ["OPENROUTER_API_KEY"])
-        path = profiles.PROFILES_DIR / f"{PERSONAL_PROFILE}.env"
-        lines = [f"# {self.description()}", "# Créé par ./start.sh --setup"]
+        target_dir = profiles.user_profiles_dir()
+        target_dir.mkdir(parents=True, exist_ok=True)
+        path = target_dir / f"{PERSONAL_PROFILE}.env"
+        lines = [f"# {self.description()}", "# Créé par smarthome setup"]
         lines += [f"{key}={value}" for key, value in self.settings_values().items()]
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         profiles.local_overrides_path(PERSONAL_PROFILE).unlink(missing_ok=True)

@@ -46,6 +46,14 @@ def classify_confirmation(answer: str, confirm_words: list[str], cancel_words: l
     return None
 
 
+def format_confirm_prompt(template: str, description: str) -> str:
+    """Met en forme le message de confirmation sans échouer si le gabarit édité contient d'autres accolades."""
+    action = description.strip().rstrip(".").lower()
+    if "{action}" in template:
+        return template.replace("{action}", action)
+    return f"{template.rstrip()} {action}".strip() if template.strip() else f"Tu confirmes : {action} ?"
+
+
 class VoiceConfirmer:
     """Gestionnaire de confirmation utilisant le haut-parleur et le micro partagés."""
 
@@ -71,7 +79,7 @@ class VoiceConfirmer:
 
     def __call__(self, description: str) -> bool:
         s = self.settings
-        question = s.ACTIONS_CONFIRM_PROMPT.format(action=description.strip().rstrip(".").lower())
+        question = format_confirm_prompt(s.ACTIONS_CONFIRM_PROMPT, description)
         print(f"\n❓ [CONFIRMATION] {question}")
         self.speak(question)
 

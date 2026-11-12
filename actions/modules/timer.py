@@ -6,7 +6,7 @@ S'appuie sur systemd-run --user (le minuteur survit à SmartHome).
 import re
 from typing import List
 from actions.base import BaseAction
-from core.config import ACTIONS_TIMER_MAX_SECONDS
+from core.config import get_settings
 
 _TIMER_SCRIPT = r"""
 SECONDS_TOTAL="${1:-}"
@@ -90,9 +90,10 @@ class TimerAction(BaseAction):
         return choices
 
     def build_args(self, args: str = "") -> List[str]:
+        max_seconds = get_settings().ACTIONS_TIMER_MAX_SECONDS
         seconds, message = parse_duration(args)
-        if seconds <= 0 or seconds > ACTIONS_TIMER_MAX_SECONDS:
-            print(f"⛔ [ACTIONS] Durée invalide pour [TIMER] : '{args}' (max {ACTIONS_TIMER_MAX_SECONDS}s)")
+        if seconds <= 0 or seconds > max_seconds:
+            print(f"⛔ [ACTIONS] Durée invalide pour [TIMER] : '{args}' (max {max_seconds}s)")
             return []
         return [str(seconds), message or "Minuteur terminé"]
 

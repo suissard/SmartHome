@@ -9,11 +9,13 @@ profiles/*.local.env
 profiles/.last
 profiles/perso.env
 
-# Fichiers de cache Python
+# Fichiers de cache Python et packaging
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
+*.egg-info/
+build/
 
 # IDE et OS
 .idea/

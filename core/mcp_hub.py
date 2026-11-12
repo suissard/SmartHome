@@ -93,8 +93,14 @@ class MCPServerConnection:
                 headers = self.config.get("headers", {})
 
                 if transport_type in ("http", "streamable-http"):
+                    http_client = None
+                    if headers:
+                        import httpx
+                        http_client = await self._exit_stack.enter_async_context(
+                            httpx.AsyncClient(headers=headers, timeout=httpx.Timeout(30.0, read=300.0))
+                        )
                     streams = await self._exit_stack.enter_async_context(
-                        streamable_http_client(url)
+                        streamable_http_client(url, http_client=http_client)
                     )
                 else:
                     streams = await self._exit_stack.enter_async_context(
@@ -264,6 +270,8 @@ class MCPClientHub:
         if not self.enabled:
             return {}
 
+        if self.servers:
+            await self.disconnect_all_async()
         configs = self.load_config()
         self.tool_to_server.clear()
         results = {}
@@ -282,6 +290,11 @@ class MCPClientHub:
                 for tool in conn.tools:
                     tool_name = getattr(tool, "name", "")
                     if tool_name:
+                        if tool_name in self.tool_to_server:
+                            print(
+                                f"⚠️ [MCP-HUB] Collision d'outil '{tool_name}' : '{server_name}' remplace '{self.tool_to_server[tool_name]}'",
+                                file=sys.stderr,
+                            )
                         self.tool_to_server[tool_name] = server_name
             else:
                 print(f"⚠️ [MCP-HUB] Échec connexion serveur '{server_name}': {conn.error_message}", file=sys.stderr)

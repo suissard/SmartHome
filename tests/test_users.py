@@ -123,7 +123,10 @@ class TestToolPolicy(unittest.TestCase):
         self.assertTrue(tool_policy(guest, s).allows("volume", "safe"))
         self.assertFalse(tool_policy(guest, s).allows("shutdown", "confirm"))
         self.assertFalse(tool_policy(User("pb_y", "Y", "inconnu"), s).allows("volume", "safe"))
-        self.assertIsNone(tool_policy(None, s))
+        policy_none = tool_policy(None, s)
+        self.assertIsNotNone(policy_none)
+        self.assertFalse(policy_none.allows("volume", "safe"))
+        self.assertFalse(policy_none.allows("shutdown", "confirm"))
 
     def test_tag_mode_respects_policy(self):
         from actions.manager import ActionManager
@@ -478,7 +481,7 @@ class MemoryHistory:
             conv_map[cid]["message_count"] += 1
             conv_map[cid]["_msgs"].append(r)
         res = []
-        for cid, entry in conv_map.items():
+        for entry in conv_map.values():
             first_user = next((m.get("content", "") for m in entry.pop("_msgs") if m.get("role") == "user"), "")
             entry["title"] = first_user or "Nouvelle conversation"
             res.append(entry)
@@ -676,6 +679,16 @@ class TestPocketBaseDirectory(unittest.TestCase):
         refreshed = self.directory().refresh("jwt-1")
         self.assertEqual((refreshed.role, refreshed.token), ("admin", "jwt-2"))
 
+    def test_user_record_matching_superuser_email_is_never_elevated_without_superuser_auth(self):
+        directory = self.directory()
+        with mock.patch.object(directory, "_is_db_superuser", return_value=True):
+            user = directory.login("marie@foyer", "secret")
+        self.assertFalse(user.superadmin)
+        self.assertEqual(user.token, "jwt-1")
+        # Même un champ superadmin injecté sur le record `users` ne donne pas superadmin
+        forged = directory._from_record({"id": "abc", "email": "root@foyer", "superadmin": True, "role": "member"}, "jwt-1")
+        self.assertFalse(forged.superadmin)
+
     def test_superadmin_login_refresh_and_management(self):
         directory = self.directory()
         super_user = directory.login("root@foyer", "rootpass")
@@ -803,6 +816,80 @@ class TestHistoryStoreWrites(unittest.TestCase):
     def test_unreachable_server_not_retried(self):
         from core.users import DirectoryUnavailable
         self.assertEqual(len(self.run_append([DirectoryUnavailable("injoignable")])), 1)
+
+
+class TestHistoryPagination(unittest.TestCase):
+    """Pagination de HistoryStore.list_conversations() sur plusieurs pages."""
+
+    def test_list_conversations_paginates_across_pages(self):
+        import core.history as hist
+        store = hist.HistoryStore(Settings(AUTH_PROVIDER="pocketbase", MCP_CLIENT_ENABLED=False))
+        user = User("pb_m", "Marie", "member", token="jeton")
+        pages = {
+            1: {"items": [
+                {"conversation": "c1", "role": "user", "content": "msg1", "created": "2026-01-01 10:00:00"},
+                {"conversation": "c2", "role": "user", "content": "msg2", "created": "2026-01-02 10:00:00"},
+            ]},
+            2: {"items": [
+                {"conversation": "c3", "role": "user", "content": "msg3", "created": "2026-01-03 10:00:00"},
+            ]},
+        }
+
+        def fake_request(u, path="", **kwargs):
+            page = (kwargs.get("query") or {}).get("page", 1)
+            return pages.get(page, {"items": []})
+
+        with mock.patch.object(hist, "PAGE_SIZE", 2), \
+                mock.patch.object(type(store), "_request", side_effect=fake_request, autospec=False):
+            convs = store.list_conversations(user, limit=10)
+        self.assertEqual([c["id"] for c in convs], ["c1", "c2", "c3"])
+
+
+class TestLookupLocalPbUser(unittest.TestCase):
+    """Re-vérification du rôle PocketBase local lors des routines."""
+
+    def test_lookup_and_routine_user(self):
+        import sqlite3
+        import tempfile
+        import time
+        import core.users as users
+        from core.scheduler import Reminder, ReminderStore, Scheduler
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "data.db"
+            conn = sqlite3.connect(db_path)
+            conn.execute("CREATE TABLE users (id TEXT, email TEXT, role TEXT)")
+            conn.execute("CREATE TABLE _superusers (email TEXT)")
+            conn.execute("INSERT INTO users VALUES ('u1', 'marie@foyer', 'guest')")
+            conn.commit()
+            conn.close()
+
+            s = Settings(
+                AUTH_PROVIDER="pocketbase",
+                POCKETBASE_URL="http://127.0.0.1:8090",
+                SCHEDULER_DB_PATH="",
+                MCP_CLIENT_ENABLED=False,
+            )
+            with mock.patch.object(users, "_LOCAL_PB_DB", db_path):
+                live = users.lookup_local_pb_user("pb_u1", s)
+                self.assertEqual(live, {"exists": True, "role": "guest", "superadmin": False})
+                missing = users.lookup_local_pb_user("pb_inconnu", s)
+                self.assertEqual(missing, {"exists": False})
+
+                scheduler = Scheduler(mock.MagicMock(settings=s), store=ReminderStore(s))
+                rem_ok = Reminder(
+                    id=1, kind="routine", message="test", due_at=time.time(),
+                    user_id="pb_u1", user_name="Marie", user_role="admin", superadmin=False,
+                )
+                resolved = scheduler._routine_user(rem_ok)
+                self.assertEqual((resolved.id, resolved.role, resolved.superadmin), ("pb_u1", "guest", False))
+
+                rem_del = Reminder(
+                    id=2, kind="routine", message="test", due_at=time.time(),
+                    user_id="pb_inconnu", user_name="Ghost", user_role="admin", superadmin=True,
+                )
+                with self.assertRaises(PermissionError):
+                    scheduler._routine_user(rem_del)
 
 
 if __name__ == "__main__":

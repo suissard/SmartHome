@@ -77,7 +77,7 @@ def lexical_score(query: set[str], memory: set[str]) -> float:
 
 
 def cosine(a: list[float], b: list[float]) -> float:
-    dot = sum(x * y for x, y in zip(a, b))
+    dot = sum(x * y for x, y in zip(a, b, strict=False))
     na = math.sqrt(sum(x * x for x in a))
     nb = math.sqrt(sum(y * y for y in b))
     return dot / (na * nb) if na and nb else 0.0
@@ -132,7 +132,43 @@ class MemoryStore:
         self.path = raw if raw.is_absolute() else MEMORY_ROOT / raw
         self.embedder = embedder if embedder is not None else OllamaEmbedder(self.settings)
         self._lock = threading.Lock()
+        self._local = threading.local()
+        self._conns: list[sqlite3.Connection] = []
         self._ready = False
+        self._closed = False
+        self._backfill_lock = threading.Lock()
+        self._backfill_thread: Optional[threading.Thread] = None
+
+    def _db(self) -> sqlite3.Connection:
+        conn = getattr(self._local, "conn", None)
+        if conn is None:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            conn = sqlite3.connect(self.path, timeout=10, check_same_thread=False)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
+            if not self._ready:
+                conn.executescript(_SCHEMA)
+                self._ready = True
+            self._local.conn = conn
+            self._conns.append(conn)
+        return conn
+
+    def close(self):
+        """Ferme les connexions SQLite ouvertes pour ce store."""
+        self._closed = True
+        with self._backfill_lock:
+            thread = self._backfill_thread
+        if thread is not None and thread.is_alive() and thread is not threading.current_thread():
+            thread.join(timeout=2.0)
+        with self._lock:
+            for conn in self._conns:
+                try:
+                    conn.close()
+                except sqlite3.Error:
+                    pass
+            self._conns.clear()
+            self._local = threading.local()
 
     @property
     def settings(self) -> Settings:
@@ -151,18 +187,18 @@ class MemoryStore:
     # ---- Base ----
     def _execute(self, sql: str, params=()) -> tuple[list[sqlite3.Row], Optional[int]]:
         with self._lock:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            conn = sqlite3.connect(self.path, timeout=10)
-            conn.row_factory = sqlite3.Row
-            try:
-                if not self._ready:
-                    conn.executescript(_SCHEMA)
-                    self._ready = True
-                with conn:
-                    cur = conn.execute(sql, tuple(params))
-                    return cur.fetchall(), cur.lastrowid
-            finally:
-                conn.close()
+            conn = self._db()
+            with conn:
+                cur = conn.execute(sql, tuple(params))
+                return cur.fetchall(), cur.lastrowid
+
+    def _executemany(self, sql: str, rows: list[tuple]):
+        if not rows:
+            return
+        with self._lock:
+            conn = self._db()
+            with conn:
+                conn.executemany(sql, rows)
 
     @staticmethod
     def _row(r: sqlite3.Row) -> Memory:
@@ -187,10 +223,35 @@ class MemoryStore:
         vectors = self.embedder.embed([m.text for m in missing])
         if not vectors:
             return
-        for memory, vector in zip(missing, vectors):
+        updates = []
+        for memory, vector in zip(missing, vectors, strict=False):
             memory.embedding = vector
-            self._execute("UPDATE memories SET embedding = ?, model = ? WHERE id = ?",
-                          (json.dumps(vector), self.embedder.model, memory.id))
+            updates.append((json.dumps(vector), self.embedder.model, memory.id))
+        if not self._closed:
+            self._executemany("UPDATE memories SET embedding = ?, model = ? WHERE id = ?", updates)
+
+    def _schedule_backfill(self, memories: list[Memory]):
+        """Calcule les embeddings manquants en arrière-plan sans bloquer le tour de conversation."""
+        if self._closed or self.embedder is None or not self.embedder.available:
+            return
+        missing = [m for m in memories if m.embedding is None]
+        if not missing:
+            return
+        with self._backfill_lock:
+            if self._backfill_thread is not None and self._backfill_thread.is_alive():
+                return
+            snapshot = [Memory(m.id, m.user_id, m.text, m.updated_at, None) for m in missing]
+
+            def run():
+                try:
+                    if not self._closed:
+                        self._ensure_embeddings(snapshot)
+                except Exception:
+                    pass
+
+            thread = threading.Thread(target=run, name="memory-embed-backfill", daemon=True)
+            self._backfill_thread = thread
+            thread.start()
 
     def _similarity(self, query: str, query_vector, memory: Memory) -> float:
         if query_vector is not None and memory.embedding is not None and len(memory.embedding) == len(query_vector):
@@ -209,7 +270,7 @@ class MemoryStore:
         existing = self.all(user_id)
         vector = self._embedding(text)
         if vector is not None:
-            self._ensure_embeddings(existing)
+            self._schedule_backfill(existing)
         now = time.time()
         for memory in existing:
             same = fold(memory.text) == fold(text)
@@ -255,10 +316,16 @@ class MemoryStore:
             return memories[:s.MEMORY_RECALL_LIMIT]
         vector = self._embedding(query) if query else None
         if vector is not None:
-            self._ensure_embeddings(memories)
-        threshold = s.MEMORY_MIN_SIMILARITY if vector is not None else s.MEMORY_MIN_KEYWORD_SCORE
-        scored = sorted(((self._similarity(query, vector, m), m) for m in memories), key=lambda x: -x[0])
-        return [m for score, m in scored[:s.MEMORY_RECALL_LIMIT] if score >= threshold]
+            self._schedule_backfill(memories)
+        scored = []
+        for m in memories:
+            has_vec = vector is not None and m.embedding is not None and len(m.embedding) == len(vector)
+            score = self._similarity(query, vector, m)
+            min_score = s.MEMORY_MIN_SIMILARITY if has_vec else s.MEMORY_MIN_KEYWORD_SCORE
+            if score >= min_score:
+                scored.append((score, m))
+        scored.sort(key=lambda x: -x[0])
+        return [m for _, m in scored[:s.MEMORY_RECALL_LIMIT]]
 
     def prompt_for(self, user, query: str) -> str:
         """Lignes ajoutées au prompt système de ce tour (vide sans souvenir utile)."""

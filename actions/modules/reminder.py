@@ -120,8 +120,15 @@ class RemindAction(PythonAction):
             args_hint=args_hint or "quand | message | répétition facultative",
             example_prompt=example_prompt or "Rappelle-moi dans 20 minutes de sortir le gâteau.",
             example_response=example_response or "[REMIND dans 20 minutes | sortir le gâteau du four] C'est noté.",
-            enabled=get_settings().SCHEDULER_ENABLED,
         )
+
+    @property
+    def enabled(self) -> bool:
+        return bool(get_settings().SCHEDULER_ENABLED)
+
+    @enabled.setter
+    def enabled(self, _value: bool):
+        pass
 
     def run(self, args: str) -> Tuple[int, str, str]:
         from core.scheduler import REPEAT_LABELS, describe_due
@@ -162,8 +169,15 @@ class ListRemindersAction(PythonAction):
             has_args=False,
             example_prompt="Quels sont mes rappels ?",
             example_response="[REMINDERS] Je regarde.",
-            enabled=get_settings().SCHEDULER_ENABLED,
         )
+
+    @property
+    def enabled(self) -> bool:
+        return bool(get_settings().SCHEDULER_ENABLED)
+
+    @enabled.setter
+    def enabled(self, _value: bool):
+        pass
 
     @property
     def tool_name(self) -> str:
@@ -193,8 +207,15 @@ class CancelReminderAction(PythonAction):
             args_hint="numéro du rappel ou mots de son message",
             example_prompt="Annule le rappel du linge.",
             example_response="[CANCEL_REMINDER linge] C'est annulé.",
-            enabled=get_settings().SCHEDULER_ENABLED,
         )
+
+    @property
+    def enabled(self) -> bool:
+        return bool(get_settings().SCHEDULER_ENABLED)
+
+    @enabled.setter
+    def enabled(self, _value: bool):
+        pass
 
     def find(self, args: str, pending: list) -> Optional[list]:
         needle = re.sub(r"^(n°|no|num[eé]ro|#)\s*", "", (args or "").strip(), flags=re.IGNORECASE)

@@ -14,6 +14,7 @@ import fnmatch
 import hashlib
 import os
 import sys
+import time
 import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
@@ -111,6 +112,25 @@ def decode_uploads(items, settings: Optional[Settings] = None) -> list[Image]:
     return [decode_upload(item, s) for item in items]
 
 
+_UPLOAD_TTL_SECONDS = 7 * 86400
+
+
+def prune_uploads(folder: Path, max_age_seconds: float = _UPLOAD_TTL_SECONDS) -> int:
+    """Supprime les images temporaires plus anciennes que `max_age_seconds` dans `folder`."""
+    if not folder.is_dir():
+        return 0
+    cutoff = time.time() - max_age_seconds
+    removed = 0
+    for entry in folder.iterdir():
+        try:
+            if entry.is_file() and entry.stat().st_mtime < cutoff:
+                entry.unlink()
+                removed += 1
+        except OSError:
+            pass
+    return removed
+
+
 def save_upload(image: Image, settings: Optional[Settings] = None) -> Path:
     """Copie l'image dans IMAGES_UPLOAD_DIR (nom tiré de son contenu : un même envoi n'est écrit qu'une fois)."""
     s = settings or get_settings()
@@ -118,6 +138,7 @@ def save_upload(image: Image, settings: Optional[Settings] = None) -> Path:
     if not folder.is_absolute():
         folder = _ROOT_DIR / folder
     folder.mkdir(parents=True, exist_ok=True)
+    prune_uploads(folder)
     path = folder / f"{hashlib.sha256(image.data).hexdigest()[:16]}{_extension(image.mime)}"
     if not path.exists():
         path.write_bytes(image.data)

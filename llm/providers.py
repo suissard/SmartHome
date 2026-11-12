@@ -233,7 +233,7 @@ class OllamaLLM(LLMProvider):
                     result.text += content
                     if on_token and stream:
                         on_token(content)
-                for i, tc in enumerate(getattr(msg, "tool_calls", None) or []):
+                for tc in getattr(msg, "tool_calls", None) or []:
                     result.tool_calls.append(ToolCall(
                         name=tc.function.name,
                         arguments=parse_arguments(tc.function.arguments),

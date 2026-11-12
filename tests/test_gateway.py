@@ -22,6 +22,7 @@ if str(ROOT_DIR) not in sys.path:
 from core.assistant import AssistantCore
 from core.config import Settings
 from core.tools import Tool, ToolCall, ToolRegistry
+from core.users import admin_user
 from gateway.app import create_app
 from llm.providers import LLMProvider, LLMResponse
 from audio.tts import TextToSpeech, TTSProvider
@@ -159,23 +160,26 @@ class TestAssistantCore(unittest.TestCase):
 
     def test_dangerous_tool_refused_without_session_confirmation(self):
         executed = []
-        reply = make_core(executed).respond("x", text="éteins tout")
+        core = make_core(executed)
+        reply = core.respond("x", text="éteins tout", user=admin_user(core.settings))
         self.assertEqual(executed, [])
         self.assertFalse(reply.tools[0]["executed"])
 
     def test_session_expiry(self):
+        import time
         core = AssistantCore(Settings(GATEWAY_SESSION_TIMEOUT=0.001, MCP_CLIENT_ENABLED=False), tools=ToolRegistry(SETTINGS), llm=RuleLLM())
         core.open_session("old")
         core.open_session("keep", persistent=True)
-        import time; time.sleep(0.01)
+        time.sleep(0.01)
         core.open_session("new")
         self.assertIsNone(core.get_session("old"))
         self.assertIsNotNone(core.get_session("keep"))
 
     def test_attached_session_never_expires(self):
+        import time
         core = AssistantCore(Settings(GATEWAY_SESSION_TIMEOUT=0.001, MCP_CLIENT_ENABLED=False), tools=ToolRegistry(SETTINGS), llm=RuleLLM())
         core.open_session("ws", attach=True)
-        import time; time.sleep(0.01)
+        time.sleep(0.01)
         core.open_session("other")
         self.assertIsNotNone(core.get_session("ws"))   # client toujours connecté
         core.detach_confirmation("ws")
@@ -579,6 +583,41 @@ class VersionTests(unittest.TestCase):
                 applied = ws.receive_json()
                 self.assertEqual(applied["type"], "update_applied")
                 self.assertTrue(applied["ok"])
+
+    def test_confirmation_skips_tts_when_speak_false_and_handles_braces(self):
+        from audio.confirm import format_confirm_prompt
+        self.assertEqual(format_confirm_prompt("Confirmer {action} ? {oops", "Éteindre."), "Confirmer éteindre ? {oops")
+
+        executed = []
+        core = make_core(executed)
+        settings = Settings(**{**SETTINGS.model_dump(), "GATEWAY_AUTH_TOKEN": TOKEN})
+        client = TestClient(create_app(core, settings))
+        with client.websocket_connect("/ws", headers={"Authorization": f"Bearer {TOKEN}"}) as ws:
+            ws.receive_json()  # ready
+            ws.send_json({"type": "text", "text": "éteins l'ordinateur", "speak": False})
+            saw_audio = False
+            while True:
+                ev = ws.receive_json()
+                if ev["type"] in ("audio_chunk", "audio"):
+                    saw_audio = True
+                if ev["type"] == "confirm_request":
+                    ws.send_json({"type": "confirm_response", "id": ev["id"], "accepted": False})
+                    break
+            events = collect_until_done(ws)
+        self.assertFalse(saw_audio)
+        self.assertFalse(any(e["type"] in ("audio_chunk", "audio") for e in events))
+
+    def test_multi_client_detach_preserves_other_confirmation_handler(self):
+        core = make_core([])
+        def cb1(_q): return True
+        def cb2(_q): return False
+        s = core.open_session("shared", confirm=cb1, attach=True)
+        core.open_session("shared", confirm=cb2, attach=True)
+        self.assertIs(s.conversation.confirm, cb2)
+        core.detach_confirmation("shared", confirm=cb2)
+        self.assertIs(s.conversation.confirm, cb1)
+        core.detach_confirmation("shared", confirm=cb1)
+        self.assertIsNone(s.conversation.confirm)
 
 
 if __name__ == "__main__":

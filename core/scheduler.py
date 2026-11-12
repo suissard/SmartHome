@@ -446,9 +446,19 @@ class Scheduler:
         return fired
 
     def _routine_user(self, reminder: Reminder):
-        from core.users import LOCAL_USER_ID, User, local_user
+        from core.users import LOCAL_USER_ID, User, local_user, lookup_local_pb_user
         if not reminder.user_id or reminder.user_id == LOCAL_USER_ID:
             return local_user(self.settings)
+        live = lookup_local_pb_user(reminder.user_id, self.settings)
+        if live is not None:
+            if not live.get("exists"):
+                raise PermissionError("Compte utilisateur supprimé ou introuvable.")
+            return User(
+                reminder.user_id,
+                reminder.user_name,
+                live["role"],
+                superadmin=bool(live.get("superadmin")),
+            )
         return User(reminder.user_id, reminder.user_name, reminder.user_role, superadmin=reminder.superadmin)
 
     def _fire(self, reminder: Reminder, late: bool) -> dict:

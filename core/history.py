@@ -78,7 +78,8 @@ class HistoryStore:
         collection = self.settings.POCKETBASE_MESSAGES_COLLECTION
         return pb_request(self.settings, f"{collection}/records{path}", token=user.token, **kwargs)
 
-    def _list(self, user: User, filter_: str, sort: str = "seq", limit: Optional[int] = None) -> list[dict]:
+    def _list(self, user: User, filter_: str, sort: str = "seq", limit: Optional[int] = None,
+              max_pages: Optional[int] = None) -> list[dict]:
         items, page = [], 1
         while True:
             data = self._request(user, method="GET", query={
@@ -86,7 +87,7 @@ class HistoryStore:
                 "skipTotal": "true"})
             batch = data.get("items") or []
             items += batch
-            if len(batch) < PAGE_SIZE or (limit and len(items) >= limit):
+            if len(batch) < PAGE_SIZE or (limit and len(items) >= limit) or (max_pages and page >= max_pages):
                 return items[:limit] if limit else items
             page += 1
 
@@ -142,7 +143,8 @@ class HistoryStore:
             return []
         try:
             owner = f'user = "{_record_id(user)}"'
-            records = self._list(user, owner, sort="-seq", limit=limit)
+            # Pagine sur les messages pour compter `limit` conversations complètes sans tronquer par nombre de messages.
+            records = self._list(user, owner, sort="-seq", max_pages=20)
         except (AuthError, DirectoryUnavailable) as e:
             print(f"⚠️ [HISTORIQUE] Liste des conversations impossible pour {user.name} : {e}")
             return []
@@ -173,7 +175,7 @@ class HistoryStore:
                         entry["tools"].append(tname)
 
         result = []
-        for cid, entry in conv_map.items():
+        for entry in conv_map.values():
             msgs = list(reversed(entry.pop("_messages")))
             first_user_msg = next((m.get("content", "") for m in msgs if m.get("role") == "user"), "")
             title = first_user_msg.strip() if first_user_msg else ""
@@ -185,7 +187,7 @@ class HistoryStore:
                 entry["updated"] = msgs[-1].get("created") or entry["updated"]
             result.append(entry)
 
-        return result
+        return result[:limit]
 
     # ---- Écritures (en arrière-plan, dans l'ordre) ----
     def _submit(self, label: str, user: User, fn, *args) -> Optional[Future]:

@@ -113,7 +113,7 @@ class AudioDucker:
                     for ch_info in vol_dict.values():
                         if isinstance(ch_info, dict) and "value" in ch_info:
                             values.append(ch_info["value"])
-                
+
                 if not values:
                     values = [65536]
 

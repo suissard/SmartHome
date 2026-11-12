@@ -91,7 +91,10 @@ def check_ollama_capability(settings: Settings, model: str, capability: str, usa
 def require_openrouter_key(settings: Settings):
     """Lève une erreur explicite si la clé OpenRouter est absente (partagé par les fournisseurs OpenRouter)."""
     if not settings.OPENROUTER_API_KEY:
-        raise RuntimeError("Clé API OpenRouter manquante ! Renseignez OPENROUTER_API_KEY dans votre fichier .env.")
+        raise RuntimeError(
+            "Clé API OpenRouter manquante ! Enregistrez-la avec `smarthome config key` "
+            "(ou depuis les réglages de l'interface web)."
+        )
 
 
 if __name__ == "__main__":

@@ -136,10 +136,10 @@ def clean_profile(name: str, instructions: str, settings: Optional[Settings] = N
     return name, str(instructions or "").strip()[:s.AUTH_INSTRUCTIONS_MAX_CHARS]
 
 
-def tool_policy(user: Optional[User], settings: Optional[Settings] = None) -> Optional[ToolPolicy]:
-    """Outils permis à l'utilisateur (None : aucune restriction, appel interne sans utilisateur)."""
+def tool_policy(user: Optional[User], settings: Optional[Settings] = None) -> ToolPolicy:
+    """Outils permis à l'utilisateur (aucun outil sans utilisateur authentifié : fail-closed)."""
     if user is None:
-        return None
+        return ToolPolicy.parse("")
     s = settings or get_settings()
     if user.superadmin and user.role not in s.AUTH_ROLE_TOOLS:
         admin_role = (s.AUTH_ADMIN_ROLES or ["admin"])[0]
@@ -260,6 +260,38 @@ SUPERUSERS_COLLECTION = "_superusers"
 _LOCAL_PB_DB = _ROOT_DIR / "pocketbase" / "pb_data" / "data.db"
 
 
+def lookup_local_pb_user(user_id: str, settings: Optional[Settings] = None) -> Optional[dict]:
+    """Vérifie le rôle actuel d'un compte PocketBase local dans data.db (None si annuaire distant ou absent)."""
+    s = settings or get_settings()
+    if s.AUTH_PROVIDER not in ("pocketbase", "pb") or not str(user_id or "").startswith("pb_"):
+        return None
+    parsed = urllib.parse.urlparse(s.POCKETBASE_URL)
+    if parsed.hostname not in ("127.0.0.1", "localhost", "::1") or (parsed.port or 80) != 8090:
+        return None
+    if not _LOCAL_PB_DB.exists():
+        return None
+    collection = s.POCKETBASE_USERS_COLLECTION or "users"
+    if not collection.replace("_", "").isalnum():
+        return None
+    record_id = user_id.removeprefix("pb_")
+    try:
+        uri = f"file:{_LOCAL_PB_DB.as_posix()}?mode=ro"
+        with contextlib.closing(sqlite3.connect(uri, uri=True, timeout=1.0)) as conn:
+            row = conn.execute(f"SELECT id, email, role FROM {collection} WHERE id = ?", (record_id,)).fetchone()
+            if not row:
+                return {"exists": False}
+            email = str(row[1] or "").strip().lower()
+            role = str(row[2] or s.AUTH_DEFAULT_ROLE).strip().lower()
+            su_rows = conn.execute("SELECT email FROM _superusers").fetchall()
+            su_emails = {str(r[0]).strip().lower() for r in su_rows if r and r[0]}
+            is_super = bool(email) and email in su_emails
+            if is_super and role not in (s.AUTH_ADMIN_ROLES or ["admin"]):
+                role = (s.AUTH_ADMIN_ROLES or ["admin"])[0]
+            return {"exists": True, "role": role, "superadmin": is_super}
+    except (sqlite3.Error, OSError):
+        return None
+
+
 @USER_DIRECTORIES.register("pocketbase", "pb")
 class PocketBaseDirectory(UserDirectory):
     """Comptes d'une collection « auth » de PocketBase (API REST, bibliothèque standard uniquement),
@@ -301,15 +333,11 @@ class PocketBaseDirectory(UserDirectory):
         return self._from_record(record, token, superadmin=superadmin)
 
     def _from_record(self, record: dict, token: str, superadmin: bool = False) -> User:
-        # Un compte de l'annuaire ne peut jamais prendre l'identité réservée du jeton maître ou du micro
+        # Un compte de l'annuaire ne peut jamais prendre l'identité réservée du jeton maître ou du micro.
+        # Le statut superadmin n'est accordé qu'après authentification effective auprès de `_superusers`.
         user_id = f"pb_{record['id']}"
         email = str(record.get("email") or "").strip()
-        is_super = BooleanSuper(
-            superadmin
-            or bool(record.get("superadmin"))
-            or record.get("collectionName") == SUPERUSERS_COLLECTION
-            or self._is_db_superuser(email)
-        )
+        is_super = BooleanSuper(superadmin or record.get("collectionName") == SUPERUSERS_COLLECTION)
         default_name = email.split("@")[0].replace(".", " ").title() if email else record["id"]
         name = record.get("name") or record.get("username") or default_name
         raw_role = str(record.get("role") or "").strip().lower()
@@ -367,9 +395,13 @@ class PocketBaseDirectory(UserDirectory):
             record = data.get("record") or {}
             token = data.get("token") or ""
             email = str(record.get("email") or identity).strip()
-            is_super = bool(record.get("superadmin")) or self._is_db_superuser(email)
-            # Si le compte est aussi superadmin PocketBase, on récupère son jeton _superusers pour l'administration
-            if is_super or str(record.get("role") or "") in (self.settings.AUTH_ADMIN_ROLES or ["admin"]):
+            is_super = False
+            # Si le compte est aussi référencé dans _superusers, on vérifie son mot de passe auprès de _superusers
+            # pour n'accorder les privilèges superadmin qu'avec un véritable jeton _superusers.
+            may_be_super = self._is_db_superuser(email) or str(record.get("role") or "") in (
+                self.settings.AUTH_ADMIN_ROLES or ["admin"]
+            )
+            if may_be_super:
                 try:
                     su_data = pb_request(self.settings, f"{SUPERUSERS_COLLECTION}/auth-with-password",
                                          {"identity": email, "password": password})
@@ -385,7 +417,7 @@ class PocketBaseDirectory(UserDirectory):
                 su_data = pb_request(self.settings, f"{SUPERUSERS_COLLECTION}/auth-with-password",
                                      {"identity": identity, "password": password})
             except (AuthError, DirectoryUnavailable):
-                raise user_err
+                raise user_err from None
             su_record = su_data.get("record") or {}
             su_token = su_data.get("token") or ""
             if not su_record.get("id") or not su_token:
@@ -402,7 +434,7 @@ class PocketBaseDirectory(UserDirectory):
             try:
                 su_data = pb_request(self.settings, f"{SUPERUSERS_COLLECTION}/auth-refresh", token=token)
             except (AuthError, DirectoryUnavailable):
-                raise user_err
+                raise user_err from None
             su_record = su_data.get("record") or {}
             su_token = su_data.get("token") or ""
             if not su_record.get("id") or not su_token:

@@ -444,7 +444,7 @@ class AgentRunner:
             raise AgentError(f"pas de réponse après {timeout} s")
         text = "".join(streamed).strip() or final.strip()
         if error or (proc.returncode and not text):
-            detail = error or next((l for l in reversed(stderr_tail) if l.strip()), f"code {proc.returncode}")
+            detail = error or next((line for line in reversed(stderr_tail) if line.strip()), f"code {proc.returncode}")
             raise AgentError(detail[:300])
         if not streamed and final and on_text:
             on_text(final)

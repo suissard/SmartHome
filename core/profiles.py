@@ -21,23 +21,46 @@ from dotenv import dotenv_values
 
 from core.menu import Option, answered, choose
 
-PROFILES_DIR = Path(__file__).resolve().parent.parent / "profiles"
+BASE_DIR = Path(__file__).resolve().parent.parent
+PROFILES_DIR = BASE_DIR / "profiles"
+_DEFAULT_PROFILES_DIR = PROFILES_DIR
 DEFAULT_PROFILE = "hybrid"
 PROFILE_ENV_VAR = "SMARTHOME_PROFILE"
 LAST_PROFILE_FILE = ".last"
 
 
+def user_profiles_dir() -> Path:
+    """Dossier des profils modifiables par l'utilisateur (`perso.env`, `*.local.env`, `.last`).
+    Utilise `~/.config/smarthome/profiles` par défaut, sauf si `PROFILES_DIR` a été redirigé (tests)
+    ou si un `.env` local existe déjà à la racine du projet (rétrocompatibilité)."""
+    if PROFILES_DIR != _DEFAULT_PROFILES_DIR or (BASE_DIR / ".env").is_file():
+        return PROFILES_DIR
+    return Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "smarthome" / "profiles"
+
+
 def list_profiles() -> list[str]:
     """Noms des profils disponibles (défaut en premier, puis ordre alphabétique)."""
-    names = sorted(p.stem for p in PROFILES_DIR.glob("*.env") if not p.stem.endswith(".local"))
-    return sorted(names, key=lambda n: (n != DEFAULT_PROFILE, n))
+    dirs = [PROFILES_DIR]
+    user_dir = user_profiles_dir()
+    if user_dir != PROFILES_DIR and user_dir.is_dir():
+        dirs.append(user_dir)
+    found = {
+        p.stem
+        for d in dirs
+        for p in d.glob("*.env")
+        if not p.stem.endswith(".local")
+    }
+    return sorted(found, key=lambda n: (n != DEFAULT_PROFILE, n))
 
 
 def profile_path(name: str) -> Path:
+    user_path = user_profiles_dir() / f"{name}.env"
+    if user_path.is_file():
+        return user_path
     path = PROFILES_DIR / f"{name}.env"
-    if not path.is_file():
-        raise SystemExit(f"❌ [CONFIG] Profil inconnu : {name!r} (disponibles : {', '.join(list_profiles())})")
-    return path
+    if path.is_file():
+        return path
+    raise SystemExit(f"❌ [CONFIG] Profil inconnu : {name!r} (disponibles : {', '.join(list_profiles())})")
 
 
 def describe_profile(name: str) -> str:
@@ -48,17 +71,35 @@ def describe_profile(name: str) -> str:
     return ""
 
 
+def _last_profile_file() -> Optional[Path]:
+    for directory in dict.fromkeys((user_profiles_dir(), PROFILES_DIR)):
+        candidate = directory / LAST_PROFILE_FILE
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def has_saved_profile() -> bool:
+    """Indique si l'utilisateur a déjà mémorisé un profil de démarrage."""
+    return _last_profile_file() is not None
+
+
 def last_profile() -> str:
     """Dernier profil choisi dans le menu (profil par défaut s'il n'y en a pas ou s'il n'existe plus)."""
+    marker = _last_profile_file()
+    if marker is None:
+        return DEFAULT_PROFILE
     try:
-        name = (PROFILES_DIR / LAST_PROFILE_FILE).read_text(encoding="utf-8").strip()
+        name = marker.read_text(encoding="utf-8").strip()
     except OSError:
         return DEFAULT_PROFILE
     return name if name in list_profiles() else DEFAULT_PROFILE
 
 
 def remember_profile(name: str):
-    (PROFILES_DIR / LAST_PROFILE_FILE).write_text(f"{name}\n", encoding="utf-8")
+    target_dir = user_profiles_dir()
+    target_dir.mkdir(parents=True, exist_ok=True)
+    (target_dir / LAST_PROFILE_FILE).write_text(f"{name}\n", encoding="utf-8")
 
 
 def active_profile() -> str:
@@ -66,14 +107,19 @@ def active_profile() -> str:
 
 
 def local_overrides_path(name: Optional[str] = None) -> Path:
-    """Fichier non versionné des réglages du profil modifiés depuis l'interface web."""
-    return PROFILES_DIR / f"{name or active_profile()}.local.env"
+    """Fichier non versionné des réglages du profil modifiés depuis l'interface web ou la CLI."""
+    return user_profiles_dir() / f"{name or active_profile()}.local.env"
 
 
 def profile_values(name: Optional[str] = None) -> dict[str, str]:
     """Réglages du profil (actif par défaut) et de sa surcharge locale, sans interpolation de variables."""
-    values = dict(dotenv_values(profile_path(name or active_profile()), interpolate=False))
-    local = local_overrides_path(name)
+    target = name or active_profile()
+    values = dict(dotenv_values(profile_path(target), interpolate=False))
+    if user_profiles_dir() != PROFILES_DIR:
+        legacy_local = PROFILES_DIR / f"{target}.local.env"
+        if legacy_local.is_file():
+            values.update(dotenv_values(legacy_local, interpolate=False))
+    local = local_overrides_path(target)
     if local.is_file():
         values.update(dotenv_values(local, interpolate=False))
     return {k: v for k, v in values.items() if v is not None}
@@ -122,7 +168,7 @@ def choose_profile(setup: bool = False) -> str:
 
 def _pick_from_menu() -> Optional[str]:
     names, last = list_profiles(), last_profile()
-    first_launch = not (PROFILES_DIR / LAST_PROFILE_FILE).exists()
+    first_launch = not has_saved_profile()
     options = [Option("Configurer pas à pas", None, "Quelques questions pour créer votre configuration")]
     for name in names:
         options.append(Option(name, name, describe_profile(name).split(" : ", 1)[-1],

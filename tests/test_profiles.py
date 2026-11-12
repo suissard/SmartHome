@@ -157,8 +157,10 @@ class ProfilesTest(unittest.TestCase):
 
     def test_openrouter_api_key_is_editable_and_saves_to_env(self):
         self.assertIn("OPENROUTER_API_KEY", settings_store.EDITABLE)
-        desc = {f["name"]: f for g in settings_store.describe(Settings()) for f in g["fields"]}
+        desc = {f["name"]: f for g in settings_store.describe(Settings(OPENROUTER_API_KEY="sk-secret")) for f in g["fields"]}
         self.assertEqual(desc["OPENROUTER_API_KEY"]["kind"], "password")
+        self.assertEqual(desc["OPENROUTER_API_KEY"]["value"], "")
+        self.assertTrue(desc["OPENROUTER_API_KEY"]["configured"])
         with tempfile.TemporaryDirectory() as tmp:
             env = Path(tmp) / ".env"
             s = Settings(OPENROUTER_API_KEY="sk-new-key")

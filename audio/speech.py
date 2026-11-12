@@ -48,8 +48,9 @@ class SpeechPipeline:
             return
         with self._idle:
             self._pending += 1
+            generation = self._generation
         voice = self.voice() if callable(self.voice) else self.voice
-        self._texts.put((self._generation, text, voice))
+        self._texts.put((generation, text, voice))
 
     def wait(self, timeout: Optional[float] = None) -> bool:
         """Attend la fin de tout ce qui a été demandé. Retourne False si le délai expire."""
@@ -66,8 +67,9 @@ class SpeechPipeline:
 
     def interrupt(self):
         """Abandonne les phrases en attente et coupe celle en cours de lecture."""
-        self._generation += 1
-        self._stop.set()
+        with self._idle:
+            self._generation += 1
+            self._stop.set()
 
     def close(self):
         """Arrête les threads une fois la file traitée (pipeline créé pour une seule demande)."""
@@ -86,7 +88,9 @@ class SpeechPipeline:
                 self._audio.put(None)
                 return
             generation, text, voice = item
-            if generation != self._generation:
+            with self._idle:
+                stale = generation != self._generation
+            if stale:
                 self._done()
                 continue
             try:
@@ -104,8 +108,11 @@ class SpeechPipeline:
                 return
             generation, samples, sample_rate = item
             try:
-                if generation == self._generation and len(samples):
-                    self._stop.clear()
+                with self._idle:
+                    should_play = generation == self._generation and len(samples) > 0
+                    if should_play:
+                        self._stop.clear()
+                if should_play:
                     self.sink(samples, sample_rate)
             except Exception as e:
                 print(f"⚠️ [SPEECH] Lecture impossible : {e}")

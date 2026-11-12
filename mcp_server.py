@@ -28,24 +28,11 @@ from core.config import (
     MCP_TRANSPORT,
     MCP_HOST,
     MCP_PORT,
-    MCP_AUTH_TOKEN,
     MCP_AUDIO_DIR,
     get_settings,
-    LLM_PROVIDER,
-    OLLAMA_MODEL,
-    OPENROUTER_MODEL,
-    STT_PROVIDER,
-    WHISPER_MODEL,
-    TTS_PROVIDER,
-    TTS_MODEL_PATH,
-    FOLLOW_UP_TIMEOUT,
-    LLM_HISTORY_MESSAGES,
-    ACTIONS_ENABLED,
-    ACTIONS_DYNAMIC_PROMPT,
-    DUCKING_ENABLED,
-    DUCKING_VOLUME_PERCENT,
 )
-from core.security import BearerTokenMiddleware, require_token_for_host
+from core.security import BearerTokenMiddleware, LocalOnlyMiddleware, require_token_for_host
+from core.users import admin_user, tool_policy
 from actions.manager import get_action_manager
 from actions.registry import get_all_commands, get_command_by_tag
 from llm.llm import (
@@ -167,11 +154,20 @@ def execute_action(tag: str, args: str = "", dry_run: bool = False) -> str:
     if not cmd:
         return f"❌ Action inconnue : [{tag.upper()}]. Utilisez list_actions() pour consulter les actions disponibles."
 
-    if cmd.tool_name in {name.strip().lower() for name in get_settings().AUTH_SUPERADMIN_TOOLS}:
-        return f"⛔ Action [{cmd.tag}] réservée aux superadministrateurs (passerelle avec un compte superadmin)."
+    s = get_settings()
+    reserved = {
+        name.strip().lower()
+        for name in (*s.AUTH_SUPERADMIN_TOOLS, *s.AUTH_ADMIN_TOOLS)
+        if name.strip()
+    }
+    if cmd.tool_name in reserved:
+        return f"⛔ Action [{cmd.tag}] réservée aux administrateurs/superadministrateurs (passerelle)."
 
     if dry_run:
         return f"🔍 [DRY RUN] Action [{cmd.tag}] simulée avec succès. Arguments: '{args}'"
+
+    if getattr(cmd, "force_confirm", False) or (s.ACTIONS_CONFIRM_DANGEROUS and getattr(cmd, "danger", "safe") == "confirm"):
+        return f"⛔ Action [{cmd.tag}] bloquée : confirmation interactive requise (impossible via MCP direct)."
 
     code, out, err = cmd.execute_sync(args)
     if code == 0:
@@ -402,11 +398,13 @@ def ask_assistant(prompt: str, execute_actions: bool = True, speak_response: boo
         # Outils appelés en function calling (les outils dangereux sont refusés : pas de confirmation possible ici)
         executed_tags = [r.call.name for r in get_conversation().last_tool_results if r.executed]
 
-        if execute_actions and ACTIONS_ENABLED and raw_response:
+        s = get_settings()
+        if execute_actions and s.ACTIONS_ENABLED and raw_response:
             action_mgr = get_action_manager()
+            policy = tool_policy(admin_user(s), s)
             cleaned_text, detected_actions = action_mgr.extract_actions(raw_response)
             for act in detected_actions:
-                if action_mgr.execute_action(act):
+                if action_mgr.execute_action(act, confirm=None, policy=policy):
                     executed_tags.append(act.get("tag", ""))
             processed_text = cleaned_text
 
@@ -463,18 +461,18 @@ def get_status_resource() -> str:
         "version": "1.0.0",
         "status": "online",
         "providers": {
-            "llm": {"provider": LLM_PROVIDER, "description": LLM_PROVIDERS.get(LLM_PROVIDER).describe(settings)},
-            "stt": {"provider": STT_PROVIDER, "description": STT_PROVIDERS.get(STT_PROVIDER).describe(settings)},
-            "tts": {"provider": TTS_PROVIDER, "description": TTS_PROVIDERS.get(TTS_PROVIDER).describe(settings)},
+            "llm": {"provider": settings.LLM_PROVIDER, "description": LLM_PROVIDERS.get(settings.LLM_PROVIDER).describe(settings)},
+            "stt": {"provider": settings.STT_PROVIDER, "description": STT_PROVIDERS.get(settings.STT_PROVIDER).describe(settings)},
+            "tts": {"provider": settings.TTS_PROVIDER, "description": TTS_PROVIDERS.get(settings.TTS_PROVIDER).describe(settings)},
         },
         "features": {
-            "actions_enabled": ACTIONS_ENABLED,
+            "actions_enabled": settings.ACTIONS_ENABLED,
             "actions_count": len(commands),
-            "dynamic_prompt": ACTIONS_DYNAMIC_PROMPT,
-            "ducking_enabled": DUCKING_ENABLED,
-            "ducking_volume_percent": DUCKING_VOLUME_PERCENT,
-            "follow_up_timeout_seconds": FOLLOW_UP_TIMEOUT,
-            "history_messages_limit": LLM_HISTORY_MESSAGES,
+            "dynamic_prompt": settings.ACTIONS_DYNAMIC_PROMPT,
+            "ducking_enabled": settings.DUCKING_ENABLED,
+            "ducking_volume_percent": settings.DUCKING_VOLUME_PERCENT,
+            "follow_up_timeout_seconds": settings.FOLLOW_UP_TIMEOUT,
+            "history_messages_limit": settings.LLM_HISTORY_MESSAGES,
             "active_history_count": len(history),
         }
     }
@@ -515,22 +513,25 @@ def get_config_resource() -> str:
     """
     Retourne un résumé des réglages de configuration non-confidentiels sous format JSON.
     """
+    from core.config import resolve_piper_voice
+    s = get_settings()
+    voice_path, _ = resolve_piper_voice(s)
     cfg = {
-        "LLM_PROVIDER": LLM_PROVIDER,
-        "OLLAMA_MODEL": OLLAMA_MODEL,
-        "OPENROUTER_MODEL": OPENROUTER_MODEL,
-        "STT_PROVIDER": STT_PROVIDER,
-        "WHISPER_MODEL": WHISPER_MODEL,
-        "TTS_PROVIDER": TTS_PROVIDER,
-        "TTS_VOICE": Path(TTS_MODEL_PATH).stem,
-        "ACTIONS_ENABLED": ACTIONS_ENABLED,
-        "DUCKING_ENABLED": DUCKING_ENABLED,
-        "DUCKING_VOLUME_PERCENT": DUCKING_VOLUME_PERCENT,
-        "FOLLOW_UP_TIMEOUT": FOLLOW_UP_TIMEOUT,
-        "LLM_HISTORY_MESSAGES": LLM_HISTORY_MESSAGES,
-        "MCP_TRANSPORT": MCP_TRANSPORT,
-        "MCP_HOST": MCP_HOST,
-        "MCP_PORT": MCP_PORT,
+        "LLM_PROVIDER": s.LLM_PROVIDER,
+        "OLLAMA_MODEL": s.OLLAMA_MODEL,
+        "OPENROUTER_MODEL": s.OPENROUTER_MODEL,
+        "STT_PROVIDER": s.STT_PROVIDER,
+        "WHISPER_MODEL": s.WHISPER_MODEL,
+        "TTS_PROVIDER": s.TTS_PROVIDER,
+        "TTS_VOICE": Path(voice_path).stem,
+        "ACTIONS_ENABLED": s.ACTIONS_ENABLED,
+        "DUCKING_ENABLED": s.DUCKING_ENABLED,
+        "DUCKING_VOLUME_PERCENT": s.DUCKING_VOLUME_PERCENT,
+        "FOLLOW_UP_TIMEOUT": s.FOLLOW_UP_TIMEOUT,
+        "LLM_HISTORY_MESSAGES": s.LLM_HISTORY_MESSAGES,
+        "MCP_TRANSPORT": s.MCP_TRANSPORT,
+        "MCP_HOST": s.MCP_HOST,
+        "MCP_PORT": s.MCP_PORT,
     }
     return json.dumps(cfg, indent=2, ensure_ascii=False)
 
@@ -609,8 +610,10 @@ def main():
         app.run(transport="stdio")
         return
 
+    s = get_settings()
+    token = s.MCP_AUTH_TOKEN
     # Transports réseau : refus de démarrer sans jeton hors loopback (LAN, Tailscale...)
-    require_token_for_host(host, MCP_AUTH_TOKEN, "MCP", "MCP_AUTH_TOKEN")
+    require_token_for_host(host, token, "MCP", "MCP_AUTH_TOKEN")
 
     if transport == "sse":
         starlette_app = app.sse_app(host=host)
@@ -619,8 +622,8 @@ def main():
         starlette_app = app.streamable_http_app(host=host)
         endpoint = "/mcp"
 
-    asgi_app = BearerTokenMiddleware(starlette_app, MCP_AUTH_TOKEN) if MCP_AUTH_TOKEN else starlette_app
-    auth_info = "jeton Bearer requis" if MCP_AUTH_TOKEN else "sans authentification (loopback uniquement)"
+    asgi_app = BearerTokenMiddleware(starlette_app, token) if token else LocalOnlyMiddleware(starlette_app)
+    auth_info = "jeton Bearer requis" if token else "sans authentification (loopback uniquement)"
     print(f"🚀 [MCP] Démarrage du serveur SmartHome ({transport}) sur http://{host}:{port}{endpoint} — {auth_info}", file=sys.stderr)
 
     import uvicorn

@@ -5,7 +5,7 @@ Réutilise la liste blanche de [OPEN] (ACTIONS_OPEN_ALLOWED_APPS).
 
 from typing import List, Tuple
 from actions.base import BaseAction
-from core.config import ACTIONS_OPEN_ALLOWED_APPS
+from core.config import get_settings
 
 _CLOSE_SCRIPT = r"""
 APP="${1:-}"
@@ -39,11 +39,11 @@ class CloseAppAction(BaseAction):
         )
 
     def decision_choices(self):
-        return {app: app for app in ACTIONS_OPEN_ALLOWED_APPS}
+        return {app: app for app in get_settings().ACTIONS_OPEN_ALLOWED_APPS}
 
     def build_args(self, args: str = "") -> List[str]:
         app = " ".join((args or "").lower().split())
-        if app not in ACTIONS_OPEN_ALLOWED_APPS:
+        if app not in get_settings().ACTIONS_OPEN_ALLOWED_APPS:
             print(f"⛔ [ACTIONS] Application non autorisée pour [CLOSE] : '{args}' (voir ACTIONS_OPEN_ALLOWED_APPS)")
             return []
         return [app]
@@ -57,7 +57,7 @@ class CloseAppAction(BaseAction):
         try:
             import subprocess
             print(f"🚀 [ACTIONS] [Windows] Fermeture de l'application '{app_target}'...")
-            res = subprocess.run(["taskkill", "/IM", app_target, "/F"], capture_output=True, text=True, timeout=timeout)
+            res = subprocess.run(["taskkill", "/IM", app_target], capture_output=True, text=True, timeout=timeout)
             if res.returncode == 0:
                 print(f"✅ [ACTIONS] [Windows] Application '{app_target}' fermée.")
                 return 0, f"{app} fermé", ""

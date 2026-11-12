@@ -12,7 +12,7 @@ import re
 import sys
 import typing
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 import annotated_types
 from pydantic import ValidationError
@@ -319,17 +319,31 @@ def _field_spec(name: str) -> dict:
     return spec
 
 
+_SECRET_FIELDS = frozenset({"OPENROUTER_API_KEY"})
+
+
 def describe(settings: Settings) -> list[dict]:
     """Groupes de champs modifiables avec leur valeur actuelle, prêts à afficher dans un formulaire."""
     helps = _help_texts()
     values = settings.model_dump()
     groups = []
     for title, fields in EDITABLE_GROUPS:
-        groups.append({"title": title, "fields": [
-            {"name": name, "label": label, "live": live, "help": helps.get(name, ""), "value": values[name],
-             "when": VISIBLE_WHEN.get(name), **_field_spec(name)}
-            for name, label, live in fields
-        ]})
+        rendered = []
+        for name, label, live in fields:
+            is_secret = name in _SECRET_FIELDS
+            entry = {
+                "name": name,
+                "label": label,
+                "live": live,
+                "help": helps.get(name, ""),
+                "value": "" if is_secret else values[name],
+                "when": VISIBLE_WHEN.get(name),
+                **_field_spec(name),
+            }
+            if is_secret:
+                entry["configured"] = bool(values[name])
+            rendered.append(entry)
+        groups.append({"title": title, "fields": rendered})
     return groups
 
 
@@ -371,7 +385,8 @@ def to_env_value(value: Any) -> str:
 
 def save_to_env(settings: Settings, names: list[str], env_file: Path = ENV_FILE):
     """Écrit les champs dans le fichier .env en conservant les commentaires et l'ordre (ajout en fin de fichier sinon)."""
-    lines = env_file.read_text(encoding="utf-8").splitlines() if env_file.exists() else []
+    created = not env_file.exists()
+    lines = env_file.read_text(encoding="utf-8").splitlines() if not created else []
     values = settings.model_dump()
     for name in names:
         entry = f"{name}={to_env_value(values[name])}"
@@ -381,7 +396,13 @@ def save_to_env(settings: Settings, names: list[str], env_file: Path = ENV_FILE)
             lines.append(entry)
         else:
             lines[index] = entry
+    env_file.parent.mkdir(parents=True, exist_ok=True)
     env_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    if created:
+        try:
+            env_file.chmod(0o600)
+        except OSError:
+            pass
 
 
 def save_changes(settings: Settings, names: list[str], env_file: Path = ENV_FILE):
@@ -394,6 +415,48 @@ def save_changes(settings: Settings, names: list[str], env_file: Path = ENV_FILE
     others = [name for name in names if name not in from_profile]
     if others:
         save_to_env(settings, others, env_file)
+
+
+def set_fields(settings: Settings, updates: dict[str, Any], env_file: Optional[Path] = None) -> tuple[Settings, list[str]]:
+    """Valide et enregistre n'importe quel champ de `Settings` (utilisé par la CLI `smarthome config`)."""
+    target = ENV_FILE if env_file is None else env_file
+    known = set(Settings.model_fields)
+    unknown = sorted(set(updates) - known)
+    if unknown:
+        raise ValueError(f"Paramètre inconnu : {', '.join(unknown)}")
+    current = settings.model_dump()
+    changed_candidates = [name for name, value in updates.items() if value != current[name]]
+    if not changed_candidates:
+        return settings, []
+    try:
+        new = Settings.model_validate({**settings.model_dump(exclude_unset=True), **{n: updates[n] for n in changed_candidates}})
+    except ValidationError as e:
+        details = "; ".join(f"{err['loc'][0]} : {err['msg']}" for err in e.errors())
+        raise ValueError(f"Valeur invalide — {details}") from None
+    current_new = new.model_dump()
+    changed = [name for name in changed_candidates if current_new[name] != current[name]]
+    if changed:
+        save_changes(new, changed, target)
+    return new, changed
+
+
+def unset_field(name: str, env_file: Optional[Path] = None) -> bool:
+    """Supprime une clé du fichier de configuration (et de la surcharge locale du profil) pour revenir au défaut."""
+    target = ENV_FILE if env_file is None else env_file
+    pattern = re.compile(rf"^\s*(?:export\s+)?{re.escape(name)}\s*=")
+    removed = False
+    paths = [target]
+    if target == ENV_FILE:
+        paths.append(local_overrides_path())
+    for path in paths:
+        if not path.is_file():
+            continue
+        lines = path.read_text(encoding="utf-8").splitlines()
+        kept = [line for line in lines if not pattern.match(line)]
+        if len(kept) != len(lines):
+            path.write_text(("\n".join(kept) + "\n") if kept else "", encoding="utf-8")
+            removed = True
+    return removed
 
 
 # Cœur qui applique les changements demandés par l'assistant lui-même (actions/modules/assistant_settings.py).
@@ -423,4 +486,5 @@ if __name__ == "__main__":
         print(f"\n  {group['title']}")
         for f in group["fields"]:
             when = "immédiat" if f["live"] else "au redémarrage"
-            print(f"    • {f['name']:<30} {f['kind']:<7} {when:<15} = {f['value']!r}")
+            shown = ("***" if f.get("configured") else "") if f["name"] in _SECRET_FIELDS else f["value"]
+            print(f"    • {f['name']:<30} {f['kind']:<7} {when:<15} = {shown!r}")

@@ -22,6 +22,7 @@ from core.assistant import AssistantCore, _asks_to_sleep
 from core.config import Settings
 from core.sentences import matches_phrase
 from core.tools import Tool, ToolCall, ToolRegistry
+from core.users import admin_user
 from llm.providers import LLMProvider, LLMResponse
 from tests.test_gateway import SETTINGS
 
@@ -117,7 +118,8 @@ class TestCoreEndConversation(unittest.TestCase):
         self.assertTrue(events[-1]["end_conversation"])
 
     def test_sleep_tool_ends_conversation(self):
-        reply = sleep_core().respond("s", text="Je vais me coucher")
+        core = sleep_core()
+        reply = core.respond("s", text="Je vais me coucher", user=admin_user(core.settings))
         self.assertTrue(reply.end_conversation)
         self.assertEqual(reply.text, "Bonne soirée !")
 

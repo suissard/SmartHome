@@ -270,9 +270,22 @@ class ConversationArchive:
             "SELECT conversation, MIN(created_at) AS created, MAX(created_at) AS updated, COUNT(*) AS n, MAX(id) AS last"
             f" FROM messages WHERE source = ?{owner} AND deleted_at IS NULL AND superseded_by IS NULL"
             " GROUP BY conversation ORDER BY last DESC LIMIT ?", (*params, limit))
+        if not heads:
+            return []
+        conv_ids = [head["conversation"] for head in heads]
+        placeholders = ",".join("?" for _ in conv_ids)
+        all_rows = self._read(
+            "SELECT id, conversation, role, content, tools FROM messages"
+            f" WHERE conversation IN ({placeholders}) AND deleted_at IS NULL AND superseded_by IS NULL"
+            " ORDER BY conversation, id",
+            conv_ids,
+        )
+        by_conv: dict[str, list[sqlite3.Row]] = {}
+        for r in all_rows:
+            by_conv.setdefault(r["conversation"], []).append(r)
         result = []
         for head in heads:
-            rows = self._visible(head["conversation"])
+            rows = by_conv.get(head["conversation"], [])
             first_user = next((r["content"] for r in rows if r["role"] == "user" and r["content"].strip()), "")
             title = first_user.strip()
             tools: list[str] = []

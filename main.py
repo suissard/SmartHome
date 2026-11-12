@@ -140,6 +140,8 @@ def run_local_turn(core, speech, stream, mic_lock, barge_in, user_input, remote=
             core.cancel(LOCAL_SESSION)
             speech.interrupt()
             worker.join(timeout=30)
+            if worker.is_alive():
+                print("⚠️ [LOCAL] Le traitement du tour précédent met du temps à s'arrêter.")
             speech.wait(timeout=2)
             reply = result.get("reply") or Reply(LOCAL_SESSION)
             reply.interrupted = True
@@ -150,6 +152,8 @@ def run_local_turn(core, speech, stream, mic_lock, barge_in, user_input, remote=
             core.cancel(LOCAL_SESSION)
             speech.interrupt()
             worker.join(timeout=30)
+            if worker.is_alive():
+                print("⚠️ [LOCAL] Le traitement du tour précédent met du temps à s'arrêter.")
             speech.wait(timeout=2)
             reply = result.get("reply") or Reply(LOCAL_SESSION)
             reply.interrupted = True
@@ -230,7 +234,7 @@ def main():
             stt_info += f" — {core.llm.model} comprend l'audio ✅"
         else:
             stt_info += f" — {core.llm.model} ne comprend pas l'audio : transcription par {settings.STT_FALLBACK_PROVIDER}"
-            core.fallback_stt  # chargé dès maintenant plutôt qu'à la première demande
+            _ = core.fallback_stt  # chargé dès maintenant plutôt qu'à la première demande
     tts_info = tts.engine.describe(settings)
     actions_info = f"Activées ({len(get_all_commands())} commandes prêtes)" if ACTIONS_ENABLED else "Désactivées"
     tools = conversation.tools.all()
@@ -309,15 +313,18 @@ def main():
                     in_conversation = True
 
                     while in_conversation:
+                        s = core.settings
                         user_input, elapsed_t, _ = transcriber.record_and_transcribe(
                             stream,
-                            timeout_silence=FOLLOW_UP_TIMEOUT,
+                            timeout_silence=s.FOLLOW_UP_TIMEOUT,
                             should_stop=remote.active,
                         )
 
                         if remote.active():
                             # On parle au téléphone : l'ordinateur se tait et repasse directement en veille
                             print("\n📱 Conversation reprise sur un client distant : mise en veille.")
+                            if s.AGENTS_LEAVE_ON_SLEEP:
+                                core.set_agent(LOCAL_SESSION, None)
                             in_conversation = False
                             continue
 
@@ -332,26 +339,31 @@ def main():
                             # 2. Réponse : actions exécutées et voix jouée au fil de la génération, interruptible
                             reply = run_local_turn(core, speech, stream, mic_lock, barge_in, user_input, remote)
                             print()
+                            s = core.settings
 
                             # 3. Fin de conversation demandée (« au revoir », outil sleep) : retour en veille
                             if reply.end_conversation and remote.active():
                                 print("\n📱 Conversation reprise sur un client distant : mise en veille.")
+                                if s.AGENTS_LEAVE_ON_SLEEP:
+                                    core.set_agent(LOCAL_SESSION, None)
                                 in_conversation = False
                                 continue
                             if reply.end_conversation:
                                 print("💤 Fin de conversation demandée.")
                                 # Le LLM a déjà pris congé à voix haute : un simple son suffit
                                 if reply.text:
-                                    feedback.play_sound(settings.FEEDBACK_TIMEOUT_SOUND)
+                                    feedback.play_sound(s.FEEDBACK_TIMEOUT_SOUND)
                                 else:
                                     feedback.on_timeout()
+                                if s.AGENTS_LEAVE_ON_SLEEP:
+                                    core.set_agent(LOCAL_SESSION, None)
                                 in_conversation = False
                                 continue
 
                             # 4. Signal de passage de la parole (son court si l'utilisateur a interrompu)
                             if reply.interrupted:
-                                if settings.BARGE_IN_SOUND:
-                                    feedback.play_sound(settings.BARGE_IN_SOUND)
+                                if s.BARGE_IN_SOUND:
+                                    feedback.play_sound(s.BARGE_IN_SOUND)
                             else:
                                 feedback.on_response_end()
 
@@ -360,7 +372,7 @@ def main():
                             # Signal / Phrase de mise en veille
                             feedback.on_timeout()
                             in_conversation = False
-                            if settings.AGENTS_LEAVE_ON_SLEEP:
+                            if s.AGENTS_LEAVE_ON_SLEEP:
                                 core.set_agent(LOCAL_SESSION, None)
 
                 except Exception as e:

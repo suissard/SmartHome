@@ -7,11 +7,11 @@
   <meta name="theme-color" content="#eef2f7" media="(prefers-color-scheme: light)">
   <meta name="description" content="Piloter son ordinateur à la voix, depuis n'importe quel appareil.">
   <title>SmartHome</title>
-  <link rel="manifest" href="manifest.webmanifest?v=18">
+  <link rel="manifest" href="manifest.webmanifest?v=19">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icon-192.png">
-  <link rel="stylesheet" href="style.css?v=18">
-  <script src="app.js?v=18" type="module"></script>
+  <link rel="stylesheet" href="style.css?v=19">
+  <script src="app.js?v=19" type="module"></script>
 </head>
 <body>
   <header class="topbar">
@@ -198,7 +198,7 @@
       </div>
 
       <div id="token-fields" hidden>
-        <p id="token-help" class="setup-hint">Saisissez le jeton maître de la passerelle (<code>GATEWAY_AUTH_TOKEN</code> dans le fichier <code>.env</code>). Il vous donne les droits administrateur.</p>
+        <p id="token-help" class="setup-hint">Saisissez le jeton maître de la passerelle (affiché au démarrage ou via <code>smarthome config token</code>). Il vous donne les droits administrateur.</p>
         <label for="token">Jeton d'authentification</label>
         <input id="token" type="password" autocomplete="current-password" spellcheck="false" placeholder="Laisser vide si aucun jeton configuré en local">
       </div>
@@ -221,167 +221,234 @@
         </button>
       </div>
 
-      <!-- Écoute du mot-clé par le micro de l'ordinateur : coupée en cas de faux positifs (WAKEWORD_ENABLED) -->
-      <section id="wakeword-card" class="wakeword-card" data-state="on" aria-labelledby="wakeword-title">
-        <span class="wakeword-icon" aria-hidden="true">
-          <svg class="ww-on" viewBox="0 0 24 24"><path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.3-3c0 3-2.54 5.1-5.3 5.1S6.7 14 6.7 11H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c3.28-.48 6-3.3 6-6.72h-1.7z"/></svg>
-          <svg class="ww-off" viewBox="0 0 24 24"><path d="M19 11h-1.7c0 .74-.16 1.43-.43 2.05l1.23 1.23c.56-.98.9-2.09.9-3.28zm-4.02.17c0-.06.02-.11.02-.17V5c0-1.66-1.34-3-3-3S9 3.34 9 5v.18l5.98 5.99zM4.27 3 3 4.27l6.01 6.01V11c0 1.66 1.33 3 2.99 3 .22 0 .44-.03.65-.08l1.66 1.66c-.71.33-1.5.52-2.31.52-2.76 0-5.3-2.1-5.3-5.1H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c.91-.13 1.77-.45 2.54-.9L19.73 21 21 19.73 4.27 3z"/></svg>
-        </span>
-        <div class="wakeword-text">
-          <h3 id="wakeword-title">Écoute du mot-clé sur l'ordinateur</h3>
-          <p id="wakeword-state" class="meta">—</p>
-          <p id="wakeword-hint" class="meta wakeword-hint" hidden></p>
-        </div>
-        <label class="switch" title="Activer / couper l'écoute du mot-clé">
-          <input id="wakeword-toggle" type="checkbox" role="switch" aria-labelledby="wakeword-title" checked>
-          <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
-        </label>
-      </section>
-
-      <!-- Choix rapide de l'interlocuteur : l'assistant ou un agent externe (même effet que la pastille du modèle) -->
-      <section id="agent-card" class="agent-card" aria-labelledby="agent-card-title" hidden>
-        <div class="agent-card-head">
-          <h3 id="agent-card-title">Interlocuteur</h3>
-          <p id="agent-card-state" class="meta">—</p>
-        </div>
-        <div id="agent-choices" class="agent-choices" role="radiogroup" aria-labelledby="agent-card-title"></div>
-      </section>
-
-      <!-- Mémoire à long terme du compte (core/memory.py) : souvenirs donnés à l'assistant, effaçables -->
-      <section id="memory-card" class="agent-card memory-card" aria-labelledby="memory-card-title" hidden>
-        <div class="agent-card-head">
-          <h3 id="memory-card-title">Ce que l'assistant a retenu</h3>
-          <p id="memory-card-state" class="meta">—</p>
-        </div>
-        <ul id="memory-list" class="memory-list"></ul>
-        <div class="memory-add">
-          <input id="memory-input" type="text" maxlength="300" placeholder="Ajouter : « je préfère le thé au café »" aria-label="Nouveau souvenir">
-          <button type="button" id="memory-add-btn" class="secondary sm-btn">Ajouter</button>
-        </div>
-        <p id="memory-msg" class="meta" role="status"></p>
-      </section>
-
-      <!-- Carte d'informations de connexion repensée -->
-      <section class="conn-card" id="conn-card" aria-label="Informations de connexion">
-        <div class="conn-card-top">
-          <div class="conn-avatar-wrap">
-            <span id="conn-avatar" class="conn-avatar">?</span>
-            <span id="conn-dot" class="conn-dot" data-state="offline"></span>
-          </div>
-          <div class="conn-identity">
-            <div class="conn-name-row">
-              <span id="user-name" class="conn-user-name">—</span>
-              <span id="conn-role-badge" class="role-badge" data-role="none">Hors ligne</span>
-            </div>
-            <span id="conn-user-email" class="conn-user-email" hidden></span>
-          </div>
-        </div>
-
-        <div class="conn-details-grid">
-          <div class="conn-detail-item">
-            <span class="conn-detail-label">État réseau</span>
-            <span id="conn-state-label" class="conn-detail-val">Déconnecté</span>
-          </div>
-          <div class="conn-detail-item">
-            <span class="conn-detail-label">Authentification</span>
-            <span id="conn-auth-type" class="conn-detail-val">—</span>
-          </div>
-          <div class="conn-detail-item">
-            <span class="conn-detail-label">Session active</span>
-            <code id="session-id" class="conn-detail-val">—</code>
-          </div>
-          <div class="conn-detail-item">
-            <span class="conn-detail-label">Permissions</span>
-            <span id="conn-tools-info" class="conn-detail-val">—</span>
-          </div>
-          <div class="conn-detail-item">
-            <span class="conn-detail-label">Dépôt GitHub</span>
-            <span id="conn-repo-info" class="conn-detail-val">suissard/SmartHome</span>
-          </div>
-          <div class="conn-detail-item">
-            <span class="conn-detail-label">Version (Locale / GitHub)</span>
-            <span id="conn-version-info" class="conn-detail-val">Vérification…</span>
-          </div>
-        </div>
-
-        <div class="conn-card-actions">
-          <button type="button" id="settings-login-btn" class="secondary sm-btn">Se connecter</button>
-          <button type="button" id="conn-update-btn" class="update-action-btn sm-btn" hidden>
-            <svg viewBox="0 0 24 24" aria-hidden="true" width="15" height="15"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 14h-2v-6H8l4-4 4 4h-3v6z"/></svg>
-            <span>Mise à jour GitHub</span>
-          </button>
-          <button type="button" id="conn-admin-btn" class="admin-action-btn sm-btn" hidden>
-            <svg viewBox="0 0 24 24" aria-hidden="true" width="15" height="15"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm0 10.99h7c-.53 4.12-3.28 7.79-7 8.94V12H5V6.3l7-3.11v8.8z"/></svg>
-            <span>Admin PocketBase</span>
-          </button>
-          <button type="button" id="logout-btn" class="danger sm-btn">Déconnexion</button>
-        </div>
-      </section>
-
-      <div class="settings-toggles">
-        <label class="toggle">
-          <input id="speak" type="checkbox">
-          <span>Réponse vocale sur cet appareil</span>
-        </label>
-        <label class="toggle">
-          <input id="autostop" type="checkbox">
-          <span>Arrêter l'écoute automatiquement à la fin de la phrase</span>
-        </label>
+      <!-- Onglets des réglages -->
+      <div class="setup-tabs settings-tabs" id="settings-tabs" role="tablist" aria-label="Catégories de réglages">
+        <button type="button" id="settings-tab-general" class="setup-tab active" role="tab" aria-selected="true" aria-controls="settings-panel-general" data-tab="general">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.3-3c0 3-2.54 5.1-5.3 5.1S6.7 14 6.7 11H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c3.28-.48 6-3.3 6-6.72h-1.7z"/></svg>
+          <span>Général</span>
+        </button>
+        <button type="button" id="settings-tab-account" class="setup-tab" role="tab" aria-selected="false" aria-controls="settings-panel-account" data-tab="account">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>
+          <span>Compte</span>
+        </button>
+        <button type="button" id="settings-tab-system" class="setup-tab" role="tab" aria-selected="false" aria-controls="settings-panel-system" data-tab="system">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
+          <span>Système</span>
+        </button>
       </div>
 
-      <!-- Profil d'un compte utilisateur (prénom et consignes ajoutés au prompt de ses conversations) -->
-      <section class="block" id="profile" aria-labelledby="profile-title" hidden>
-        <h3 id="profile-title">Mon profil</h3>
-        <label for="profile-name">Prénom</label>
-        <input id="profile-name" type="text" maxlength="80" autocomplete="given-name">
-        <label for="profile-assistant-name">Nom de l'assistant</label>
-        <input id="profile-assistant-name" type="text" maxlength="40" autocomplete="off" aria-describedby="profile-assistant-help">
-        <p id="profile-assistant-help" class="meta">Affiché dans la conversation et donné à l'assistant. Vide : nom par défaut.</p>
-        <label for="profile-instructions">Consignes pour l'assistant</label>
-        <textarea id="profile-instructions" rows="3" maxlength="1000" aria-describedby="profile-help"
-                  placeholder="Ex : tutoie-moi, réponses courtes, explique les termes techniques"></textarea>
-        <p id="profile-help" class="meta">Elles changent le ton des réponses, pas ce que vous avez le droit de faire.</p>
-        <div id="profile-voice-field" hidden>
-          <label for="profile-voice">Voix de l'assistant</label>
-          <div class="row">
-            <select id="profile-voice"></select>
-            <button type="button" id="profile-voice-play">Écouter</button>
+      <!-- Onglet 1 : Général -->
+      <div id="settings-panel-general" class="settings-panel" role="tabpanel" aria-labelledby="settings-tab-general">
+        <!-- Écoute du mot-clé par le micro de l'ordinateur : coupée en cas de faux positifs (WAKEWORD_ENABLED) -->
+        <section id="wakeword-card" class="wakeword-card" data-state="on" aria-labelledby="wakeword-title">
+          <span class="wakeword-icon" aria-hidden="true">
+            <svg class="ww-on" viewBox="0 0 24 24"><path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5.3-3c0 3-2.54 5.1-5.3 5.1S6.7 14 6.7 11H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c3.28-.48 6-3.3 6-6.72h-1.7z"/></svg>
+            <svg class="ww-off" viewBox="0 0 24 24"><path d="M19 11h-1.7c0 .74-.16 1.43-.43 2.05l1.23 1.23c.56-.98.9-2.09.9-3.28zm-4.02.17c0-.06.02-.11.02-.17V5c0-1.66-1.34-3-3-3S9 3.34 9 5v.18l5.98 5.99zM4.27 3 3 4.27l6.01 6.01V11c0 1.66 1.33 3 2.99 3 .22 0 .44-.03.65-.08l1.66 1.66c-.71.33-1.5.52-2.31.52-2.76 0-5.3-2.1-5.3-5.1H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c.91-.13 1.77-.45 2.54-.9L19.73 21 21 19.73 4.27 3z"/></svg>
+          </span>
+          <div class="wakeword-text">
+            <h3 id="wakeword-title">Écoute du mot-clé sur l'ordinateur</h3>
+            <p id="wakeword-state" class="meta">—</p>
+            <p id="wakeword-hint" class="meta wakeword-hint" hidden></p>
           </div>
-        </div>
-        <div class="actions">
-          <button type="button" id="profile-save" class="primary">Enregistrer le profil</button>
-        </div>
-        <p id="profile-msg" class="meta" role="status"></p>
-      </section>
-
-      <section class="block admin-only" aria-labelledby="model-title">
-        <h3 id="model-title">Modèle</h3>
-        <p id="model-current" class="meta">—</p>
-        <div id="model-ollama">
-          <label for="model-select">Modèle Ollama</label>
-          <div class="row">
-            <select id="model-select" aria-describedby="model-msg"></select>
-            <button type="button" id="models-refresh" class="icon-btn" aria-label="Actualiser la liste des modèles">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17.7 6.3A8 8 0 1 0 20 12h-2a6 6 0 1 1-1.8-4.2L13 11h7V4l-2.3 2.3Z"/></svg>
-            </button>
-          </div>
-          <label class="toggle">
-            <input id="model-decision" type="checkbox">
-            <span>Modèle de décision<small>Il choisit la commande à lancer sans rédiger de réponse : l'assistant dit ce qu'il a compris.</small></span>
+          <label class="switch" title="Activer / couper l'écoute du mot-clé">
+            <input id="wakeword-toggle" type="checkbox" role="switch" aria-labelledby="wakeword-title" checked>
+            <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
           </label>
-          <div class="actions">
-            <button type="button" id="model-apply" class="primary">Utiliser ce modèle</button>
-          </div>
-        </div>
-        <p id="model-msg" class="meta" role="status"></p>
-      </section>
+        </section>
 
-      <div class="actions stacked">
-        <button type="button" id="advanced-btn" class="admin-only">Paramètres avancés…</button>
-        <button type="button" id="reset-btn">Nouvelle conversation</button>
-        <button type="button" id="restart-btn" class="admin-only">Redémarrer SmartHome</button>
-        <button type="button" id="force-reload-btn" class="secondary">Vider le cache et recharger l'app <small class="version-tag" id="version-tag-label">v18</small></button>
-        <button type="submit" class="secondary">Fermer</button>
+        <!-- Choix rapide de l'interlocuteur : l'assistant ou un agent externe (même effet que la pastille du modèle) -->
+        <section id="agent-card" class="agent-card" aria-labelledby="agent-card-title" hidden>
+          <div class="agent-card-head">
+            <h3 id="agent-card-title">Interlocuteur</h3>
+            <p id="agent-card-state" class="meta">—</p>
+          </div>
+          <div id="agent-choices" class="agent-choices" role="radiogroup" aria-labelledby="agent-card-title"></div>
+        </section>
+
+        <details class="settings-card" open>
+          <summary class="settings-card-summary">
+            <div>
+              <h3>Audio sur cet appareil</h3>
+              <p class="meta">Synthèse vocale et arrêt du micro</p>
+            </div>
+          </summary>
+          <div class="settings-card-body">
+            <div class="settings-toggles">
+              <label class="toggle">
+                <input id="speak" type="checkbox">
+                <span>Réponse vocale sur cet appareil</span>
+              </label>
+              <label class="toggle">
+                <input id="autostop" type="checkbox">
+                <span>Arrêter l'écoute automatiquement à la fin de la phrase</span>
+              </label>
+            </div>
+          </div>
+        </details>
+
+        <div class="actions stacked">
+          <button type="button" id="reset-btn">Nouvelle conversation</button>
+        </div>
+      </div>
+
+      <!-- Onglet 2 : Compte & Mémoire -->
+      <div id="settings-panel-account" class="settings-panel" role="tabpanel" aria-labelledby="settings-tab-account" hidden>
+        <!-- Carte d'informations de connexion repensée -->
+        <section class="conn-card" id="conn-card" aria-label="Informations de connexion">
+          <div class="conn-card-top">
+            <div class="conn-avatar-wrap">
+              <span id="conn-avatar" class="conn-avatar">?</span>
+              <span id="conn-dot" class="conn-dot" data-state="offline"></span>
+            </div>
+            <div class="conn-identity">
+              <div class="conn-name-row">
+                <span id="user-name" class="conn-user-name">—</span>
+                <span id="conn-role-badge" class="role-badge" data-role="none">Hors ligne</span>
+              </div>
+              <span id="conn-user-email" class="conn-user-email" hidden></span>
+            </div>
+          </div>
+
+          <div class="conn-card-actions">
+            <button type="button" id="settings-login-btn" class="secondary sm-btn">Se connecter</button>
+            <button type="button" id="conn-update-btn" class="update-action-btn sm-btn" hidden>
+              <svg viewBox="0 0 24 24" aria-hidden="true" width="15" height="15"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 14h-2v-6H8l4-4 4 4h-3v6z"/></svg>
+              <span>Mise à jour GitHub</span>
+            </button>
+            <button type="button" id="conn-admin-btn" class="admin-action-btn sm-btn" hidden>
+              <svg viewBox="0 0 24 24" aria-hidden="true" width="15" height="15"><path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm0 10.99h7c-.53 4.12-3.28 7.79-7 8.94V12H5V6.3l7-3.11v8.8z"/></svg>
+              <span>Admin PocketBase</span>
+            </button>
+            <button type="button" id="logout-btn" class="danger sm-btn">Déconnexion</button>
+          </div>
+
+          <details class="conn-details-fold">
+            <summary>Détails de connexion &amp; version</summary>
+            <div class="conn-details-grid">
+              <div class="conn-detail-item">
+                <span class="conn-detail-label">État réseau</span>
+                <span id="conn-state-label" class="conn-detail-val">Déconnecté</span>
+              </div>
+              <div class="conn-detail-item">
+                <span class="conn-detail-label">Authentification</span>
+                <span id="conn-auth-type" class="conn-detail-val">—</span>
+              </div>
+              <div class="conn-detail-item">
+                <span class="conn-detail-label">Session active</span>
+                <code id="session-id" class="conn-detail-val">—</code>
+              </div>
+              <div class="conn-detail-item">
+                <span class="conn-detail-label">Permissions</span>
+                <span id="conn-tools-info" class="conn-detail-val">—</span>
+              </div>
+              <div class="conn-detail-item">
+                <span class="conn-detail-label">Dépôt GitHub</span>
+                <span id="conn-repo-info" class="conn-detail-val">suissard/SmartHome</span>
+              </div>
+              <div class="conn-detail-item">
+                <span class="conn-detail-label">Version (Locale / GitHub)</span>
+                <span id="conn-version-info" class="conn-detail-val">Vérification…</span>
+              </div>
+            </div>
+          </details>
+        </section>
+
+        <!-- Profil d'un compte utilisateur (prénom et consignes ajoutés au prompt de ses conversations) -->
+        <details class="settings-card" id="profile" aria-labelledby="profile-title" open hidden>
+          <summary class="settings-card-summary">
+            <div>
+              <h3 id="profile-title">Mon profil</h3>
+              <p class="meta">Prénom, voix et consignes</p>
+            </div>
+          </summary>
+          <div class="settings-card-body">
+            <label for="profile-name">Prénom</label>
+            <input id="profile-name" type="text" maxlength="80" autocomplete="given-name">
+            <label for="profile-assistant-name">Nom de l'assistant</label>
+            <input id="profile-assistant-name" type="text" maxlength="40" autocomplete="off" aria-describedby="profile-assistant-help">
+            <p id="profile-assistant-help" class="meta">Affiché dans la conversation et donné à l'assistant. Vide : nom par défaut.</p>
+            <label for="profile-instructions">Consignes pour l'assistant</label>
+            <textarea id="profile-instructions" rows="3" maxlength="1000" aria-describedby="profile-help"
+                      placeholder="Ex : tutoie-moi, réponses courtes, explique les termes techniques"></textarea>
+            <p id="profile-help" class="meta">Elles changent le ton des réponses, pas ce que vous avez le droit de faire.</p>
+            <div id="profile-voice-field" hidden>
+              <label for="profile-voice">Voix de l'assistant</label>
+              <div class="row">
+                <select id="profile-voice"></select>
+                <button type="button" id="profile-voice-play">Écouter</button>
+              </div>
+            </div>
+            <div class="actions">
+              <button type="button" id="profile-save" class="primary">Enregistrer le profil</button>
+            </div>
+            <p id="profile-msg" class="meta" role="status"></p>
+          </div>
+        </details>
+
+        <!-- Mémoire à long terme du compte (core/memory.py) : souvenirs donnés à l'assistant, effaçables -->
+        <details id="memory-card" class="settings-card memory-card" aria-labelledby="memory-card-title" hidden>
+          <summary class="settings-card-summary">
+            <div>
+              <h3 id="memory-card-title">Ce que l'assistant a retenu</h3>
+              <p id="memory-card-state" class="meta">—</p>
+            </div>
+          </summary>
+          <div class="settings-card-body">
+            <ul id="memory-list" class="memory-list"></ul>
+            <div class="memory-add">
+              <input id="memory-input" type="text" maxlength="300" placeholder="Ajouter : « je préfère le thé au café »" aria-label="Nouveau souvenir">
+              <button type="button" id="memory-add-btn" class="secondary sm-btn">Ajouter</button>
+            </div>
+            <p id="memory-msg" class="meta" role="status"></p>
+          </div>
+        </details>
+      </div>
+
+      <!-- Onglet 3 : Système -->
+      <div id="settings-panel-system" class="settings-panel" role="tabpanel" aria-labelledby="settings-tab-system" hidden>
+        <details class="settings-card admin-only" aria-labelledby="model-title" open>
+          <summary class="settings-card-summary">
+            <div>
+              <h3 id="model-title">Modèle IA</h3>
+              <p id="model-current" class="meta">—</p>
+            </div>
+          </summary>
+          <div class="settings-card-body">
+            <div id="model-ollama">
+              <label for="model-select">Modèle Ollama</label>
+              <div class="row">
+                <select id="model-select" aria-describedby="model-msg"></select>
+                <button type="button" id="models-refresh" class="icon-btn" aria-label="Actualiser la liste des modèles">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17.7 6.3A8 8 0 1 0 20 12h-2a6 6 0 1 1-1.8-4.2L13 11h7V4l-2.3 2.3Z"/></svg>
+                </button>
+              </div>
+              <label class="toggle">
+                <input id="model-decision" type="checkbox">
+                <span>Modèle de décision<small>Il choisit la commande à lancer sans rédiger de réponse : l'assistant dit ce qu'il a compris.</small></span>
+              </label>
+              <div class="actions">
+                <button type="button" id="model-apply" class="primary">Utiliser ce modèle</button>
+              </div>
+            </div>
+            <p id="model-msg" class="meta" role="status"></p>
+          </div>
+        </details>
+
+        <details class="settings-card" open>
+          <summary class="settings-card-summary">
+            <div>
+              <h3>Maintenance &amp; Serveur</h3>
+              <p class="meta">Paramètres avancés, redémarrage et cache</p>
+            </div>
+          </summary>
+          <div class="settings-card-body">
+            <div class="actions stacked">
+              <button type="button" id="advanced-btn" class="admin-only">Paramètres avancés…</button>
+              <button type="button" id="restart-btn" class="admin-only">Redémarrer SmartHome</button>
+              <button type="button" id="force-reload-btn" class="secondary">Vider le cache et recharger l'app <small class="version-tag" id="version-tag-label">v19</small></button>
+            </div>
+          </div>
+        </details>
       </div>
     </form>
   </dialog>
@@ -520,10 +587,6 @@
         <button type="button" id="admin-open-restart" class="danger">Redémarrer SmartHome</button>
       </div>
     </section>
-
-    <div class="actions">
-      <button type="button" id="admin-footer-close" class="secondary">Fermer</button>
-    </div>
   </dialog>
 
   <!-- Paramètres du serveur, générés d'après la description envoyée par la passerelle -->
@@ -535,13 +598,15 @@
           <span>Réglages</span>
         </button>
         <h2 id="advanced-title">Paramètres avancés</h2>
+        <button type="button" id="advanced-close" class="icon-btn close-btn" aria-label="Fermer" title="Fermer">
+          <svg viewBox="0 0 24 24" aria-hidden="true" width="18" height="18"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
       </div>
       <p>Enregistrés sur l'ordinateur. Seuls les réglages utiles à la configuration choisie sont affichés. Ceux marqués « au redémarrage » s'appliquent au prochain lancement de SmartHome.</p>
       <div id="advanced-fields"><p class="meta">Chargement…</p></div>
       <p id="advanced-msg" class="meta" role="status"></p>
       <div class="actions sticky">
         <button type="button" id="advanced-restart" hidden>Redémarrer</button>
-        <button type="button" id="advanced-close">Fermer</button>
         <button type="submit" class="primary">Enregistrer</button>
       </div>
     </form>

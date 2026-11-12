@@ -24,6 +24,7 @@ from core.assistant import AssistantCore
 from core.config import Settings
 from core.images import ImageError, decode_upload, decode_uploads, load_image, resolve_allowed, search_files, sniff_mime
 from core.tools import ToolCall, ToolRegistry, _action_tool
+from core.users import admin_user
 from gateway.app import create_app
 from llm.providers import LLMProvider, LLMResponse
 from audio.tts import TextToSpeech
@@ -207,7 +208,7 @@ class TestCoreImages(ImagesTestCase):
 
     def test_show_image(self):
         core = self.make_core()
-        reply = core.respond("s", text="montre Vacances été/Plage/coucher_de_soleil.png")
+        reply = core.respond("s", text="montre Vacances été/Plage/coucher_de_soleil.png", user=admin_user(core.settings))
         self.assertEqual(reply.text, "Voici l'image.")
         images = [d for t, d in self.events if t == "image"]
         self.assertEqual(len(images), 1)
@@ -231,7 +232,7 @@ class TestCoreImages(ImagesTestCase):
             "label": "Fakebot", "command": [sys.executable, str(script), "{prompt}"], "output": "hermes"}}}))
         self.settings = self.settings.model_copy(update={"AGENTS_CONFIG_FILE": str(config), "AGENTS_PROMPT_PREFIX": "[v]"})
         core = self.make_core(vision=False)
-        core.open_session("s")
+        core.open_session("s", user=admin_user(self.settings))
         core.set_agent("s", "fake")
         image = decode_upload({"data": b64(PNG)}, self.settings)
         reply = core.respond("s", text="regarde", images=[image])

@@ -70,12 +70,12 @@ class VoiceTranscriber:
 
         timeout_silence = max(0.1, float(timeout_silence))
         self._flush_stream(stream)
-        start_wait = time.time()
+        start_wait = time.monotonic()
         pre_buffer = deque(maxlen=4)
         self.vad.reset()
 
         while True:
-            elapsed = time.time() - start_wait
+            elapsed = time.monotonic() - start_wait
             remaining = max(0.0, timeout_silence - elapsed)
 
             # Fin du délai d'attente (ou écoute abandonnée)

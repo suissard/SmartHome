@@ -157,5 +157,47 @@ class TestMemoryInCore(unittest.TestCase):
             self.assertEqual(ws.receive_json()["type"], "memory_error")
 
 
+class TestMemoryBackgroundBackfill(unittest.TestCase):
+    def test_recall_schedules_nonblocking_backfill_and_close_joins(self):
+        import threading
+
+        started = threading.Event()
+        release = threading.Event()
+
+        class BlockingEmbedder(FakeEmbedder):
+            def embed(self, texts):
+                # Backfill passe toutes les entrées sans embedding (2) ; la requête de recall n'a qu'1 texte.
+                if len(texts) >= 2:
+                    started.set()
+                    release.wait(timeout=3.0)
+                return [[1.0, 0.0, 0.0, 0.01] for _ in texts]
+
+        # On insère d'abord sans embedder (embedding=None en base), puis on rattache un embedder bloquant.
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            db_path = Path(tmp) / "memory.db"
+            store_no_emb = MemoryStore(
+                Settings(MEMORY_EMBED_MODEL="", MEMORY_ALWAYS_INCLUDE=0),
+                path=db_path,
+            )
+            store_no_emb.remember("u1", "Aime le café noir")
+            store_no_emb.remember("u1", "Habite à Lyon")
+            store_no_emb.close()
+
+            embedder = BlockingEmbedder()
+            store = MemoryStore(
+                Settings(MEMORY_EMBED_MODEL="fake", MEMORY_ALWAYS_INCLUDE=0),
+                path=db_path,
+                embedder=embedder,
+            )
+            # recall() déclenche le backfill asynchrone pour les entrées sans embedding mais retourne tout de suite
+            recalled = store.recall("u1", "café")
+            self.assertGreaterEqual(len(recalled), 1)
+            self.assertTrue(started.wait(timeout=1.5), "Le backfill en arrière-plan ne s'est pas lancé")
+            release.set()
+            store.close()
+            self.assertTrue(store._backfill_thread is None or not store._backfill_thread.is_alive())
+
+
 if __name__ == "__main__":
     unittest.main()

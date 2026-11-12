@@ -1,8 +1,8 @@
 """
 Configuration typée et validée de SmartHome.
 
-Ordre de priorité des valeurs : variables d'environnement > profil (`profiles/<nom>.env`, voir core/profiles.py)
-> fichier .env > valeurs par défaut. Le fichier lu peut être changé via SMARTHOME_ENV_FILE.
+Ordre de priorité des valeurs : profil actif (`profiles/<nom>.env`, voir core/profiles.py) > fichier .env
+> variables d'environnement > valeurs par défaut. Le fichier lu peut être changé via SMARTHOME_ENV_FILE.
 
 Le nouveau code reçoit l'objet `Settings` (via `get_settings()`) ; les constantes de module
 (LLM_PROVIDER, AUDIO_RATE, ...) restent exportées pour compatibilité.
@@ -27,14 +27,28 @@ if sys.platform == "win32" and hasattr(sys.stdout, "reconfigure"):
     except Exception:
         pass
 
-# Racine du projet SmartHome
+# Racine du projet SmartHome et répertoire de configuration Linux (XDG)
 BASE_DIR = Path(__file__).resolve().parent.parent
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
-ENV_FILE = Path(os.environ.get("SMARTHOME_ENV_FILE") or BASE_DIR / ".env")
-if not ENV_FILE.is_absolute():
-    ENV_FILE = BASE_DIR / ENV_FILE
+CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "smarthome"
+USER_ENV_FILE = CONFIG_DIR / "config.env"
+
+
+def resolve_env_file() -> Path:
+    """Retourne le fichier de configuration actif : SMARTHOME_ENV_FILE > .env du projet > ~/.config/smarthome/config.env."""
+    explicit = (os.environ.get("SMARTHOME_ENV_FILE") or "").strip()
+    if explicit:
+        path = Path(explicit).expanduser()
+        return path if path.is_absolute() else BASE_DIR / path
+    local_env = BASE_DIR / ".env"
+    if local_env.is_file():
+        return local_env
+    return USER_ENV_FILE
+
+
+ENV_FILE = resolve_env_file()
 
 
 def _parse_bool(value):
@@ -689,7 +703,7 @@ GATEWAY_MAX_MESSAGE_BYTES = settings.GATEWAY_MAX_MESSAGE_BYTES
 
 
 if __name__ == "__main__":
-    print(f"📋 [CONFIG] Configuration chargée depuis {ENV_FILE} (variables d'environnement prioritaires) :")
+    print(f"📋 [CONFIG] Configuration chargée depuis {ENV_FILE} (profil > .env > variables d'environnement) :")
     for name, value in settings.model_dump().items():
         if value and any(secret in name for secret in ("KEY", "TOKEN")):
             value = "Configuré (masqué)"

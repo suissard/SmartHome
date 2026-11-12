@@ -48,8 +48,15 @@ class RememberAction(PythonAction):
             args_hint="le fait à retenir, en une phrase",
             example_prompt="Retiens que je préfère le thé au café.",
             example_response="[REMEMBER Préfère le thé au café.] C'est noté.",
-            enabled=get_settings().MEMORY_ENABLED,
         )
+
+    @property
+    def enabled(self) -> bool:
+        return bool(get_settings().MEMORY_ENABLED)
+
+    @enabled.setter
+    def enabled(self, _value: bool):
+        pass
 
     def run(self, args: str) -> Tuple[int, str, str]:
         memory, created = _store().remember(_owner_id(), args)
@@ -67,8 +74,15 @@ class ListMemoriesAction(PythonAction):
             has_args=False,
             example_prompt="Qu'est-ce que tu sais de moi ?",
             example_response="[MEMORIES] Voici ce que j'ai retenu.",
-            enabled=get_settings().MEMORY_ENABLED,
         )
+
+    @property
+    def enabled(self) -> bool:
+        return bool(get_settings().MEMORY_ENABLED)
+
+    @enabled.setter
+    def enabled(self, _value: bool):
+        pass
 
     @property
     def tool_name(self) -> str:
@@ -93,8 +107,15 @@ class ForgetMemoryAction(PythonAction):
             args_hint="numéro du souvenir ou mots de son texte",
             example_prompt="Oublie ce que je t'ai dit sur le café.",
             example_response="[FORGET_MEMORY café] C'est oublié.",
-            enabled=get_settings().MEMORY_ENABLED,
         )
+
+    @property
+    def enabled(self) -> bool:
+        return bool(get_settings().MEMORY_ENABLED)
+
+    @enabled.setter
+    def enabled(self, _value: bool):
+        pass
 
     def run(self, args: str) -> Tuple[int, str, str]:
         store, owner = _store(), _owner_id()

@@ -17,7 +17,14 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT_DIR"
 
 VENV_DIR="$ROOT_DIR/.venv"
-ENV_FILE="$ROOT_DIR/.env"
+XDG_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/smarthome"
+if [[ -n "${SMARTHOME_ENV_FILE:-}" ]]; then
+    ENV_FILE="$SMARTHOME_ENV_FILE"
+elif [[ -f "$ROOT_DIR/.env" ]]; then
+    ENV_FILE="$ROOT_DIR/.env"
+else
+    ENV_FILE="$XDG_CONFIG_DIR/config.env"
+fi
 MIN_PYTHON="3.10"
 
 MODE="desktop"
@@ -251,17 +258,21 @@ setup_venv() {
     step "3/8 Dépendances Python"
     "$VPY" -m pip install --upgrade pip wheel
     "$VPY" -m pip install -r requirements.txt || die "Échec de pip install -r requirements.txt."
-    ok "Dépendances installées."
+    "$VPY" -m pip install --no-deps --no-build-isolation -e "$ROOT_DIR" || die "Échec de l'installation de la commande smarthome."
+    ok "Dépendances et commande smarthome installées."
 }
 
-# --- 4. Configuration (.env) -------------------------------------------------
+# --- 4. Configuration (sans copier .env.example) -----------------------------
 set_env() {
-    # Remplace (ou ajoute) KEY=VALUE dans .env en conservant les commentaires.
+    # Remplace (ou ajoute) KEY=VALUE dans le fichier utilisateur en créant le dossier au besoin.
     "$VPY" - "$ENV_FILE" "$1" "$2" <<'PY'
-import re, sys
-path, key, value = sys.argv[1:]
-with open(path, encoding="utf-8") as f:
-    lines = f.read().splitlines()
+import os, re, sys
+from pathlib import Path
+
+path, key, value = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+created = not path.exists()
+path.parent.mkdir(parents=True, exist_ok=True)
+lines = path.read_text(encoding="utf-8").splitlines() if not created else []
 pattern = re.compile(rf"^\s*{re.escape(key)}\s*=")
 for i, line in enumerate(lines):
     if pattern.match(line):
@@ -269,30 +280,31 @@ for i, line in enumerate(lines):
         break
 else:
     lines.append(f"{key}={value}")
-with open(path, "w", encoding="utf-8") as f:
-    f.write("\n".join(lines) + "\n")
+path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+if created:
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
 PY
 }
 
 setting() {
-    # Lit une valeur validée par core/config.py (variables d'environnement > .env > défauts).
+    # Lit une valeur validée par core/config.py (réglages utilisateur > variables d'environnement > défauts).
     "$VPY" -c "from core.config import get_settings; print(getattr(get_settings(), '$1'))"
 }
 
 setup_env() {
     step "4/8 Configuration"
-    if [[ ! -f "$ENV_FILE" ]]; then
-        cp .env.example "$ENV_FILE"
-        chmod 600 "$ENV_FILE"
-        ok ".env créé depuis .env.example."
+    if [[ -f "$ENV_FILE" ]]; then
+        ok "Configuration existante conservée ($ENV_FILE)."
     else
-        ok ".env existant conservé."
+        ok "Configuration par défaut intégrée prête ($ENV_FILE créé au besoin)."
     fi
 
     if [[ -n "$PROFILE" ]]; then
-        # Même fichier que le menu de ./start.sh : le profil y sera présélectionné
-        echo "$PROFILE" >"$ROOT_DIR/profiles/.last"
-        ok "Profil « $PROFILE » retenu (modifiable au lancement de ./start.sh)."
+        "$VPY" -c "import sys; from core.profiles import remember_profile; remember_profile(sys.argv[1])" "$PROFILE"
+        ok "Profil « $PROFILE » retenu (modifiable avec 'smarthome config' ou au lancement)."
     fi
     if [[ -n "$OLLAMA_REMOTE_HOST" ]]; then
         set_env OLLAMA_HOST "$OLLAMA_REMOTE_HOST"
@@ -306,12 +318,12 @@ setup_env() {
             local token
             token="$("$VPY" -c 'import secrets; print(secrets.token_hex(32))')"
             set_env GATEWAY_AUTH_TOKEN "$token"
-            ok "Jeton de passerelle généré (GATEWAY_AUTH_TOKEN dans .env)."
+            ok "Jeton de passerelle généré (consultable avec 'smarthome config token')."
         fi
         ok "Passerelle : écoute sur $host:$(setting GATEWAY_PORT)."
     fi
 
-    "$VPY" -c "from core.config import get_settings; get_settings()" || die "Le fichier .env contient une valeur invalide."
+    "$VPY" -c "from core.config import get_settings; get_settings()" || die "La configuration contient une valeur invalide ($ENV_FILE)."
     ok "Configuration valide."
 }
 
@@ -446,21 +458,41 @@ setup_accounts() {
     ok "SmartHome lance PocketBase lui-même. Comptes du foyer : $(setting POCKETBASE_URL)/_/ (collection users, champ role)."
 }
 
-# --- 8. Lanceur & service ----------------------------------------------------
+# --- 8. Lanceur CLI, menu bureau & service -----------------------------------
+setup_launcher() {
+    local bin_dir="$HOME/.local/bin"
+    local target="$ROOT_DIR/.venv/bin/smarthome"
+    if [[ -x "$target" ]]; then
+        mkdir -p "$bin_dir"
+        ln -sf "$target" "$bin_dir/smarthome"
+        ok "Commande installée : $bin_dir/smarthome"
+        case ":$PATH:" in
+            *":$bin_dir:"*) ;;
+            *) warn "$bin_dir n'est pas dans votre PATH actuel (ajoutez : export PATH=\"\$HOME/.local/bin:\$PATH\")." ;;
+        esac
+    fi
+    if [[ "$OS" == "Linux" && "$MODE" == "desktop" ]]; then
+        "$VPY" -m core.cli install-desktop >/dev/null 2>&1 \
+            && ok "Raccourci ajouté dans le menu d'applications Linux." \
+            || warn "Raccourci bureau non installé (lancez : smarthome install-desktop)."
+    fi
+}
+
 setup_service() {
     step "8/8 Lancement"
     chmod +x "$ROOT_DIR/start.sh" 2>/dev/null || true
+    setup_launcher
     if ! $WITH_SERVICE; then
         info "Pas de démarrage automatique (relancez l'installation ou option --service pour l'ajouter)."
         return
     fi
     if ! have systemctl; then
-        warn "systemd absent : démarrage automatique non configuré (utilisez ./start.sh)."
+        warn "systemd absent : démarrage automatique non configuré (utilisez 'smarthome')."
         return
     fi
 
-    local unit="smarthome.service" args=""
-    [[ "$MODE" == "server" ]] && args=" --server"
+    local unit="smarthome.service"
+    local smarthome_bin="$ROOT_DIR/.venv/bin/smarthome"
     if [[ "$MODE" == "server" ]]; then
         # Service système : tourne sans session ouverte, sous l'utilisateur courant.
         local user="${SUDO_USER:-$USER}"
@@ -473,7 +505,7 @@ Wants=network-online.target
 [Service]
 User=$user
 WorkingDirectory=$ROOT_DIR
-ExecStart=$ROOT_DIR/start.sh$args
+ExecStart=$smarthome_bin server
 Restart=on-failure
 RestartSec=5
 
@@ -482,7 +514,7 @@ WantedBy=multi-user.target
 EOF
         $SUDO systemctl daemon-reload
         $SUDO systemctl enable --now "$unit"
-        ok "Service système $unit actif (journal : journalctl -u smarthome -f)."
+        ok "Service système $unit actif (journal : smarthome logs -f)."
     else
         # Service utilisateur : accès au micro et à PipeWire/PulseAudio de la session.
         local dir="$HOME/.config/systemd/user"
@@ -494,8 +526,8 @@ After=pipewire.service pulseaudio.service
 
 [Service]
 WorkingDirectory=$ROOT_DIR
-ExecStart=$ROOT_DIR/start.sh
-ExecStopPost=$ROOT_DIR/start.sh --reset-sound
+ExecStart=$smarthome_bin start --no-menu
+ExecStopPost=$smarthome_bin reset-sound
 Restart=on-failure
 RestartSec=5
 
@@ -504,7 +536,7 @@ WantedBy=default.target
 EOF
         systemctl --user daemon-reload
         systemctl --user enable --now "$unit"
-        ok "Service utilisateur $unit actif (journal : journalctl --user -u smarthome -f)."
+        ok "Service utilisateur $unit actif (journal : smarthome logs -f)."
     fi
 }
 
@@ -520,33 +552,29 @@ echo
 if $WITH_SERVICE; then
     echo "${C_GREEN}🚀 SmartHome est installé et actif via systemd.${C_RESET}"
     echo "  • Il tourne en arrière-plan et se relancera automatiquement au démarrage du PC."
-    if [[ "$MODE" == "server" ]]; then
-        echo "  • Suivre les logs en direct : sudo journalctl -u smarthome -f"
-        echo "  • Arrêter / Contrôler       : ./stop.sh (ou sudo systemctl status|stop|restart smarthome)"
-    else
-        echo "  • Suivre l'activité en direct : journalctl --user -u smarthome -f"
-        echo "  • Arrêter / Contrôler         : ./stop.sh (ou systemctl --user status|stop|restart smarthome)"
-    fi
+    echo "  • Configurer (micro, clé API...) : smarthome config"
+    echo "  • Suivre les logs en direct      : smarthome logs -f"
+    echo "  • État / Arrêter / Redémarrer    : smarthome status | smarthome stop | smarthome restart"
 else
     echo "${C_GREEN}✅ SmartHome est installé.${C_RESET}"
     if [[ "$MODE" == "server" ]]; then
-        echo "  • Lancer la passerelle : ./start.sh --server"
-        echo "  • Jeton des clients    : GATEWAY_AUTH_TOKEN dans .env"
+        echo "  • Lancer la passerelle  : smarthome server"
+        echo "  • Voir / créer le jeton : smarthome config token"
         echo "  • Accès HTTPS (micro du téléphone) : docs/MISE_EN_SERVICE.md, étape 3 (Tailscale)"
     else
-        echo "  • Lancer l'assistant : ./start.sh"
-        echo "  • Choisir le micro   : AUDIO_INPUT_DEVICE_INDEX dans .env (liste : .venv/bin/python -c \"import sounddevice; print(sounddevice.query_devices())\")"
+        echo "  • Lancer l'assistant    : smarthome"
+        echo "  • Régler micro / API    : smarthome config"
     fi
     # Proposition de lancement immédiat si exécuté dans un terminal interactif
     if [[ -t 0 && -t 1 ]]; then
         echo
-        read -r -p "Voulez-vous lancer SmartHome maintenant (./start.sh) ? [O/n] " answer || true
+        read -r -p "Voulez-vous lancer SmartHome maintenant (smarthome) ? [O/n] " answer || true
         if [[ -z "$answer" || "$answer" =~ ^[oOyY] ]]; then
             echo "🚀 Lancement de SmartHome..."
             if [[ "$MODE" == "server" ]]; then
-                exec "$ROOT_DIR/start.sh" --server
+                exec "$ROOT_DIR/.venv/bin/smarthome" server
             else
-                exec "$ROOT_DIR/start.sh"
+                exec "$ROOT_DIR/.venv/bin/smarthome"
             fi
         fi
     fi

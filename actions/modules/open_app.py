@@ -5,7 +5,7 @@ Contient les métadonnées et le script bash multi-environnements embarqué.
 
 from typing import List, Tuple
 from actions.base import BaseAction
-from core.config import ACTIONS_OPEN_ALLOWED_APPS
+from core.config import get_settings
 
 # Catégories reconnues par le `case` du script bash ci-dessous (à garder synchronisé)
 _CATEGORY_KEYWORDS = {
@@ -39,7 +39,7 @@ APP_LOWER=$(echo "$APP_NAME" | tr '[:upper:]' '[:lower:]' | xargs)
 # Fonction pour tenter de lancer un binaire ou une commande
 try_launch() {
     local cmd="$1"
-    
+
     # 1. Tentative gtk-launch
     if command -v gtk-launch >/dev/null 2>&1 && gtk-launch "$cmd" 2>/dev/null; then
         return 0
@@ -118,7 +118,8 @@ class OpenAppAction(BaseAction):
         )
 
     def decision_choices(self):
-        return {**_DECISION_CATEGORIES, **{app: app for app in ACTIONS_OPEN_ALLOWED_APPS}}
+        allowed = get_settings().ACTIONS_OPEN_ALLOWED_APPS
+        return {**_DECISION_CATEGORIES, **{app: app for app in allowed}}
 
     def build_args(self, args: str = "") -> List[str]:
         app = (args or "").strip()
@@ -126,7 +127,7 @@ class OpenAppAction(BaseAction):
         if not normalized:
             return []
         # Liste blanche : empêche le LLM de lancer un binaire arbitraire du PATH (ex: [OPEN poweroff])
-        if normalized not in _CATEGORY_KEYWORDS and normalized not in ACTIONS_OPEN_ALLOWED_APPS:
+        if normalized not in _CATEGORY_KEYWORDS and normalized not in get_settings().ACTIONS_OPEN_ALLOWED_APPS:
             print(f"⛔ [ACTIONS] Application non autorisée pour [OPEN] : '{app}' (voir ACTIONS_OPEN_ALLOWED_APPS)")
             return []
         return [app]
@@ -153,7 +154,7 @@ class OpenAppAction(BaseAction):
                 os.startfile(target)
             else:
                 import subprocess
-                subprocess.Popen(["cmd", "/c", "start", "", target], shell=True)
+                subprocess.Popen(["cmd", "/c", "start", "", target])
             print(f"✅ [ACTIONS] [Windows] Application '{target}' lancée.")
             return 0, f"Application {app} lancée", ""
         except Exception as e:

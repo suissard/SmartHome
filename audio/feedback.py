@@ -25,7 +25,7 @@ def _apply_envelope(audio: np.ndarray, attack_ms: float = 8.0, decay_type: str =
     n = len(audio)
     if n == 0:
         return audio
-    
+
     attack_len = min(int((attack_ms / 1000.0) * SAMPLE_RATE), n // 4)
     envelope = np.ones(n, dtype=np.float32)
 
@@ -59,7 +59,7 @@ def generate_procedural_sound(sound_name: str, volume: float = 0.5) -> np.ndarra
         notes = [523.25, 659.25, 783.99]
         durations = [0.07, 0.07, 0.14]
         chunks = []
-        for freq, dur in zip(notes, durations):
+        for freq, dur in zip(notes, durations, strict=True):
             n_samples = int(SAMPLE_RATE * dur)
             t = np.linspace(0, dur, n_samples, False)
             wave = (np.sin(2 * np.pi * freq * t) + 0.25 * np.sin(2 * np.pi * (freq * 2) * t)) * vol
@@ -80,7 +80,7 @@ def generate_procedural_sound(sound_name: str, volume: float = 0.5) -> np.ndarra
         notes = [659.25, 523.25, 392.0]
         durations = [0.08, 0.08, 0.18]
         chunks = []
-        for freq, dur in zip(notes, durations):
+        for freq, dur in zip(notes, durations, strict=True):
             n_samples = int(SAMPLE_RATE * dur)
             t = np.linspace(0, dur, n_samples, False)
             wave = (np.sin(2 * np.pi * freq * t) + 0.2 * np.sin(2 * np.pi * (freq * 2) * t)) * vol

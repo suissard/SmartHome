@@ -21,7 +21,7 @@ _ROOT_DIR = Path(__file__).resolve().parent.parent
 if str(_ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(_ROOT_DIR))
 
-from core.config import BASE_DIR, Settings, get_settings, TTS_MODEL_PATH, TTS_CONFIG_PATH
+from core.config import BASE_DIR, Settings, get_settings, resolve_piper_voice
 
 VOICES_DIR = BASE_DIR / "voices"
 from core.providers import ProviderRegistry, check_ollama_capability, ollama_host, require_openrouter_key
@@ -83,19 +83,22 @@ class PiperTTS(TTSProvider):
 
         print("Chargement de Piper... ⏳")
         self._load = PiperVoice.load
+        model_path, config_path = resolve_piper_voice(settings)
         # Voix configurée : toujours en mémoire ; les autres (choisies par les comptes) dans un cache borné
-        self.voice = PiperVoice.load(TTS_MODEL_PATH, config_path=TTS_CONFIG_PATH)
-        self.default_id = Path(TTS_MODEL_PATH).name.removesuffix(".onnx")
+        self.voice = PiperVoice.load(model_path, config_path=config_path)
+        self.default_id = Path(model_path).name.removesuffix(".onnx")
         self._cache: "OrderedDict[str, object]" = OrderedDict()
         self.syn_config = SynthesisConfig(length_scale=settings.TTS_SPEECH_SPEED)
         print(f"Voix prête ({self.voice.config.sample_rate} Hz) ✅")
 
     @classmethod
     def describe(cls, settings: Settings) -> str:
-        return f"Piper ({Path(TTS_MODEL_PATH).stem.replace('.onnx', '')})"
+        model_path, _ = resolve_piper_voice(settings)
+        return f"Piper ({Path(model_path).stem.replace('.onnx', '')})"
 
     def voices(self) -> list[dict]:
-        return list_piper_voices(TTS_MODEL_PATH)
+        model_path, _ = resolve_piper_voice(self.settings)
+        return list_piper_voices(model_path)
 
     def _voice(self, voice_id: Optional[str]):
         """Modèle Piper de la voix demandée (chargé au premier usage, gardé tant qu'il est récent)."""
@@ -146,7 +149,7 @@ class OpenRouterTTS(TTSProvider):
         require_openrouter_key(self.settings)
         response = self.client.audio.speech.create(
             model=self.settings.OPENROUTER_TTS_MODEL,
-            voice=self.settings.OPENROUTER_TTS_VOICE,
+            voice=voice or self.settings.OPENROUTER_TTS_VOICE,
             input=text,
             response_format="mp3",
         )
@@ -197,8 +200,9 @@ class OllamaTTS(TTSProvider):
         import httpx
         # Ollama n'accepte que la vitesse 1 : TTS_SPEECH_SPEED ne s'applique qu'à Piper
         payload = {"model": self.settings.OLLAMA_TTS_MODEL, "input": text, "response_format": "wav"}
-        if self.settings.OLLAMA_TTS_VOICE:
-            payload["voice"] = self.settings.OLLAMA_TTS_VOICE
+        selected_voice = voice or self.settings.OLLAMA_TTS_VOICE
+        if selected_voice:
+            payload["voice"] = selected_voice
         response = httpx.post(self.url, json=payload, timeout=self.settings.OLLAMA_AUDIO_TIMEOUT)
         if response.status_code != 200:
             raise RuntimeError(f"synthèse refusée par Ollama ({response.status_code}) : {response.text}")

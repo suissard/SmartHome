@@ -20,7 +20,8 @@ def require_token_for_host(host: str, token: str, service: str, variable: str):
     if not token and not is_loopback(host):
         raise SystemExit(
             f"❌ [{service}] Refus d'écouter sur {host} sans {variable} : n'importe quel appareil du réseau "
-            f"pourrait piloter l'ordinateur. Définissez {variable} dans .env (ex: `openssl rand -hex 32`)."
+            f"pourrait piloter l'ordinateur. Générez-en un avec `smarthome config token --generate` "
+            f"(ou définissez {variable})."
         )
 
 

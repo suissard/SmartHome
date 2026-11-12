@@ -18,6 +18,7 @@ Code de sortie : 0 plan validé, 1 installation annulée, 130 interruption (q / 
 
 import argparse
 import importlib.util
+import os
 import shutil
 import sys
 import urllib.request
@@ -95,21 +96,35 @@ def describe_profile(name: str) -> str:
     return ""
 
 
+def _xdg_config_dir() -> Path:
+    return Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "smarthome"
+
+
 def last_profile() -> Optional[str]:
-    try:
-        name = (PROFILES_DIR / ".last").read_text(encoding="utf-8").strip()
-    except OSError:
-        return None
-    return name if name in list_profiles() else None
+    for path in (_xdg_config_dir() / "profiles" / ".last", PROFILES_DIR / ".last"):
+        try:
+            name = path.read_text(encoding="utf-8").strip()
+            if name in list_profiles():
+                return name
+        except OSError:
+            continue
+    return None
 
 
 def effective_values(profile: Optional[str]) -> dict[str, str]:
-    """Même ordre de priorité que core/config.py (hors variables d'environnement) : profil > .env > .env.example."""
+    """Même ordre de priorité que core/config.py (hors variables d'environnement) : profil > config utilisateur > défauts."""
     values = read_env_file(ROOT_DIR / ".env.example")
-    values.update(read_env_file(ROOT_DIR / ".env"))
+    xdg_env = _xdg_config_dir() / "config.env"
+    if (ROOT_DIR / ".env").is_file():
+        values.update(read_env_file(ROOT_DIR / ".env"))
+    elif xdg_env.is_file():
+        values.update(read_env_file(xdg_env))
     if profile:
-        values.update(read_env_file(PROFILES_DIR / f"{profile}.env"))
+        user_profile = _xdg_config_dir() / "profiles" / f"{profile}.env"
+        base_profile = user_profile if user_profile.is_file() else PROFILES_DIR / f"{profile}.env"
+        values.update(read_env_file(base_profile))
         values.update(read_env_file(PROFILES_DIR / f"{profile}.local.env"))
+        values.update(read_env_file(_xdg_config_dir() / "profiles" / f"{profile}.local.env"))
     return values
 
 
@@ -218,7 +233,7 @@ class InstallWizard:
                 parts.append("Piper")
             tag = "déjà choisi" if name == last else ""
             options.append(Option(name, name, describe_profile(name) + (f"  [{' + '.join(parts)}]" if parts else ""), tag))
-        options.append(Option("Je choisirai plus tard", None, "Menu de ./start.sh (ou ./start.sh --setup)"))
+        options.append(Option("Je choisirai plus tard", None, "Menu de `smarthome` (ou `smarthome setup`)"))
         index = names.index(last) if last else 0
         option = self.ask("step_profile", "Quelle architecture voulez-vous utiliser ?", options, index)
         self.profile = option.value
@@ -333,7 +348,7 @@ class InstallWizard:
         how = {"windows": "Tâche planifiée à l'ouverture de session",
                "linux": "Service systemd " + ("système" if self.mode == "server" else "utilisateur")}[self.platform]
         self.service = self.ask("step_service", "Démarrer SmartHome automatiquement ?", [
-            Option("Non", False, "Lancement à la main : ./start.sh"), Option("Oui", True, how),
+            Option("Non", False, "Lancement à la main : `smarthome`"), Option("Oui", True, how),
         ], 1 if self.service else 0).value
         answered("Démarrage automatique", "oui" if self.service else "non")
         self.summary["Démarrage automatique"] = "oui" if self.service else "non"
@@ -370,7 +385,7 @@ class InstallWizard:
         for label, value in self.summary.items():
             print(f"    {style('2', label + ' :')} {value}", file=sys.stderr)
         if self.profile and self.needs["openrouter"] and not effective_values(None).get("OPENROUTER_API_KEY"):
-            note("Ce profil demande une clé OpenRouter : OPENROUTER_API_KEY dans .env, ou ./start.sh --setup.")
+            note("Ce profil demande une clé OpenRouter : configurez-la après installation avec `smarthome config key` (ou `smarthome setup`).")
         if self.profile and self.needs["ollama"] and self.ollama == "none":
             note("Sans Ollama, ce profil ne pourra pas fonctionner.")
 

@@ -38,7 +38,7 @@ def print_header(title: str):
 def check_system_environment():
     """Diagnostique les utilitaires système disponibles."""
     print_header("🔍 Diagnostic de l'Environnement Système")
-    
+
     tools = [
         ("Serveur audio", ["pactl", "wpctl", "amixer"]),
         ("Contrôle multimédia", ["playerctl", "busctl", "dbus-send", "qdbus6", "qdbus"]),

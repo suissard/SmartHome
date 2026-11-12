@@ -101,6 +101,28 @@ class TestAgentLaunch(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("agent-introuvable-xyz", err)
 
+    def test_unique_logs_and_active_tracking(self):
+        from actions.modules.create_command import active_agent_count, stop_active_agents
+        with tempfile.TemporaryDirectory() as work, tempfile.TemporaryDirectory() as logs:
+            script = Path(logs) / "slow_agent.py"
+            script.write_text("import time\ntime.sleep(5)\n", encoding="utf-8")
+            quote = (lambda x: x) if sys.platform == "win32" else shlex.quote
+            s = Settings(MCP_CLIENT_ENABLED=False, ACTIONS_AGENT_COMMAND=f"{quote(sys.executable)} {quote(str(script))}",
+                         ACTIONS_AGENT_DIR=work, ACTIONS_AGENT_LOG_DIR=logs, ACTIONS_AGENT_MODEL="m1")
+            with patch("actions.modules.create_command._notify"):
+                code1, _, err1 = CreateCommandAction().launch("commande un", s)
+                code2, _, err2 = CreateCommandAction().launch("commande deux", s)
+                self.assertEqual((code1, code2), (0, 0), f"{err1} / {err2}")
+                log_files = list(Path(logs).glob("create_command_*.log"))
+                self.assertEqual(len(log_files), 2)
+                self.assertGreaterEqual(active_agent_count(), 2)
+                stop_active_agents()
+                for _ in range(50):
+                    if active_agent_count() == 0:
+                        break
+                    time.sleep(0.05)
+                self.assertEqual(active_agent_count(), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

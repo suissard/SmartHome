@@ -6,7 +6,7 @@ Contient les métadonnées et le script bash embarqué.
 import os
 from typing import List
 from actions.base import BaseAction
-from core.config import ACTIONS_SCREENSHOT_DIR
+from core.config import get_settings
 
 _SCREENSHOT_SCRIPT = r"""
 DIR="${1:-$HOME/Pictures}"
@@ -47,7 +47,7 @@ class ScreenshotAction(BaseAction):
         )
 
     def build_args(self, args: str = "") -> List[str]:
-        return [os.path.expanduser(ACTIONS_SCREENSHOT_DIR)]
+        return [os.path.expanduser(get_settings().ACTIONS_SCREENSHOT_DIR)]
 
 
 ACTIONS = [ScreenshotAction()]
