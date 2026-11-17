@@ -59,6 +59,9 @@ EDITABLE_GROUPS: list[tuple[str, list[tuple[str, str, bool]]]] = [
         ("LLM_PROVIDER", "Fournisseur LLM", LIVE),
         ("OPENROUTER_API_KEY", "Clé API OpenRouter", LIVE),
         ("OLLAMA_MODEL", "Modèle Ollama", LIVE),
+        ("OLLAMA_WARMUP_ENABLED", "Précharger les modèles Ollama au mot-clé", LIVE),
+        ("OLLAMA_WARMUP_PHRASES", "Phrases d'attente pendant le chargement", LIVE),
+        ("OLLAMA_KEEP_ALIVE", "Maintien du modèle Ollama en mémoire", LIVE),
         ("OPENROUTER_MODEL", "Modèle OpenRouter", LIVE),
         ("LLM_AUDIO_INPUT", "Mode direct : envoyer l'audio au LLM", LIVE),
         ("LLM_IMAGE_INPUT", "Envoyer les images jointes au LLM", LIVE),
@@ -156,6 +159,14 @@ def _stt_engine(name: str) -> list[dict]:
     return [{"STT_PROVIDER": [name]}, {"STT_PROVIDER": _DIRECT_STT, "STT_FALLBACK_PROVIDER": [name]}]
 
 
+# Un fournisseur au moins passe par Ollama (préchargement, maintien en mémoire)
+_OLLAMA_USED = [
+    {"LLM_PROVIDER": ["ollama"]},
+    {"STT_PROVIDER": ["ollama"]},
+    {"STT_PROVIDER": _DIRECT_STT, "STT_FALLBACK_PROVIDER": ["ollama"]},
+    {"TTS_PROVIDER": ["ollama"]},
+]
+
 VISIBLE_WHEN: dict[str, list[dict]] = {
     # 1. Entrée Audio & Détection
     "WAKEWORD_THRESHOLD": [{"WAKEWORD_ENABLED": [True]}],
@@ -184,6 +195,7 @@ VISIBLE_WHEN: dict[str, list[dict]] = {
 
     # 3. LLM
     "OLLAMA_MODEL": [{"LLM_PROVIDER": ["ollama"]}],
+    **{name: _OLLAMA_USED for name in ("OLLAMA_WARMUP_ENABLED", "OLLAMA_WARMUP_PHRASES", "OLLAMA_KEEP_ALIVE")},
     "OPENROUTER_MODEL": [{"LLM_PROVIDER": ["openrouter"]}],
     "OPENROUTER_API_KEY": [
         {"LLM_PROVIDER": ["openrouter"]},

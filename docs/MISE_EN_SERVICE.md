@@ -14,7 +14,7 @@ Il suppose un PC sous **Linux** (Ubuntu / Debian, PipeWire ou PulseAudio) et un 
 
 ## 1. 🖥️ Côté PC : installer et tester l'assistant
 
-> ⚡ Raccourci : `./install.sh` fait les étapes 1.1 et 1.2 (paquets, venv, dépendances, `.env`, modèles, Ollama).
+> ⚡ Raccourci : `./install.sh` fait les étapes 1.1 et 1.2. Sous Linux, il installe Docker et lance SmartHome dans un conteneur (voir « Docker Compose » dans le README) ; `./install.sh --native` garde l'installation dans un venv (paquets, dépendances, `.env`, modèles, Ollama).
 > Sur un serveur sans micro : `./install.sh --server --service`. Sous Windows : `install.ps1`.
 
 ### 1.1 Prérequis

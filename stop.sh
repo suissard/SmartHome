@@ -4,6 +4,7 @@
 #   ./stop.sh --disable   Arrête et désactive le démarrage automatique (systemd)
 #   ./stop.sh --status    Affiche l'état d'exécution sans arrêter
 #   ./stop.sh --restart   Redémarre SmartHome via systemd ou ./start.sh
+# Installation Docker (compose.env) : arrête aussi le conteneur ; Ollama en conteneur reste actif (--all pour l'arrêter).
 set -eo pipefail
 
 C_GREEN="\033[1;32m"
@@ -16,10 +17,13 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT_DIR"
 
 UNIT="smarthome.service"
+# shellcheck source=docker/lib.sh
+source "$ROOT_DIR/docker/lib.sh"
 
 DISABLE=false
 SHOW_STATUS_ONLY=false
 DO_RESTART=false
+STOP_ALL=false
 
 for arg in "$@"; do
     case "$arg" in
@@ -32,6 +36,9 @@ for arg in "$@"; do
         --restart|-r)
             DO_RESTART=true
             ;;
+        --all|-a)
+            STOP_ALL=true
+            ;;
         --help|-h)
             echo "Usage : ./stop.sh [options]"
             echo ""
@@ -40,6 +47,7 @@ for arg in "$@"; do
             echo "  --disable, -d    Arrête et désactive le lancement automatique au démarrage"
             echo "  --restart, -r    Arrête puis relance SmartHome"
             echo "  --status, -s     Affiche l'état actuel (sans rien modifier)"
+            echo "  --all, -a        Docker : arrête aussi le conteneur Ollama"
             echo "  --help, -h       Affiche cette aide"
             exit 0
             ;;
@@ -71,9 +79,37 @@ get_local_pids() {
     pgrep -f "(${ROOT_DIR}/.venv/bin/python|${ROOT_DIR}/main\.py|${ROOT_DIR}/pocketbase/pocketbase serve)" 2>/dev/null || true
 }
 
+# Conteneurs Docker de SmartHome en cours d'exécution (vide sans installation Docker)
+DOCKER_OK=false
+if docker_mode_installed && docker_init; then
+    DOCKER_OK=true
+fi
+docker_running() {
+    $DOCKER_OK && compose ps --status running --services 2>/dev/null | grep -E "^(smarthome|smarthome-server)$" || true
+}
+
 if [[ "$SHOW_STATUS_ONLY" == true ]]; then
     echo -e "${C_CYAN}🔍 État de SmartHome :${C_RESET}"
     active=false
+
+    if $DOCKER_OK; then
+        running="$(docker_running | xargs)"
+        if [[ -n "$running" ]]; then
+            echo -e "  • Conteneur Docker              : ${C_GREEN}ACTIF${C_RESET} ($running)"
+            active=true
+        else
+            echo -e "  • Conteneur Docker              : arrêté"
+        fi
+        if [[ "$(compose_env_get SMARTHOME_OLLAMA false)" == "true" ]]; then
+            if compose ps --status running --services 2>/dev/null | grep -qx ollama; then
+                echo -e "  • Conteneur Ollama              : ${C_GREEN}ACTIF${C_RESET}"
+            else
+                echo -e "  • Conteneur Ollama              : arrêté"
+            fi
+        fi
+    elif docker_mode_installed; then
+        echo -e "  • Conteneur Docker              : ${C_YELLOW}Docker inaccessible${C_RESET}"
+    fi
 
     if is_user_service_active; then
         echo -e "  • Service systemd (utilisateur) : ${C_GREEN}ACTIF (en cours d'exécution)${C_RESET}"
@@ -142,7 +178,27 @@ if is_system_service_active; then
     fi
 fi
 
-# 3. Processus locaux autonomes résiduels
+# 3. Conteneurs Docker (arrêt normal : SIGINT, son rétabli, PocketBase arrêté)
+if $DOCKER_OK; then
+    running="$(docker_running | xargs)"
+    if [[ -n "$running" ]]; then
+        echo "  • Arrêt du conteneur Docker ($running)..."
+        # shellcheck disable=SC2086
+        compose stop $running >/dev/null
+        stopped_anything=true
+    fi
+    if $STOP_ALL && compose ps --status running --services 2>/dev/null | grep -qx ollama; then
+        echo "  • Arrêt du conteneur Ollama..."
+        compose stop ollama >/dev/null
+    fi
+    if [[ "$DISABLE" == true && "$(compose_env_get SMARTHOME_RESTART no)" != "no" ]]; then
+        compose_env_set SMARTHOME_RESTART no
+        "${DOCKER[@]}" update --restart=no smarthome-smarthome-server-1 >/dev/null 2>&1 || true
+        echo "  • Redémarrage automatique par Docker désactivé."
+    fi
+fi
+
+# 4. Processus locaux autonomes résiduels
 pids="$(get_local_pids)"
 if [[ -n "$pids" ]]; then
     pid_list=$(echo $pids | xargs)
@@ -165,8 +221,8 @@ if [[ -n "$pids" ]]; then
     stopped_anything=true
 fi
 
-# 4. Remise d'équerre du son au cas où (ducking)
-if [[ -x "$ROOT_DIR/start.sh" ]]; then
+# 5. Remise d'équerre du son au cas où (ducking) ; en Docker, l'arrêt normal du conteneur s'en charge
+if [[ -x "$ROOT_DIR/start.sh" && "$DOCKER_OK" == false ]]; then
     "$ROOT_DIR/start.sh" --reset-sound >/dev/null 2>&1 || true
 fi
 
@@ -191,6 +247,8 @@ if [[ "$DO_RESTART" == true ]]; then
         fi
         echo -e "${C_GREEN}✅ Service systemd système relancé.${C_RESET}"
         echo "  • Journal en direct : sudo journalctl -u smarthome -f"
+    elif $DOCKER_OK; then
+        exec "$ROOT_DIR/start.sh" --no-menu --detach
     else
         exec "$ROOT_DIR/start.sh"
     fi

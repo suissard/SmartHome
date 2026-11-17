@@ -38,3 +38,6 @@ uploads/
 
 # Archive des conversations (données d'entraînement, ARCHIVE_DB_PATH)
 data/
+
+# Installation Docker (install.sh) : description locale lue par start.sh / stop.sh
+compose.env
