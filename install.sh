@@ -229,8 +229,8 @@ install_docker() {
         ok "Docker présent ($(docker --version 2>/dev/null | sed 's/^Docker version //'))."
     fi
 
-    if have systemctl; then
-        # Docker démarré, et au démarrage de la machine (serveur automatique, conteneur Ollama)
+    # Docker démarré, et au démarrage de la machine (serveur automatique, conteneur Ollama) ; sudo seulement si besoin
+    if have systemctl && ! { systemctl is-enabled --quiet docker 2>/dev/null && systemctl is-active --quiet docker 2>/dev/null; }; then
         $SUDO systemctl enable --now docker >/dev/null 2>&1 || warn "Service docker non démarré (sudo systemctl start docker)."
     fi
 
