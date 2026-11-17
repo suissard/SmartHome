@@ -57,6 +57,7 @@ class AssistantCore:
         self._stt = stt
         self._tts = tts
         self._fallback_stt = None
+        self._warmer = None
         self._tools = tools
         # Composants fournis par l'appelant (tests, main.py) : jamais recréés, seulement mis à jour
         self._injected = {"llm": llm is not None, "tools": tools is not None}
@@ -106,6 +107,33 @@ class AssistantCore:
         """Transcrit un buffer WAV avec le fournisseur STT actif (ou de repli si mode direct)."""
         stt = self.fallback_stt if self.stt.passthrough else self.stt
         return stt.transcribe(audio_wav)
+
+    @property
+    def warmer(self):
+        """Préchargement des modèles Ollama (core/warmup.py), partagé par le micro local et la passerelle."""
+        if self._warmer is None:
+            from core.warmup import ModelWarmer
+            self._warmer = ModelWarmer(lambda: self.settings, self._warmup_llm_model, self._warmup_stt_via_ollama)
+        return self._warmer
+
+    def warm_up(self) -> bool:
+        """Charge en arrière-plan les modèles Ollama qui ne sont pas en mémoire (mot-clé, micro de la PWA ouvert).
+        Ne bloque jamais ; False si désactivé (OLLAMA_WARMUP_ENABLED) ou déjà en cours."""
+        return self.warmer.start()
+
+    def _warmup_llm_model(self):
+        return self._llm.model if self._llm is not None else None
+
+    def _warmup_stt_via_ollama(self) -> bool:
+        """Mode direct avec transcription de repli Ollama, pour un modèle qui ne comprend pas l'audio."""
+        from core.settings_store import _DIRECT_STT
+        s = self.settings
+        if s.STT_PROVIDER.lower() not in _DIRECT_STT or s.STT_FALLBACK_PROVIDER.lower() != "ollama":
+            return False
+        try:
+            return not self.audio_to_llm()
+        except Exception:
+            return True
 
     def audio_to_llm(self) -> bool:
         """True si un enregistrement doit être envoyé tel quel au modèle actif (mode direct et modèle audio)."""

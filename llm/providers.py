@@ -215,6 +215,11 @@ class OllamaLLM(LLMProvider):
             attached = [img.data for img in images or []] + ([audio_wav] if audio_wav else [])
             messages[idx] = {**messages[idx], "images": attached}
         kwargs = {"model": model or self.model, "messages": messages, "stream": stream}
+        # Maintien en mémoire après la demande (OLLAMA_KEEP_ALIVE ; défaut du serveur sinon)
+        from core.warmup import keep_alive_value
+        keep_alive = keep_alive_value(self.settings)
+        if keep_alive is not None:
+            kwargs["keep_alive"] = keep_alive
         if tools:
             kwargs["tools"] = tools
         try:

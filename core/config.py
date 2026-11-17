@@ -166,6 +166,17 @@ class Settings(BaseModel):
     OLLAMA_TTS_VOICE: str = "female-french"
     # Délai maximal d'une transcription ou d'une synthèse Ollama (secondes)
     OLLAMA_AUDIO_TIMEOUT: float = Field(30.0, gt=0.0)
+    # Préchargement des modèles Ollama (LLM, STT, TTS) dès le mot-clé ou l'ouverture du micro de la PWA (core/warmup.py)
+    OLLAMA_WARMUP_ENABLED: EnvBool = True
+    # Délai maximal d'un chargement en mémoire (secondes)
+    OLLAMA_WARMUP_TIMEOUT: float = Field(120.0, gt=0.0)
+    # Phrases d'attente (séparées par « | », une au hasard) dites si la demande est prête avant le modèle ; vide = aucune
+    OLLAMA_WARMUP_PHRASES: str = (
+        "Attends, je réveille mes circuits.|Une seconde, je chauffe mes neurones.|"
+        "Deux secondes, je rassemble mes idées.|Je m'étire un peu et j'arrive."
+    )
+    # Durée de maintien en mémoire après une demande (« 30m », « 2h », secondes, « -1 » = toujours) ; vide = défaut d'Ollama (5 min)
+    OLLAMA_KEEP_ALIVE: str = ""
     LLM_SYSTEM_PROMPT: str = (
         "Tu es un assistant vocal domotique. Réponds en français de manière claire, concise et directe "
         "(1 à 2 phrases max). N'utilise pas de markdown ou d'emoji."

@@ -1,7 +1,12 @@
 #!/usr/bin/env bash
 # Script d'installation SmartHome — Linux (Debian/Ubuntu, Fedora, Arch, openSUSE), macOS et serveurs sans écran.
 #
+# Sous Linux, SmartHome tourne dans Docker (compose.yaml) : le script installe Docker et Compose, construit
+# l'image et écrit compose.env ; ./start.sh lance ensuite le conteneur. --native garde l'installation
+# dans un venv (.venv), seule possible sous macOS (Docker Desktop n'y donne pas accès au micro).
+#
 #   ./install.sh                  Questions pas à pas (machine, profil, Ollama, paquets, modèles, service)
+#   ./install.sh --native         Sans Docker : paquets système + venv
 #   ./install.sh --server         Serveur sans micro : passerelle réseau seule (python -m gateway)
 #   ./install.sh --service        Ajoute le démarrage automatique (systemd)
 #   ./install.sh -y               Sans question : options de la ligne de commande et .env
@@ -42,6 +47,7 @@ WIZARD_RAN=false
 PROFILE=""
 PYTHON_BIN=""
 GATEWAY_BIND=""
+INSTALL_MODE=""          # docker (défaut sous Linux) | native (venv, défaut sous macOS)
 
 usage() {
     cat <<EOF
@@ -50,7 +56,9 @@ Usage : ./install.sh [options]
   --server          Mode serveur sans micro : passerelle seule, écoute réseau, jeton généré
   --service         Installe un service systemd (utilisateur en poste, système en serveur)
   --host ADRESSE    Adresse d'écoute de la passerelle en mode serveur (défaut : 0.0.0.0)
-  --python CHEMIN   Interpréteur Python à utiliser (≥ $MIN_PYTHON)
+  --native          Sans Docker : paquets système et environnement Python .venv
+  --docker          Dans Docker (défaut sous Linux) : installe Docker et Compose, construit l'image
+  --python CHEMIN   Interpréteur Python à utiliser (≥ $MIN_PYTHON, installation --native)
   --no-system-deps  Ne pas installer les paquets système (apt, dnf, pacman, zypper, brew)
   --no-ollama       Ne pas installer Ollama ni télécharger de modèle LLM
   --no-models       Ne télécharger aucun modèle (openWakeWord, Whisper, Ollama)
@@ -68,6 +76,8 @@ while [[ $# -gt 0 ]]; do
         --service) WITH_SERVICE=true ;;
         --host) GATEWAY_BIND="${2:?--host attend une adresse}"; shift ;;
         --python) PYTHON_BIN="${2:?--python attend un chemin}"; shift ;;
+        --native) INSTALL_MODE="native" ;;
+        --docker) INSTALL_MODE="docker" ;;
         --no-system-deps) SYSTEM_DEPS="none" ;;
         --no-ollama) OLLAMA_CHOICE="none" ;;
         --no-models) DOWNLOAD_MODELS=false ;;
@@ -115,6 +125,20 @@ case "$OS" in
     *) die "Système non pris en charge : $OS" ;;
 esac
 
+if [[ -z "$INSTALL_MODE" ]]; then
+    [[ "$OS" == "Linux" ]] && INSTALL_MODE="docker" || INSTALL_MODE="native"
+fi
+if [[ "$INSTALL_MODE" == "docker" && "$OS" != "Linux" ]]; then
+    die "L'installation Docker n'est prise en charge que sous Linux (micro et son de la session) : ./install.sh --native"
+fi
+is_docker() { [[ "$INSTALL_MODE" == "docker" ]]; }
+if is_docker; then
+    # Configuration dans le dépôt (monté dans le conteneur), jamais dans le HOME du conteneur
+    ENV_FILE="$ROOT_DIR/.env"
+    # shellcheck source=docker/lib.sh
+    source "$ROOT_DIR/docker/lib.sh"
+fi
+
 PKG_MANAGER=""
 if [[ "$OS" == "Darwin" ]]; then
     have brew && PKG_MANAGER="brew"
@@ -142,7 +166,8 @@ run_wizard() {
     platform="$([[ "$OS" == "Darwin" ]] && echo darwin || echo linux)"
     plan="$("$py" "$ROOT_DIR/core/install_wizard.py" --platform "$platform" --mode "$MODE" \
         --pkg-manager "$PKG_MANAGER" --host "${GATEWAY_BIND:-0.0.0.0}" \
-        --system-deps "$([[ $SYSTEM_DEPS != none ]] && echo true || echo false)" \
+        --system-deps "$([[ $SYSTEM_DEPS != none ]] && ! is_docker && echo true || echo false)" \
+        --docker "$(is_docker && echo true || echo false)" \
         --ollama "$([[ $OLLAMA_CHOICE != none ]] && echo true || echo false)" \
         --models "$DOWNLOAD_MODELS" --service "$WITH_SERVICE" --accounts "$ASK_ACCOUNTS")" || status=$?
     case "$status" in
@@ -176,7 +201,89 @@ fi
 # Les étapes suivantes lisent la configuration du profil choisi (core/config.py applique SMARTHOME_PROFILE)
 [[ -n "$PROFILE" ]] && export SMARTHOME_PROFILE="$PROFILE"
 
-echo "${C_CYAN}🚀 Installation de SmartHome ($([[ $MODE == server ]] && echo "serveur sans micro" || echo "poste vocal") — $OS)${C_RESET}"
+echo "${C_CYAN}🚀 Installation de SmartHome ($([[ $MODE == server ]] && echo "serveur sans micro" || echo "poste vocal") — $OS$(is_docker && echo ", Docker"))${C_RESET}"
+
+# --- 1 bis. Docker (installation par défaut sous Linux) -----------------------
+install_docker() {
+    step "1/8 Docker et Docker Compose"
+    if ! have docker; then
+        info "Installation de Docker…"
+        case "$PKG_MANAGER" in
+            apt-get|dnf)
+                # Script officiel (Ubuntu, Debian, Raspberry Pi OS, Fedora, RHEL, CentOS) : Docker Engine + plugin Compose
+                if ! have curl; then
+                    if [[ "$PKG_MANAGER" == "apt-get" ]]; then
+                        $SUDO apt-get update && $SUDO apt-get install -y curl ca-certificates
+                    else
+                        $SUDO dnf install -y curl ca-certificates
+                    fi
+                fi
+                curl -fsSL https://get.docker.com | $SUDO sh || die "Échec de l'installation de Docker (https://docs.docker.com/engine/install/)."
+                ;;
+            pacman) $SUDO pacman -S --needed --noconfirm docker docker-compose docker-buildx || die "Échec de l'installation de Docker." ;;
+            zypper) $SUDO zypper install -y docker docker-compose docker-buildx || die "Échec de l'installation de Docker." ;;
+            *) die "Installez Docker Engine et le plugin Compose (https://docs.docker.com/engine/install/), puis relancez ce script." ;;
+        esac
+        ok "Docker installé."
+    else
+        ok "Docker présent ($(docker --version 2>/dev/null | sed 's/^Docker version //'))."
+    fi
+
+    if have systemctl; then
+        # Docker démarré, et au démarrage de la machine (serveur automatique, conteneur Ollama)
+        $SUDO systemctl enable --now docker >/dev/null 2>&1 || warn "Service docker non démarré (sudo systemctl start docker)."
+    fi
+
+    # Le plugin Compose manque parfois quand Docker vient des paquets de la distribution
+    if ! docker compose version >/dev/null 2>&1; then
+        info "Installation du plugin Docker Compose…"
+        case "$PKG_MANAGER" in
+            apt-get) $SUDO apt-get install -y docker-compose-plugin || $SUDO apt-get install -y docker-compose-v2 ;;
+            dnf) $SUDO dnf install -y docker-compose-plugin ;;
+            pacman) $SUDO pacman -S --needed --noconfirm docker-compose ;;
+            zypper) $SUDO zypper install -y docker-compose ;;
+        esac || true
+        docker compose version >/dev/null 2>&1 || die "Plugin Docker Compose introuvable (https://docs.docker.com/compose/install/linux/)."
+    fi
+    ok "Docker Compose $(docker compose version --short 2>/dev/null)."
+
+    # Groupe docker : ./start.sh sans sudo (effectif à la prochaine connexion ; d'ici là, sudo docker)
+    local me="${SUDO_USER:-$USER}"
+    if [[ $EUID -ne 0 ]] && ! id -nG "$me" | tr ' ' '\n' | grep -qx docker; then
+        $SUDO usermod -aG docker "$me" \
+            && warn "$me ajouté au groupe docker : déconnectez-vous puis reconnectez-vous pour lancer SmartHome sans sudo."
+    fi
+
+    docker_init || die "Docker ne répond pas (sudo systemctl status docker)."
+    [[ "${DOCKER[0]}" == "sudo" ]] && info "Docker passe par sudo jusqu'à votre prochaine connexion."
+
+    # Description de l'installation pour start.sh / stop.sh (voir docker/lib.sh)
+    compose_env_set SMARTHOME_MODE "$([[ "$MODE" == "server" ]] && echo server || echo voice)"
+    compose_env_set SMARTHOME_RESTART "$([[ "$MODE" == "server" ]] && $WITH_SERVICE && echo unless-stopped || echo no)"
+    [[ -n "$(compose_env_get SMARTHOME_OLLAMA)" ]] || compose_env_set SMARTHOME_OLLAMA false
+    [[ -n "$(compose_env_get SMARTHOME_GPU)" ]] || compose_env_set SMARTHOME_GPU false
+    refresh_session_env
+
+    step "2/8 Image SmartHome"
+    ensure_image true || die "Construction de l'image impossible (docker compose build)."
+    ok "Image $SMARTHOME_IMAGE prête (Python et dépendances dans l'image, dépôt monté sur /app)."
+    step "3/8 Dépendances Python"
+    ok "Dans l'image (requirements.txt) : rien à installer sur la machine."
+}
+
+# Python de l'application : celui du venv, ou un conteneur jetable en mode Docker (dépôt monté sur /app)
+vpy() {
+    if is_docker; then
+        in_container python "$@"
+    else
+        "$VENV_DIR/bin/python" "$@"
+    fi
+}
+
+# Chemin du fichier de configuration vu par ce Python
+env_file_for_python() {
+    if is_docker; then echo /app/.env; else echo "$ENV_FILE"; fi
+}
 
 # --- 1. Paquets système ------------------------------------------------------
 install_system_deps() {
@@ -265,7 +372,7 @@ setup_venv() {
 # --- 4. Configuration (sans copier .env.example) -----------------------------
 set_env() {
     # Remplace (ou ajoute) KEY=VALUE dans le fichier utilisateur en créant le dossier au besoin.
-    "$VPY" - "$ENV_FILE" "$1" "$2" <<'PY'
+    vpy - "$(env_file_for_python)" "$1" "$2" <<'PY'
 import os, re, sys
 from pathlib import Path
 
@@ -291,7 +398,7 @@ PY
 
 setting() {
     # Lit une valeur validée par core/config.py (réglages utilisateur > variables d'environnement > défauts).
-    "$VPY" -c "from core.config import get_settings; print(getattr(get_settings(), '$1'))"
+    vpy -c "from core.config import get_settings; print(getattr(get_settings(), '$1'))"
 }
 
 setup_env() {
@@ -303,7 +410,7 @@ setup_env() {
     fi
 
     if [[ -n "$PROFILE" ]]; then
-        "$VPY" -c "import sys; from core.profiles import remember_profile; remember_profile(sys.argv[1])" "$PROFILE"
+        vpy -c "import sys; from core.profiles import remember_profile; remember_profile(sys.argv[1])" "$PROFILE"
         ok "Profil « $PROFILE » retenu (modifiable avec 'smarthome config' ou au lancement)."
     fi
     if [[ -n "$OLLAMA_REMOTE_HOST" ]]; then
@@ -316,14 +423,14 @@ setup_env() {
         set_env GATEWAY_HOST "$host"
         if [[ -z "$(setting GATEWAY_AUTH_TOKEN)" ]]; then
             local token
-            token="$("$VPY" -c 'import secrets; print(secrets.token_hex(32))')"
+            token="$(vpy -c 'import secrets; print(secrets.token_hex(32))')"
             set_env GATEWAY_AUTH_TOKEN "$token"
             ok "Jeton de passerelle généré (consultable avec 'smarthome config token')."
         fi
         ok "Passerelle : écoute sur $host:$(setting GATEWAY_PORT)."
     fi
 
-    "$VPY" -c "from core.config import get_settings; get_settings()" || die "La configuration contient une valeur invalide ($ENV_FILE)."
+    vpy -c "from core.config import get_settings; get_settings()" || die "La configuration contient une valeur invalide ($ENV_FILE)."
     ok "Configuration valide."
 }
 
@@ -335,7 +442,7 @@ download_local_models() {
         return
     fi
     if [[ "$MODE" == "desktop" ]]; then
-        "$VPY" -c "import os, sys, openwakeword, openwakeword.utils as u; getattr(u, 'download_models', lambda: None)(); d = os.path.join(os.path.dirname(openwakeword.__file__), 'resources', 'models'); sys.exit(0 if all(os.path.isfile(os.path.join(d, f)) for f in ('melspectrogram.onnx', 'embedding_model.onnx', 'silero_vad.onnx')) else 1)" \
+        vpy -c "import os, sys, openwakeword, openwakeword.utils as u; getattr(u, 'download_models', lambda: None)(); d = os.path.join(os.path.dirname(openwakeword.__file__), 'resources', 'models'); sys.exit(0 if all(os.path.isfile(os.path.join(d, f)) for f in ('melspectrogram.onnx', 'embedding_model.onnx', 'silero_vad.onnx')) else 1)" \
             && ok "Modèles openWakeWord (analyse audio + VAD Silero)." \
             || warn "Téléchargement des modèles openWakeWord impossible (relancez plus tard)."
     fi
@@ -344,12 +451,12 @@ download_local_models() {
     if [[ "$stt" == "whisper" || "$fallback" == "whisper" ]]; then
         local model
         model="$(setting WHISPER_MODEL)"
-        "$VPY" -c "from core.config import get_settings as g; s=g(); from faster_whisper import WhisperModel; WhisperModel(s.WHISPER_MODEL, device=s.WHISPER_DEVICE, compute_type=s.WHISPER_COMPUTE_TYPE)" \
+        vpy -c "from core.config import get_settings as g; s=g(); from faster_whisper import WhisperModel; WhisperModel(s.WHISPER_MODEL, device=s.WHISPER_DEVICE, compute_type=s.WHISPER_COMPUTE_TYPE)" \
             && ok "Modèle Whisper « $model »." \
             || warn "Téléchargement du modèle Whisper impossible (il le sera au premier lancement)."
     fi
     if [[ "$(setting TTS_PROVIDER)" == "piper" ]]; then
-        "$VPY" -c "import sys; from pathlib import Path; from core.config import TTS_MODEL_PATH as p; sys.exit(0 if Path(p).is_file() else 1)" \
+        vpy -c "import sys; from pathlib import Path; from core.config import TTS_MODEL_PATH as p; sys.exit(0 if Path(p).is_file() else 1)" \
             && ok "Voix Piper présente." || warn "Voix Piper introuvable (TTS_VOICE / TTS_MODEL_PATH dans .env)."
     fi
 }
@@ -383,6 +490,17 @@ setup_ollama() {
 
     if [[ "$OLLAMA_CHOICE" == "remote" ]]; then
         ollama_up "$host" || { warn "Ollama distant injoignable sur $host : modèles non téléchargés."; return; }
+    elif is_docker && ! have ollama && ! ollama_up "$host" && { [[ "$OLLAMA_CHOICE" == "install" ]] \
+            || [[ "$(compose_env_get SMARTHOME_OLLAMA false)" == "true" ]] \
+            || confirm "Ollama n'est pas installé. Le lancer dans un conteneur Docker (ollama/ollama) ?"; }; then
+        # Ollama en conteneur (profil Compose « ollama », réseau de l'hôte : même adresse localhost:11434)
+        compose_env_set SMARTHOME_OLLAMA true
+        if "${DOCKER[@]}" info --format '{{json .Runtimes}}' 2>/dev/null | grep -q nvidia; then
+            compose_env_set SMARTHOME_GPU true
+            ok "Carte NVIDIA disponible pour Ollama (compose.gpu.yaml)."
+        fi
+        info "Démarrage du conteneur Ollama…"
+        compose up -d ollama || { warn "Conteneur Ollama non démarré."; return; }
     elif ! have ollama && ! ollama_up "$host"; then
         # « install » a déjà été validé dans l'assistant ; « auto » (sans assistant) demande confirmation
         if [[ "$OLLAMA_CHOICE" == "install" ]] \
@@ -399,7 +517,10 @@ setup_ollama() {
         fi
     fi
 
-    if ! ollama_up "$host"; then
+    if ! ollama_up "$host" && is_docker && [[ "$(compose_env_get SMARTHOME_OLLAMA false)" == "true" ]]; then
+        compose up -d ollama >/dev/null 2>&1 || true
+        for _ in $(seq 1 30); do ollama_up "$host" && break; sleep 1; done
+    elif ! ollama_up "$host"; then
         info "Démarrage du service Ollama…"
         if have systemctl && systemctl list-unit-files ollama.service >/dev/null 2>&1; then
             $SUDO systemctl enable --now ollama || true
@@ -417,11 +538,13 @@ setup_ollama() {
     local model
     for model in $(printf '%s\n' "${models[@]}" | sort -u); do
         info "Téléchargement du modèle $model (peut être long)…"
-        if have ollama; then
+        if is_docker && [[ "$(compose_env_get SMARTHOME_OLLAMA false)" == "true" ]]; then
+            compose exec -T ollama ollama pull "$model"
+        elif have ollama; then
             OLLAMA_HOST="$host" ollama pull "$model"
         else
-            # Ollama distant sans client local : bibliothèque Python ollama du venv
-            "$VPY" -c "import sys, ollama; ollama.Client(host=sys.argv[1]).pull(sys.argv[2])" "$host" "$model"
+            # Ollama distant sans client local : bibliothèque Python ollama de l'application
+            vpy -c "import sys, ollama; ollama.Client(host=sys.argv[1]).pull(sys.argv[2])" "$host" "$model"
         fi && ok "Modèle $model prêt." || warn "Échec du téléchargement de $model."
     done
 }
@@ -445,15 +568,17 @@ setup_accounts() {
         ok "Passerelle activée (GATEWAY_ENABLED=true)."
     fi
     if [[ -z "$(setting GATEWAY_AUTH_TOKEN)" ]]; then
-        set_env GATEWAY_AUTH_TOKEN "$("$VPY" -c 'import secrets; print(secrets.token_hex(32))')"
+        set_env GATEWAY_AUTH_TOKEN "$(vpy -c 'import secrets; print(secrets.token_hex(32))')"
         ok "Jeton administrateur généré (GATEWAY_AUTH_TOKEN dans .env)."
     fi
 
-    "$VPY" -m core.pocketbase install || { warn "PocketBase non installé : relancez ./install.sh ou .venv/bin/python -m core.pocketbase install."; return; }
+    local pb_cmd=".venv/bin/python -m core.pocketbase"
+    is_docker && pb_cmd="docker compose --env-file compose.env run --rm smarthome-server python -m core.pocketbase"
+    vpy -m core.pocketbase install || { warn "PocketBase non installé : relancez ./install.sh ou $pb_cmd install."; return; }
     if [[ ! -d "$ROOT_DIR/pocketbase/pb_data" && -t 0 ]] && ! $ASSUME_YES && confirm "Créer maintenant le compte administrateur de PocketBase ?"; then
-        "$VPY" -m core.pocketbase admin || warn "Compte non créé : .venv/bin/python -m core.pocketbase admin"
+        vpy -m core.pocketbase admin || warn "Compte non créé : $pb_cmd admin"
     elif [[ ! -d "$ROOT_DIR/pocketbase/pb_data" ]]; then
-        info "Compte administrateur à créer : .venv/bin/python -m core.pocketbase admin"
+        info "Compte administrateur à créer : $pb_cmd admin"
     fi
     ok "SmartHome lance PocketBase lui-même. Comptes du foyer : $(setting POCKETBASE_URL)/_/ (collection users, champ role)."
 }
@@ -462,6 +587,8 @@ setup_accounts() {
 setup_launcher() {
     local bin_dir="$HOME/.local/bin"
     local target="$ROOT_DIR/.venv/bin/smarthome"
+    # En Docker, la commande `smarthome` passe par start.sh / stop.sh et un conteneur jetable
+    is_docker && target="$ROOT_DIR/docker/smarthome"
     if [[ -x "$target" ]]; then
         mkdir -p "$bin_dir"
         ln -sf "$target" "$bin_dir/smarthome"
@@ -471,8 +598,24 @@ setup_launcher() {
             *) warn "$bin_dir n'est pas dans votre PATH actuel (ajoutez : export PATH=\"\$HOME/.local/bin:\$PATH\")." ;;
         esac
     fi
-    if [[ "$OS" == "Linux" && "$MODE" == "desktop" ]]; then
-        "$VPY" -m core.cli install-desktop >/dev/null 2>&1 \
+    if is_docker && [[ "$MODE" == "desktop" ]]; then
+        local apps="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
+        mkdir -p "$apps"
+        cat >"$apps/smarthome.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=SmartHome
+GenericName=Assistant vocal local
+Comment=Assistant vocal domotique 100 % local (Docker)
+Exec=$ROOT_DIR/start.sh --no-menu
+Icon=audio-input-microphone
+Terminal=true
+Categories=Utility;AudioVideo;
+Keywords=assistant;voice;domotique;jarvis;smarthome;
+EOF
+        ok "Raccourci ajouté dans le menu d'applications Linux."
+    elif [[ "$OS" == "Linux" && "$MODE" == "desktop" ]]; then
+        vpy -m core.cli install-desktop >/dev/null 2>&1 \
             && ok "Raccourci ajouté dans le menu d'applications Linux." \
             || warn "Raccourci bureau non installé (lancez : smarthome install-desktop)."
     fi
@@ -493,6 +636,40 @@ setup_service() {
 
     local unit="smarthome.service"
     local smarthome_bin="$ROOT_DIR/.venv/bin/smarthome"
+    if is_docker && [[ "$MODE" == "server" ]]; then
+        # Serveur : Docker relance le conteneur au démarrage de la machine (restart: unless-stopped, compose.env)
+        compose up -d "$(smarthome_service)" \
+            && ok "Conteneur $(smarthome_service) actif, relancé par Docker au démarrage (journal : smarthome logs -f)."
+        return
+    elif is_docker; then
+        # Poste vocal : service utilisateur, car le conteneur a besoin de la session (son, bus D-Bus)
+        local dir="$HOME/.config/systemd/user"
+        mkdir -p "$dir"
+        cat >"$dir/$unit" <<EOF
+[Unit]
+Description=SmartHome — assistant vocal (Docker)
+After=pipewire-pulse.service pulseaudio.service
+
+[Service]
+WorkingDirectory=$ROOT_DIR
+ExecStart=$ROOT_DIR/start.sh --no-menu --foreground
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target
+EOF
+        systemctl --user daemon-reload
+        if [[ "${DOCKER[0]}" == "sudo" ]]; then
+            systemctl --user enable "$unit"
+            warn "Service utilisateur $unit activé : il démarrera à votre prochaine connexion (groupe docker)."
+        else
+            systemctl --user enable --now "$unit"
+            ok "Service utilisateur $unit actif (journal : smarthome logs -f)."
+        fi
+        return
+    fi
     if [[ "$MODE" == "server" ]]; then
         # Service système : tourne sans session ouverte, sous l'utilisateur courant.
         local user="${SUDO_USER:-$USER}"
@@ -540,8 +717,12 @@ EOF
     fi
 }
 
-install_system_deps
-setup_venv
+if is_docker; then
+    install_docker
+else
+    install_system_deps
+    setup_venv
+fi
 setup_env
 download_local_models
 setup_ollama
@@ -550,7 +731,7 @@ setup_service
 
 echo
 if $WITH_SERVICE; then
-    echo "${C_GREEN}🚀 SmartHome est installé et actif via systemd.${C_RESET}"
+    echo "${C_GREEN}🚀 SmartHome est installé et actif via $(is_docker && [[ "$MODE" == server ]] && echo Docker || echo systemd).${C_RESET}"
     echo "  • Il tourne en arrière-plan et se relancera automatiquement au démarrage du PC."
     echo "  • Configurer (micro, clé API...) : smarthome config"
     echo "  • Suivre les logs en direct      : smarthome logs -f"
@@ -571,7 +752,9 @@ else
         read -r -p "Voulez-vous lancer SmartHome maintenant (smarthome) ? [O/n] " answer || true
         if [[ -z "$answer" || "$answer" =~ ^[oOyY] ]]; then
             echo "🚀 Lancement de SmartHome..."
-            if [[ "$MODE" == "server" ]]; then
+            if is_docker; then
+                exec "$ROOT_DIR/start.sh" --no-menu
+            elif [[ "$MODE" == "server" ]]; then
                 exec "$ROOT_DIR/.venv/bin/smarthome" server
             else
                 exec "$ROOT_DIR/.venv/bin/smarthome"

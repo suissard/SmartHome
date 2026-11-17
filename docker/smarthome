@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# Commande `smarthome` d'une installation Docker (lien ~/.local/bin/smarthome posé par install.sh).
+# Mêmes sous-commandes que core/cli.py : lancement et arrêt passent par start.sh / stop.sh (conteneurs),
+# les autres (config, setup, …) s'exécutent dans un conteneur jetable.
+set -euo pipefail
+
+SELF="$(readlink -f "${BASH_SOURCE[0]}")"
+ROOT_DIR="$(cd "$(dirname "$SELF")/.." && pwd)"
+# shellcheck source=docker/lib.sh
+source "$ROOT_DIR/docker/lib.sh"
+
+cmd="${1:-start}"
+case "$cmd" in
+    -h|--help|-V|--version) ;;                # aide / version de core/cli.py
+    -*) cmd="start" ;;                         # `smarthome --profile cloud` = `smarthome start --profile cloud`
+    *) shift || true ;;
+esac
+
+case "$cmd" in
+    -h|--help|-V|--version)
+        docker_init || { echo "❌ Docker est inaccessible." >&2; exit 1; }
+        in_container python -m core.cli "$cmd"
+        ;;
+    start) exec "$ROOT_DIR/start.sh" "$@" ;;
+    server) exec "$ROOT_DIR/start.sh" --server "$@" ;;
+    setup) exec "$ROOT_DIR/start.sh" --setup "$@" ;;
+    stop) exec "$ROOT_DIR/stop.sh" "$@" ;;
+    status) exec "$ROOT_DIR/stop.sh" --status ;;
+    restart) exec "$ROOT_DIR/stop.sh" --restart ;;
+    reset-sound) exec "$ROOT_DIR/start.sh" --reset-sound ;;
+    logs)
+        docker_init || { echo "❌ Docker est inaccessible." >&2; exit 1; }
+        args=()
+        while [[ $# -gt 0 ]]; do
+            case "$1" in
+                -f|--follow) args+=(-f) ;;
+                -n|--lines) args+=(--tail "${2:?}"); shift ;;
+                *) args+=("$1") ;;
+            esac
+            shift
+        done
+        exec "${DOCKER[@]}" compose --project-directory "$ROOT_DIR" --env-file "$COMPOSE_ENV_FILE" \
+            -f "$ROOT_DIR/compose.yaml" --profile "$(smarthome_mode)" logs --no-log-prefix "${args[@]}" "$(smarthome_service)"
+        ;;
+    *)
+        docker_init || { echo "❌ Docker est inaccessible." >&2; exit 1; }
+        refresh_session_env
+        ensure_image
+        in_container python -m core.cli "$cmd" "$@"
+        ;;
+esac

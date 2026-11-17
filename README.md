@@ -108,13 +108,33 @@ Un script installe tout : paquets système, environnement Python, dépendances, 
 
 Dans un terminal, il pose d'abord quelques questions aux flèches (comme le menu de `./start.sh`, `←` pour revenir en arrière) afin de n'installer que le nécessaire : type de machine (poste vocal ou serveur), profil d'architecture, Ollama (à installer, déjà présent, sur une autre machine ou inutile pour le profil choisi), paquets système, téléchargement des modèles, démarrage automatique. Un récapitulatif est affiché avant toute installation. Avec `-y` ou `--no-menu`, il s'appuie sur les options et le `.env` sans rien demander.
 
-**Linux / macOS** (Debian/Ubuntu, Fedora, Arch, openSUSE, Homebrew) :
+**Linux** (Debian/Ubuntu, Fedora, Arch, openSUSE) — SmartHome tourne dans **Docker** :
 
 ```bash
 git clone <url-du-repo> SmartHome && cd SmartHome
-./install.sh
-./start.sh
+./install.sh        # installe Docker + Compose, construit l'image, écrit compose.env
+./start.sh          # lance le conteneur (Ctrl+C l'arrête ; -d pour l'arrière-plan)
 ```
+
+**macOS**, ou Linux sans Docker : `./install.sh --native` (paquets système + `.venv`), puis `./start.sh`.
+
+#### Docker Compose
+
+`install.sh` installe Docker Engine et le plugin Compose (script officiel `get.docker.com` sous Debian/Ubuntu/Fedora, paquets de la distribution sous Arch/openSUSE), ajoute l'utilisateur au groupe `docker` (effectif à la prochaine connexion, `sudo docker` d'ici là), puis construit l'image `smarthome:local` ([Dockerfile](Dockerfile)). Le fichier [compose.yaml](compose.yaml) décrit trois services, choisis par profil Compose :
+
+| Service (profil) | Rôle |
+| :--- | :--- |
+| `smarthome` (`voice`) | Assistant vocal : micro et haut-parleur via le PipeWire / PulseAudio de la session, bus D-Bus de la session (médias, verrouillage) |
+| `smarthome-server` (`server`) | Passerelle seule, sans micro (`--server`) |
+| `ollama` (`ollama`) | Ollama en conteneur, si choisi à l'installation (carte NVIDIA via [compose.gpu.yaml](compose.gpu.yaml) si Docker a le runtime `nvidia`) |
+
+- Le dépôt est **monté sur `/app`** : `.env`, profils, `data/`, voix, mots-clés, PocketBase et commandes créées par l'IA restent dans le projet ; l'image ne contient que Python et les dépendances (reconstruite par `start.sh` quand `Dockerfile` ou `requirements.txt` changent, ou avec `./start.sh --build`).
+- Réseau de l'hôte (`network_mode: host`) : passerelle, Ollama (`localhost:11434`), PocketBase et Tailscale se comportent comme sans Docker. Le conteneur tourne avec l'UID de l'utilisateur.
+- `compose.env` (non versionné) décrit l'installation (mode, Ollama, redémarrage, session) ; il sert aussi de `--env-file` à Compose, qui ne lit donc jamais le `.env` de l'application. À la main : `docker compose --env-file compose.env --profile voice up`.
+- `smarthome` (lien `~/.local/bin/smarthome` → [docker/smarthome](docker/smarthome)) garde ses sous-commandes : `start`, `stop`, `status`, `logs -f`, `config`, `setup`…
+- Démarrage automatique (`--service`) : poste vocal → service systemd **utilisateur** qui lance le conteneur à l'ouverture de session (il a besoin du son de la session) ; serveur → `restart: unless-stopped`, relancé par Docker au démarrage.
+
+> ⚠️ Limites en conteneur : les agents externes (`agy`, `claude`) et `create_command` ne sont pas dans l'image ; ouvrir / fermer des applications, captures d'écran, luminosité, extinction et redémarrage de la machine ne visent pas l'hôte. Sous Ubuntu, un profil AppArmor de l'hôte bloque `notify-send` depuis le conteneur (notifications). Le service vocal tourne avec `apparmor=unconfined` pour joindre le bus D-Bus de la session. Pour tout cela : `./install.sh --native`.
 
 **Windows 10/11** (PowerShell ; Python et Ollama installés via `winget` si absents) :
 
@@ -131,6 +151,7 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1
 
 | Option (`install.sh` / `install.ps1`) | Effet |
 | :--- | :--- |
+| `--native` | Linux : sans Docker, paquets système et `.venv` (défaut sous macOS) |
 | `--server` / `-Server` | Passerelle seule (`python -m gateway`), `GATEWAY_HOST=0.0.0.0`, jeton généré |
 | `--service` / `-Service` | Démarrage automatique : service systemd (utilisateur en poste, système en serveur) ou tâche planifiée Windows |
 | `--host` / `-GatewayHost` | Adresse d'écoute de la passerelle en mode serveur |
@@ -226,7 +247,9 @@ Cinq profils prêts à l'emploi dans `profiles/` ; ils surchargent `.env` (les s
 ./start.sh --setup              # configuration pas à pas : quelques questions, crée le profil perso
 ./start.sh --no-menu            # pas de menu : reprend le dernier profil choisi (hybrid la première fois)
 ./start.sh --profile cloud      # ou SMARTHOME_PROFILE=cloud, ou python main.py --profile cloud
-./stop.sh                       # arrête le service systemd et tout processus SmartHome actif
+./start.sh -d                   # Docker : en arrière-plan (smarthome logs -f pour suivre)
+./start.sh --build              # Docker : reconstruit l'image avant de lancer
+./stop.sh                       # arrête le conteneur, le service systemd et tout processus SmartHome actif
 ./stop.sh --status              # vérifie l'état d'exécution
 python -m core.profiles         # liste les profils
 ```
@@ -277,6 +300,10 @@ FOLLOW_UP_TIMEOUT=30.0
 # --- Cerveau LLM Local (Ollama) ---
 OLLAMA_MODEL=qwen2.5:7b
 OLLAMA_HOST=http://localhost:11434
+# Modèles Ollama chargés en mémoire dès le mot-clé (pendant que vous parlez) ; phrase d'attente s'ils ne sont pas prêts
+OLLAMA_WARMUP_ENABLED=true
+OLLAMA_WARMUP_PHRASES=Attends, je réveille mes circuits.|Une seconde, je chauffe mes neurones.
+OLLAMA_KEEP_ALIVE=30m
 LLM_SYSTEM_PROMPT="Tu es un assistant vocal domotique. Réponds en français de manière claire, concise et directe (1 à 2 phrases max)."
 LLM_STREAM=true
 

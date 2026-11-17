@@ -43,7 +43,7 @@ Ce document est destiné aux agents IA (et aux développeurs) qui lisent, mainti
   - `FOLLOW_UP_TIMEOUT` (configurable via `.env`) : Durée (en secondes) pendant laquelle l'assistant reste en écoute active après une réponse. La barre d'écoulement s'adapte dynamiquement à cette durée.
 - **Cycle de Fonctionnement** :
   1. Écoute passive par paquets (`CHUNK = 1280` à `RATE = 16000`).
-  2. Si le mot-clé est validé (`score > threshold`), atténuation audio globale via `ducker.duck()`, notification `feedback.on_wakeword_detected()`, puis passage en mode `in_conversation = True`.
+  2. Si le mot-clé est validé (`score > threshold`), `core.warm_up()` (préchargement Ollama, voir 2.5 bis), atténuation audio globale via `ducker.duck()`, notification `feedback.on_wakeword_detected()`, puis passage en mode `in_conversation = True`.
   3. Boucle de follow-up : appel de `transcriber.record_and_transcribe(...)`.
   4. Si du texte (ou de l'audio en mode direct) est reçu : `run_local_turn()` lance `core.respond("local", on_sentence=speech.say)` dans un thread ; chaque phrase est prononcée dès qu'elle est générée (`SpeechPipeline`) pendant que le thread principal continue de lire le micro (`mic_lock` partagé avec la confirmation vocale) pour détecter une interruption (`BargeInDetector`). Interruption → `core.cancel()` + `speech.interrupt()` + son `BARGE_IN_SOUND`, et écoute immédiate ; sinon signal de fin de tour `feedback.on_response_end()`.
   5. Si timeout de silence : notification de mise en veille `feedback.on_timeout()`, purge du flux, restauration du son système via `ducker.unduck()`, et retour en veille passive.
@@ -130,6 +130,11 @@ Ce document est destiné aux agents IA (et aux développeurs) qui lisent, mainti
 - **Streaming** : Supporte le streaming console immédiat pour un retour visuel en temps réel pendant la génération quel que soit le fournisseur actif.
 - **Modèles de Décision** ([llm/decision.py](file:///home/suissard/PROGRAMMATIONS/SmartHome/llm/decision.py)) : un modèle listé dans `LLM_DECISION_MODELS` (ex: `nimble`, endpoint Ollama `/v1/systemone`, `LLMProvider.decide()`) ne rédige pas : `Conversation.ask()` délègue à `run_decision()`, qui pose une question fermée « quelle commande ? » (outils + « aucune », seuil `LLM_DECISION_MIN_CONFIDENCE`), puis une question par argument (choix `BaseAction.decision_choices()`, `enum`, booléen, petite échelle d'entiers ; un outil à argument requis libre n'est pas proposé), exécute l'outil (confirmation comprise) et renvoie une phrase de confirmation : `LLM_DECISION_MESSAGES[outil]` (JSON dans `.env`), sinon `BaseAction.done_message`, sinon la réponse type (`LLM_DECISION_DONE_TEMPLATE`, `_NO_ARGS_TEMPLATE`, `REFUSED_TEMPLATE`, `UNKNOWN_TEXT`). Gabarits `string.Template` : `${COMMAND}`, `${ARGS}`, `${OUTPUT}`, `${TOOL}`, `${<ARGUMENT>}` (le `.env` est lu sans interpolation de variables). `LLMProvider.list_models()` liste les modèles et leurs capacités pour l'interface web.
 
+### 2.5 bis [core/warmup.py](file:///home/suissard/PROGRAMMATIONS/SmartHome/core/warmup.py) — Préchargement des Modèles Ollama
+- **But** : un modèle Ollama déchargé met plusieurs secondes à revenir en mémoire ; on le charge pendant que l'utilisateur parle. `AssistantCore.warm_up()` (appelé au mot-clé par `main.py`, et par la passerelle au message `{"type": "listening", "active": true}` du micro de la PWA) lance `ModelWarmer.start()`, qui ne bloque jamais : un fil calcule les modèles utilisés (`models_to_warm()` : LLM `ollama`, `OLLAMA_STT_MODEL` si `STT_PROVIDER=ollama` ou repli Ollama du mode direct, `OLLAMA_TTS_MODEL` si `TTS_PROVIDER=ollama`), lit `/api/ps` et charge les absents par `/api/generate` sans prompt (`OLLAMA_WARMUP_TIMEOUT`). Ollama injoignable : rien, l'erreur viendra à la demande.
+- **Phrase d'attente** : si la demande est prête alors que `core.warmer.loading()` n'est pas vide, `main.py` dit une phrase tirée de `OLLAMA_WARMUP_PHRASES` (séparées par « | », vide = aucune), sauf si c'est le modèle de la voix qui se charge.
+- **Maintien** : `OLLAMA_KEEP_ALIVE` (vide = défaut d'Ollama, 5 min ; « 30m », secondes, « -1 ») est passé au préchargement et à chaque `OllamaLLM.chat()`. Désactivation : `OLLAMA_WARMUP_ENABLED=false`.
+
 ### 2.6 [audio/tts.py](file:///home/suissard/PROGRAMMATIONS/SmartHome/audio/tts.py) — Synthèse Vocale
 - **Technologie** : Fournisseurs `TTSProvider` (`piper` via ONNX neural local, `ollama` via `/v1/audio/speech` d'Ollama avec `OLLAMA_TTS_MODEL` / `OLLAMA_TTS_VOICE` — ex: lfm3-audio, `female-french`, WAV 24 kHz à en-tête « en flux » décodé par `decode_wav()`, vitesse 1 seulement — ou `openrouter` via `/audio/speech`) sélectionnés par `TTS_PROVIDER`. Les fournisseurs audio Ollama refusent au chargement un modèle sans la capacité requise (`check_ollama_capability()` de `core/providers.py`). La façade `TextToSpeech` sépare `synthesize()` (audio post-traité, sans lecture — utilisable pour un client distant) de `speak()` (synthèse + lecture locale).
 - **Post-Traitement Audio Anti-Pops & Fluidité** :
@@ -195,6 +200,13 @@ Ce document est destiné aux agents IA (et aux développeurs) qui lisent, mainti
   - **Prompts (2 prompts)** : `smarthome_assistant`, `smart_home_planner`.
   - **Multi-Transport** : Supporte `stdio` (local pour Claude Desktop, Cursor, Antigravity) et `sse`/`streamable-http` (accessible sur le réseau local ou distant).
 
+### 2.11 [compose.yaml](file:///home/suissard/PROGRAMMATIONS/SmartHome/compose.yaml), [Dockerfile](file:///home/suissard/PROGRAMMATIONS/SmartHome/Dockerfile) & [docker/](file:///home/suissard/PROGRAMMATIONS/SmartHome/docker) — Installation Docker (défaut sous Linux)
+- **Image** `smarthome:local` : Python 3.12 + `requirements.txt` dans `/opt/venv`, modèles openWakeWord téléchargés à la construction, outils des actions (`pactl`, `playerctl`, `amixer`, `dbus-send`…), ALSA routé vers PulseAudio (`docker/asound.conf`). Le **dépôt est monté sur `/app`** : code, `.env`, profils, `data/`, PocketBase, commandes de `create_command` restent dans le projet. `HOME=/home/smarthome` (volume `home` : cache Whisper / Hugging Face). Point d'entrée `python -m core.cli`.
+- **Services** (profils Compose) : `smarthome` (`voice` : `XDG_RUNTIME_DIR` de la session monté sur `/run/user/host`, jamais créé par Docker, `PULSE_SERVER`, `DBUS_SESSION_BUS_ADDRESS`, `apparmor=unconfined` pour le bus), `smarthome-server` (`server`), `ollama` (`ollama`, `compose.gpu.yaml` pour NVIDIA). Tous en `network_mode: host`, UID de l'utilisateur, `stop_signal: SIGINT` (arrêt normal comme Ctrl+C).
+- **compose.env** (non versionné) : `SMARTHOME_MODE`, `SMARTHOME_OLLAMA`, `SMARTHOME_GPU`, `SMARTHOME_RESTART`, session (`SMARTHOME_UID`, `_GID`, `_RUNTIME_DIR`, `DISPLAY`, `WAYLAND_DISPLAY`, relus à chaque lancement), `SMARTHOME_IMAGE_HASH`. Toujours passé en `--env-file` : Compose ne doit jamais lire le `.env` de l'application (gabarits `${…}`).
+- **Scripts** : `docker/lib.sh` (sourcé : `docker_init` → `docker` ou `sudo docker`, `compose`, `ensure_image`, `in_container` = conteneur jetable `smarthome-server`). `install.sh` (`install_docker`, `vpy` = Python du venv ou du conteneur), `start.sh` (menu de profil dans un conteneur jetable → `profiles/.last`, puis `compose up` au premier plan, `-d` en arrière-plan, `--foreground` pour le service utilisateur), `stop.sh` (`compose stop`), commande `smarthome` = `docker/smarthome`. Sans `compose.env` mais avec `.venv`, `start.sh` reste en mode natif (`--native`).
+- **Limites** : agents externes et `create_command` absents de l'image, actions qui lancent des programmes de l'hôte (applications, captures, luminosité, extinction) inopérantes, `notify-send` bloqué par le profil AppArmor de l'hôte sous Ubuntu.
+
 
 ---
 
@@ -233,7 +245,7 @@ stateDiagram-v2
 Lors de toute intervention sur ce codebase, veillez à respecter les règles suivantes :
 
 ### 1. Préservation des Points d'Entrée de Test Autonomes
-Chaque module Python (`config.py`, `wakeword.py`, `transcribe.py`, `stt.py`, `llm.py`, `providers.py`, `tts.py`, `speech.py`, `barge_in.py`, `vad.py`, `sentences.py`, `feedback.py`, `ducking.py`, `confirm.py`, `tools.py`, `events.py`, `agents.py`, `images.py`, `profiles.py`, `remote_voice.py`, `menu.py`, `wizard.py`, `restart.py`, `assistant.py`, `decision.py`, `settings_store.py`, `users.py`, `pocketbase.py`, `history.py`, `archive.py`, `metrics.py`, `scheduler.py`, `memory.py`, `turn_context.py`, `test_sound.py`) **doit impérativement conserver son bloc `if __name__ == "__main__":`**. Ces blocs permettent un diagnostic isolé sans charger toute la pile applicative.
+Chaque module Python (`config.py`, `wakeword.py`, `transcribe.py`, `stt.py`, `llm.py`, `providers.py`, `tts.py`, `speech.py`, `barge_in.py`, `vad.py`, `sentences.py`, `feedback.py`, `ducking.py`, `confirm.py`, `tools.py`, `events.py`, `agents.py`, `images.py`, `profiles.py`, `remote_voice.py`, `menu.py`, `wizard.py`, `restart.py`, `assistant.py`, `decision.py`, `settings_store.py`, `users.py`, `pocketbase.py`, `history.py`, `archive.py`, `metrics.py`, `scheduler.py`, `memory.py`, `turn_context.py`, `warmup.py`, `test_sound.py`) **doit impérativement conserver son bloc `if __name__ == "__main__":`**. Ces blocs permettent un diagnostic isolé sans charger toute la pile applicative.
 
 
 
@@ -258,7 +270,12 @@ Chaque module Python (`config.py`, `wakeword.py`, `transcribe.py`, `stt.py`, `ll
 - Un test ne doit jamais écrire dans `data/` : `tests/__init__.py` redirige les bases (archive, rappels, mémoire) vers un dossier temporaire ; toute nouvelle base SQLite doit y être ajoutée.
 - Les secrets ne vont jamais dans un fichier versionné : `mcp_servers.json` référence `${NOM}`, remplacé par la variable de `.env` (`core/mcp_hub.expand_env()`).
 
-### 7. Accès Git
+### 7. Docker
+- Un nouvel outil système utilisé par une action ou par l'audio s'ajoute aussi au `apt-get install` du [Dockerfile](file:///home/suissard/PROGRAMMATIONS/SmartHome/Dockerfile) (en plus de `install.sh --native`).
+- Toute donnée persistante va dans le dépôt (monté sur `/app`) ou sous `HOME` : jamais ailleurs dans le conteneur, perdu à chaque lancement.
+- `install.sh` / `start.sh` / `stop.sh` doivent continuer de fonctionner dans les deux modes (Docker et `--native`).
+
+### 8. Accès Git
 - La connexion à GitHub se fait **uniquement en SSH** : `origin` est `git@github.com:suissard/SmartHome.git`. Ne jamais utiliser l'URL HTTPS ni un jeton.
 
 
