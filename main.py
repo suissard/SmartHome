@@ -264,12 +264,21 @@ def main():
         # Comptes de la PWA (AUTH_PROVIDER=pocketbase) : annuaire lancé avec SmartHome s'il ne tourne pas déjà
         from core.pocketbase import ensure_running
         pocketbase = ensure_running(settings)
-        from gateway.app import start_in_thread
-        gateway, _ = start_in_thread(core, settings)
-        auth = "jeton requis" if settings.GATEWAY_AUTH_TOKEN else "loopback, sans jeton"
-        print(f"  • Passerelle    : ws://{settings.GATEWAY_HOST}:{settings.GATEWAY_PORT}/ws ({auth})")
-        from core.pairing import print_pairing
-        print_pairing(settings)
+        from core.ports import PortUnavailable, resolve_gateway_port
+        try:
+            # Port déjà pris par un autre logiciel : le suivant libre, plutôt qu'un plantage
+            gateway_settings = resolve_gateway_port(settings)
+        except PortUnavailable as e:
+            gateway_settings = None
+            print(f"  • Passerelle    : ❌ {e}")
+        if gateway_settings:
+            from gateway.app import start_in_thread
+            gateway, _ = start_in_thread(core, gateway_settings)
+            auth = "jeton requis" if settings.GATEWAY_AUTH_TOKEN else "loopback, sans jeton"
+            print(f"  • Passerelle    : ws://{settings.GATEWAY_HOST}:{gateway_settings.GATEWAY_PORT}/ws ({auth})")
+            from core.pairing import print_pairing, publish_tailscale_serve
+            publish_tailscale_serve(gateway_settings, settings.GATEWAY_PORT)
+            print_pairing(gateway_settings)
     else:
         print("  • Passerelle    : Désactivée (GATEWAY_ENABLED=false)")
     print(f"  • Veille active : {FOLLOW_UP_TIMEOUT}s\n")

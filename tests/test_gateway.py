@@ -433,6 +433,79 @@ class PairingTests(unittest.TestCase):
             self.assertTrue(pairing.pairing_url(Settings(GATEWAY_AUTH_TOKEN="t")).startswith("https://pc.ts.net/#token="))
 
 
+class GatewayPortTests(unittest.TestCase):
+    # Publications vues chez un utilisateur : SmartHome sur 443, un autre logiciel sur 8443
+    STATUS = {"TCP": {"443": {"HTTPS": True}, "8443": {"HTTPS": True}},
+              "Web": {"pc.ts.net:443": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:8765"}}},
+                      "pc.ts.net:8443": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:3110"}}}}}
+
+    def _busy_port(self):
+        import socket
+        sock = socket.socket()
+        sock.bind(("127.0.0.1", 0))
+        sock.listen()
+        self.addCleanup(sock.close)
+        return sock.getsockname()[1]
+
+    def test_busy_port_falls_back_to_next_free(self):
+        from unittest import mock
+        from core import ports
+        busy = self._busy_port()
+        with mock.patch.object(ports, "is_smarthome", return_value=False):
+            s = ports.resolve_gateway_port(Settings(GATEWAY_PORT=busy, GATEWAY_PORT_FALLBACK=20))
+        self.assertGreater(s.GATEWAY_PORT, busy)
+        self.assertLessEqual(s.GATEWAY_PORT, busy + 20)
+        self.assertTrue(ports.port_free("127.0.0.1", s.GATEWAY_PORT))
+
+    def test_free_port_kept_and_no_fallback_raises(self):
+        from core import ports
+        free = ports.find_free_port("127.0.0.1", 40000, 200)
+        self.assertEqual(ports.resolve_gateway_port(Settings(GATEWAY_PORT=free)).GATEWAY_PORT, free)
+        with self.assertRaises(ports.PortUnavailable):
+            ports.resolve_gateway_port(Settings(GATEWAY_PORT=self._busy_port(), GATEWAY_PORT_FALLBACK=0))
+
+    def test_serve_port_skips_other_software(self):
+        from unittest import mock
+        from core import pairing, ports
+        candidates = [443, 8443, 10000]
+        # La passerelle d'origine (8765) répond encore : 443 n'est pas repris, 8443 jamais (autre logiciel)
+        with mock.patch.object(ports, "port_free", return_value=False):
+            self.assertEqual(pairing._serve_port_to_use(self.STATUS, 8766, range(8765, 8786), candidates), (10000, False))
+        # Ancienne publication de SmartHome vers un port où plus rien n'écoute : reprise (même adresse)
+        with mock.patch.object(ports, "port_free", return_value=True):
+            self.assertEqual(pairing._serve_port_to_use(self.STATUS, 8766, range(8765, 8786), candidates), (443, True))
+            # 3110 hors de la plage de SmartHome : 8443 n'est jamais repris
+            self.assertIsNone(pairing._serve_port_to_use(self.STATUS, 9000, range(9000, 9021), [8443]))
+
+    def test_publish_runs_tailscale_serve(self):
+        from unittest import mock
+        from core import pairing, ports
+        published = {"Web": {**self.STATUS["Web"], "pc.ts.net:10000": {"Handlers": {"/": {"Proxy": "http://127.0.0.1:8766"}}}}}
+        s = Settings(GATEWAY_PORT=8766, GATEWAY_AUTH_TOKEN="t")
+        done = mock.Mock(returncode=0, stdout="", stderr="")
+        with mock.patch.object(pairing, "tailscale_ip", return_value="100.64.0.1"), \
+                mock.patch.object(pairing, "_tailscale_json", side_effect=[self.STATUS, published]), \
+                mock.patch.object(ports, "port_free", return_value=False), \
+                mock.patch.object(pairing.subprocess, "run", return_value=done) as run:
+            self.assertEqual(pairing.publish_tailscale_serve(s, 8765), "https://pc.ts.net:10000")
+        self.assertEqual(run.call_args.args[0][1:], ["serve", "--bg", "--https=10000", "http://127.0.0.1:8766"])
+
+    def test_publish_skipped_without_token_or_when_already_published(self):
+        from unittest import mock
+        from core import pairing
+        with mock.patch.object(pairing.subprocess, "run") as run, \
+                mock.patch.object(pairing, "tailscale_ip", return_value="100.64.0.1"), \
+                mock.patch.object(pairing, "_tailscale_json", return_value=self.STATUS):
+            self.assertEqual(pairing.publish_tailscale_serve(Settings(GATEWAY_PORT=8766, GATEWAY_AUTH_TOKEN="")), "")
+            self.assertEqual(pairing.publish_tailscale_serve(Settings(GATEWAY_PORT=8765, GATEWAY_AUTH_TOKEN="t")),
+                             "https://pc.ts.net")
+        run.assert_not_called()
+
+    def test_https_ports_setting(self):
+        self.assertEqual(Settings(GATEWAY_TAILSCALE_HTTPS_PORTS="443, 10000").GATEWAY_TAILSCALE_HTTPS_PORTS, [443, 10000])
+        self.assertEqual(Settings().GATEWAY_TAILSCALE_HTTPS_PORTS, [443, 8443, 10000])
+
+
 class ConversationGatewayTests(unittest.TestCase):
     def test_conversation_websocket_flow(self):
         core = make_core([])
