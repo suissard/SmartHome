@@ -575,6 +575,9 @@ class _WSClient:
         elif kind == "listening":
             self.mic_open = bool(message.get("active", True))
             self.core.events.emit("remote_listening", self.session.id, active=self.mic_open)
+            if self.mic_open:
+                # Micro du téléphone ouvert : modèles Ollama chargés pendant que l'utilisateur parle
+                self.core.warm_up()
         elif kind == "ping":
             self.push({"type": "pong"})
         elif kind == "auth":

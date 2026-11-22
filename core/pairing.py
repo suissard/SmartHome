@@ -8,6 +8,7 @@ import json
 import os
 import socket
 import subprocess
+from typing import Optional
 from urllib.parse import quote, urlparse
 
 from core.config import Settings, get_settings
@@ -49,15 +50,96 @@ def _tailscale_json(*args: str) -> dict:
         return {}
 
 
-def tailscale_serve_url(port: int) -> str:
-    """URL HTTPS publiée par `tailscale serve` pour ce port (vide si aucune)."""
-    for hostport, web in (_tailscale_json("serve", "status").get("Web") or {}).items():
+def _serve_proxies(status: dict) -> list[tuple[str, int, Optional[int]]]:
+    """(nom d'hôte, port HTTPS, port local visé ou None) de chaque publication `tailscale serve`."""
+    found = []
+    for hostport, web in (status.get("Web") or {}).items():
+        host, _, tcp_port = hostport.rpartition(":")
+        if not tcp_port.isdigit():
+            continue
         for handler in (web.get("Handlers") or {}).values():
             target = urlparse(handler.get("Proxy", ""))
-            if target.hostname in ("127.0.0.1", "localhost", "::1") and target.port == port:
-                host, _, tcp_port = hostport.rpartition(":")
-                return f"https://{host}" + ("" if tcp_port == "443" else f":{tcp_port}")
+            try:
+                local = target.port if target.hostname in ("127.0.0.1", "localhost", "::1") else None
+            except ValueError:
+                local = None
+            found.append((host, int(tcp_port), local))
+    return found
+
+
+def _https_url(host: str, tcp_port: int) -> str:
+    return f"https://{host}" + ("" if tcp_port == 443 else f":{tcp_port}")
+
+
+def tailscale_serve_url(port: int, status: Optional[dict] = None) -> str:
+    """URL HTTPS publiée par `tailscale serve` pour ce port (vide si aucune)."""
+    if status is None:
+        status = _tailscale_json("serve", "status")
+    for host, tcp_port, local in _serve_proxies(status):
+        if local == port:
+            return _https_url(host, tcp_port)
     return ""
+
+
+def _serve_port_to_use(status: dict, port: int, ours: range, candidates: list[int]) -> Optional[tuple[int, bool]]:
+    """Port HTTPS du tailnet où publier la passerelle, et s'il faut d'abord retirer une ancienne publication.
+    Un port déjà utilisé par un autre logiciel n'est jamais repris ; une publication laissée par SmartHome
+    (vers un port de `ours` où plus rien n'écoute) l'est, pour garder la même adresse sur le téléphone."""
+    from core.ports import port_free
+    proxies = {tcp_port: local for _, tcp_port, local in _serve_proxies(status)}
+    taken = {int(p) for p in (status.get("TCP") or {}) if str(p).isdigit()} | set(proxies)
+    for candidate in candidates:
+        if candidate not in taken:
+            return candidate, False
+        local = proxies.get(candidate)
+        if local is not None and local != port and local in ours and port_free("127.0.0.1", local):
+            return candidate, True
+    return None
+
+
+def publish_tailscale_serve(settings: Settings, requested_port: Optional[int] = None) -> str:
+    """Publie la passerelle sur le tailnet (`tailscale serve --bg`, HTTPS exigé par le micro du téléphone) si elle
+    ne l'est pas déjà, sur un port HTTPS libre de GATEWAY_TAILSCALE_HTTPS_PORTS. Renvoie l'URL (vide sinon)."""
+    s = settings
+    if not (s.GATEWAY_TAILSCALE_SERVE and s.GATEWAY_TAILSCALE_URL) or s.GATEWAY_PUBLIC_URL:
+        return ""
+    # Sans jeton, LocalOnlyMiddleware refuse ce qui passe par un proxy ; tailscale serve vise 127.0.0.1
+    if not s.GATEWAY_AUTH_TOKEN or not (is_loopback(s.GATEWAY_HOST) or s.GATEWAY_HOST in ("", "0.0.0.0", "::")):
+        return ""
+    if not tailscale_ip():
+        return ""
+    status = _tailscale_json("serve", "status")
+    if url := tailscale_serve_url(s.GATEWAY_PORT, status):
+        return url
+    base = requested_port or s.GATEWAY_PORT
+    choice = _serve_port_to_use(status, s.GATEWAY_PORT, range(base, base + s.GATEWAY_PORT_FALLBACK + 1),
+                                s.GATEWAY_TAILSCALE_HTTPS_PORTS)
+    if choice is None:
+        ports = ", ".join(map(str, s.GATEWAY_TAILSCALE_HTTPS_PORTS))
+        print(f"⚠️  [TAILSCALE] Ports HTTPS {ports} déjà utilisés : ajoutez-en un à GATEWAY_TAILSCALE_HTTPS_PORTS.")
+        return ""
+    https_port, replace = choice
+    target = f"http://127.0.0.1:{s.GATEWAY_PORT}"
+    commands = ([[_tailscale_bin(), "serve", f"--https={https_port}", "off"]] if replace else [])
+    commands.append([_tailscale_bin(), "serve", "--bg", f"--https={https_port}", target])
+    for cmd in commands:
+        try:
+            done = subprocess.run(cmd, capture_output=True, text=True, timeout=15, stdin=subprocess.DEVNULL)
+        except (OSError, subprocess.SubprocessError) as e:
+            print(f"⚠️  [TAILSCALE] Publication impossible : {e}")
+            return ""
+        if done.returncode != 0:
+            output = (done.stderr or done.stdout or "").strip()
+            if "operator" in output or "sudo" in output or "Access denied" in output:
+                print(f"⚠️  [TAILSCALE] Publication refusée (droits) : lancez une fois 'sudo tailscale set --operator=$USER',"
+                      f" ou 'sudo tailscale serve --bg --https={https_port} {target}'.")
+            else:
+                print(f"⚠️  [TAILSCALE] Publication impossible : {output.splitlines()[-1] if output else done.returncode}")
+            return ""
+    url = tailscale_serve_url(s.GATEWAY_PORT)
+    if url:
+        print(f"🔒 [TAILSCALE] Passerelle publiée sur le tailnet : {url}")
+    return url
 
 
 def tailscale_ip() -> str:

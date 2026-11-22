@@ -84,6 +84,7 @@ def _parse_path_list(value):
 
 
 PathList = Annotated[list[str], BeforeValidator(_parse_path_list)]
+PortList = Annotated[list[Annotated[int, Field(ge=1, le=65535)]], BeforeValidator(_parse_path_list)]
 FeedbackType = Literal["phrase", "sound", "none"]
 
 
@@ -166,6 +167,17 @@ class Settings(BaseModel):
     OLLAMA_TTS_VOICE: str = "female-french"
     # Délai maximal d'une transcription ou d'une synthèse Ollama (secondes)
     OLLAMA_AUDIO_TIMEOUT: float = Field(30.0, gt=0.0)
+    # Préchargement des modèles Ollama (LLM, STT, TTS) dès le mot-clé ou l'ouverture du micro de la PWA (core/warmup.py)
+    OLLAMA_WARMUP_ENABLED: EnvBool = True
+    # Délai maximal d'un chargement en mémoire (secondes)
+    OLLAMA_WARMUP_TIMEOUT: float = Field(120.0, gt=0.0)
+    # Phrases d'attente (séparées par « | », une au hasard) dites si la demande est prête avant le modèle ; vide = aucune
+    OLLAMA_WARMUP_PHRASES: str = (
+        "Attends, je réveille mes circuits.|Une seconde, je chauffe mes neurones.|"
+        "Deux secondes, je rassemble mes idées.|Je m'étire un peu et j'arrive."
+    )
+    # Durée de maintien en mémoire après une demande (« 30m », « 2h », secondes, « -1 » = toujours) ; vide = défaut d'Ollama (5 min)
+    OLLAMA_KEEP_ALIVE: str = ""
     LLM_SYSTEM_PROMPT: str = (
         "Tu es un assistant vocal domotique. Réponds en français de manière claire, concise et directe "
         "(1 à 2 phrases max). N'utilise pas de markdown ou d'emoji."
@@ -376,12 +388,18 @@ class Settings(BaseModel):
     GATEWAY_ENABLED: EnvBool = False
     GATEWAY_HOST: str = "127.0.0.1"
     GATEWAY_PORT: int = Field(8765, ge=1, le=65535)
+    # Port déjà pris (autre logiciel, autre instance) : nombre de ports suivants essayés (0 = s'arrêter sur une erreur)
+    GATEWAY_PORT_FALLBACK: int = Field(20, ge=0, le=1000)
     # Jeton exigé par les clients ; obligatoire hors loopback (LAN, Tailscale)
     GATEWAY_AUTH_TOKEN: str = ""
     # URL publique de l'interface (ex: https://pc.tailnet.ts.net) ; sinon déduite de GATEWAY_HOST / GATEWAY_PORT
     GATEWAY_PUBLIC_URL: str = ""
     # Utilise l'URL HTTPS de `tailscale serve` (ou l'IP Tailscale si l'écoute est sur 0.0.0.0) quand Tailscale est actif
     GATEWAY_TAILSCALE_URL: EnvBool = True
+    # Publie la passerelle sur le tailnet (`tailscale serve --bg`) si elle ne l'est pas encore (jeton requis)
+    GATEWAY_TAILSCALE_SERVE: EnvBool = True
+    # Ports HTTPS du tailnet essayés, dans l'ordre ; ceux déjà utilisés par un autre logiciel sont sautés
+    GATEWAY_TAILSCALE_HTTPS_PORTS: PortList = [443, 8443, 10000]
     # Affiche l'URL de connexion (jeton compris) et son QR code au démarrage
     GATEWAY_QR_ENABLED: EnvBool = True
     # Délai laissé à un client distant pour confirmer une action dangereuse (secondes)

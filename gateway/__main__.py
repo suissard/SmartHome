@@ -12,7 +12,8 @@ if str(_ROOT_DIR) not in sys.path:
 
 from core.assistant import AssistantCore
 from core.config import get_settings
-from core.pairing import print_pairing
+from core.pairing import print_pairing, publish_tailscale_serve
+from core.ports import PortUnavailable, resolve_gateway_port
 from core.pocketbase import ensure_running
 from core.profiles import warn_shadowed_profile
 from core.restart import restart_if_requested
@@ -40,7 +41,17 @@ def main():
     warn_shadowed_profile()
     print(f"  • Cerveau LLM : {LLM_PROVIDERS.get(s.LLM_PROVIDER).describe(s)}")
     print(f"  • Outils      : {len(tools)} ({sum(t.danger == 'confirm' for t in tools)} avec confirmation)")
+    requested = s.GATEWAY_PORT
+    try:
+        # Port déjà pris par un autre logiciel : le suivant libre, plutôt qu'un plantage
+        s = resolve_gateway_port(s)
+    except PortUnavailable as e:
+        print(f"❌ [PASSERELLE] {e}")
+        if pocketbase:
+            pocketbase.stop()
+        raise SystemExit(1) from None
     print(f"  • Écoute      : ws://{s.GATEWAY_HOST}:{s.GATEWAY_PORT}/ws — {auth}")
+    publish_tailscale_serve(s, requested)
     print_pairing(s)
     print()
     core.start_scheduler()

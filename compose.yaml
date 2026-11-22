@@ -1,0 +1,75 @@
+# SmartHome sous Docker Compose — lancé par ./start.sh, arrêté par ./stop.sh, installé par ./install.sh.
+#
+# Profils Compose (COMPOSE_PROFILES dans compose.env, écrit par install.sh) :
+#   voice   Assistant vocal : micro et haut-parleur de la session (PipeWire / PulseAudio de l'hôte)
+#   server  Passerelle seule, sans micro (serveur, PWA)
+#   ollama  Ollama dans un conteneur (sinon celui de l'hôte, http://localhost:11434)
+#
+# À la main : docker compose --env-file compose.env --profile voice up -d
+# (--env-file évite que Compose lise le .env de l'application, qui n'est pas le sien).
+#
+# Le dépôt est monté sur /app : .env, profils, data/, voix, mots-clés et PocketBase restent ceux du projet,
+# et les réglages modifiés depuis l'interface sont écrits dans le .env de l'hôte.
+
+name: smarthome
+
+x-smarthome: &smarthome
+  build: .
+  image: smarthome:local
+  # Même UID que l'utilisateur de l'hôte : fichiers du dépôt et socket audio de sa session
+  user: "${SMARTHOME_UID:-1000}:${SMARTHOME_GID:-1000}"
+  # Réseau de l'hôte : passerelle sur le LAN / Tailscale, Ollama et PocketBase sur localhost comme sans Docker
+  network_mode: host
+  # SIGINT = arrêt normal (son rétabli, PocketBase arrêté), comme Ctrl+C
+  stop_signal: SIGINT
+  stop_grace_period: 20s
+  # unless-stopped : serveur démarré avec Docker (install.sh --server --service) ; sinon start.sh / service utilisateur
+  restart: ${SMARTHOME_RESTART:-no}
+
+services:
+  smarthome:
+    <<: *smarthome
+    profiles: [voice]
+    command: ["python", "-m", "core.cli", "start", "--no-menu"]
+    # Le profil AppArmor par défaut de Docker refuse le bus D-Bus de la session (notifications, médias, verrouillage)
+    security_opt:
+      - apparmor=unconfined
+    volumes:
+      - .:/app
+      - home:/home/smarthome
+      - /etc/localtime:/etc/localtime:ro
+      # Dossier d'exécution de la session (XDG_RUNTIME_DIR) : son (pulse/), bus D-Bus (notifications, médias, verrouillage).
+      # Jamais créé par Docker (il appartiendrait à root) : sans session ouverte, le conteneur ne démarre pas.
+      - type: bind
+        source: ${SMARTHOME_RUNTIME_DIR:-/run/user/1000}
+        target: /run/user/host
+        bind:
+          create_host_path: false
+    environment:
+      XDG_RUNTIME_DIR: /run/user/host
+      PULSE_SERVER: unix:/run/user/host/pulse/native
+      DBUS_SESSION_BUS_ADDRESS: unix:path=/run/user/host/bus
+      WAYLAND_DISPLAY: ${WAYLAND_DISPLAY:-}
+      DISPLAY: ${DISPLAY:-}
+
+  smarthome-server:
+    <<: *smarthome
+    profiles: [server]
+    command: ["python", "-m", "core.cli", "server"]
+    volumes:
+      - .:/app
+      - home:/home/smarthome
+      - /etc/localtime:/etc/localtime:ro
+
+  ollama:
+    image: ollama/ollama:${OLLAMA_IMAGE_TAG:-0.40.16}
+    profiles: [ollama]
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      - ollama:/root/.ollama
+
+volumes:
+  # Cache des modèles (Whisper / Hugging Face) entre deux reconstructions
+  home:
+  ollama:

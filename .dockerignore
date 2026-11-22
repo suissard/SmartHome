@@ -1,0 +1,21 @@
+# Le dépôt est monté dans le conteneur (compose.yaml) : l'image n'embarque que le code versionné.
+.git
+.venv
+venv
+env
+.env
+compose.env
+**/__pycache__
+.pytest_cache
+.ruff_cache
+.vscode
+.idea
+data
+logs
+uploads
+recordings
+pocketbase/pocketbase
+pocketbase/pb_data
+profiles/*.local.env
+profiles/.last
+profiles/perso.env

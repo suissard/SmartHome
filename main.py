@@ -34,6 +34,7 @@ from core.assistant import AssistantCore, Reply
 from core.mcp_hub import get_mcp_hub
 from core.remote_voice import RemoteVoiceGuard
 from core.restart import restart_if_requested
+from core.warmup import waiting_phrase
 from core.security import require_token_for_host
 from core.users import LOCAL_USER_ID, local_user
 
@@ -263,12 +264,21 @@ def main():
         # Comptes de la PWA (AUTH_PROVIDER=pocketbase) : annuaire lancé avec SmartHome s'il ne tourne pas déjà
         from core.pocketbase import ensure_running
         pocketbase = ensure_running(settings)
-        from gateway.app import start_in_thread
-        gateway, _ = start_in_thread(core, settings)
-        auth = "jeton requis" if settings.GATEWAY_AUTH_TOKEN else "loopback, sans jeton"
-        print(f"  • Passerelle    : ws://{settings.GATEWAY_HOST}:{settings.GATEWAY_PORT}/ws ({auth})")
-        from core.pairing import print_pairing
-        print_pairing(settings)
+        from core.ports import PortUnavailable, resolve_gateway_port
+        try:
+            # Port déjà pris par un autre logiciel : le suivant libre, plutôt qu'un plantage
+            gateway_settings = resolve_gateway_port(settings)
+        except PortUnavailable as e:
+            gateway_settings = None
+            print(f"  • Passerelle    : ❌ {e}")
+        if gateway_settings:
+            from gateway.app import start_in_thread
+            gateway, _ = start_in_thread(core, gateway_settings)
+            auth = "jeton requis" if settings.GATEWAY_AUTH_TOKEN else "loopback, sans jeton"
+            print(f"  • Passerelle    : ws://{settings.GATEWAY_HOST}:{gateway_settings.GATEWAY_PORT}/ws ({auth})")
+            from core.pairing import print_pairing, publish_tailscale_serve
+            publish_tailscale_serve(gateway_settings, settings.GATEWAY_PORT)
+            print_pairing(gateway_settings)
     else:
         print("  • Passerelle    : Désactivée (GATEWAY_ENABLED=false)")
     print(f"  • Veille active : {FOLLOW_UP_TIMEOUT}s\n")
@@ -303,6 +313,8 @@ def main():
 
             if detected:
                 print(f"\n🎯 Mot-clé détecté ({detector.model_name}, score {score:.2f})")
+                # 0. Modèles Ollama chargés en mémoire pendant que l'utilisateur parle (core/warmup.py)
+                core.warm_up()
                 # 1. Atténuation immédiate des autres sources audio (musique, vidéos, etc.)
                 media_pauser.pause()
                 ducker.duck()
@@ -334,6 +346,15 @@ def main():
                                 print(f"👤 : 🎙️ [Audio {where}] ({elapsed_t:.2f} s)")
                             else:
                                 print(f"👤 : « {user_input} » ({elapsed_t:.2f} s)")
+                            # Demande prête avant le modèle : une phrase d'attente plutôt qu'un silence
+                            still_loading = core.warmer.loading()
+                            # Inutile si c'est la voix elle-même qui se charge : la phrase attendrait le même modèle
+                            tts_loading = s.TTS_PROVIDER.lower() == "ollama" and s.OLLAMA_TTS_MODEL in still_loading
+                            if still_loading and not tts_loading:
+                                phrase = waiting_phrase(core.settings)
+                                if phrase:
+                                    print(f"⏳ ({', '.join(still_loading)} en cours de chargement) « {phrase} »")
+                                    speech.say(phrase)
                             print("🤖 : ", end="", flush=True)
 
                             # 2. Réponse : actions exécutées et voix jouée au fil de la génération, interruptible

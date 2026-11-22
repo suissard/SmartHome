@@ -1,0 +1,11 @@
+# Carte NVIDIA pour le conteneur Ollama (nvidia-container-toolkit requis). Ajouté par install.sh quand Docker
+# dispose du runtime nvidia : SMARTHOME_COMPOSE_FILES=compose.yaml:compose.gpu.yaml dans compose.env.
+services:
+  ollama:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

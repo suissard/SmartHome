@@ -255,13 +255,15 @@ class InstallWizard:
                        Option("Ne pas utiliser Ollama", "none")]
             index = 0 if needed else 2
         elif needed:
-            options = [Option("Installer Ollama", "install", why),
+            install_how = " · conteneur Docker ollama/ollama" if getattr(self.args, "docker", False) else ""
+            options = [Option("Installer Ollama", "install", why + install_how),
                        Option("Ollama tourne sur une autre machine", "remote", "Je donne son adresse"),
                        Option("Ne pas installer Ollama", "none", "Le profil ne fonctionnera pas sans lui")]
             index = 0
         else:
             options = [Option("Ne pas installer Ollama", "none", f"Le profil {self.profile} n'en a pas besoin"),
-                       Option("Installer Ollama quand même", "install", "Pour essayer des modèles locaux plus tard"),
+                       Option("Installer Ollama quand même", "install", "Pour essayer des modèles locaux plus tard"
+                              + (" (conteneur Docker)" if getattr(self.args, "docker", False) else "")),
                        Option("Ollama tourne sur une autre machine", "remote", "Je donne son adresse")]
             index = 0
         self.ollama = self.ask("step_ollama", f"Ollama (modèles d'IA locaux) · {state}", options, index).value
@@ -347,6 +349,9 @@ class InstallWizard:
     def step_service(self):
         how = {"windows": "Tâche planifiée à l'ouverture de session",
                "linux": "Service systemd " + ("système" if self.mode == "server" else "utilisateur")}[self.platform]
+        if getattr(self.args, "docker", False):
+            how = ("Conteneur relancé par Docker au démarrage de la machine" if self.mode == "server"
+                   else "Service systemd utilisateur qui lance le conteneur à l'ouverture de session")
         self.service = self.ask("step_service", "Démarrer SmartHome automatiquement ?", [
             Option("Non", False, "Lancement à la main : `smarthome`"), Option("Oui", True, how),
         ], 1 if self.service else 0).value
@@ -418,6 +423,7 @@ def parse_args(argv=None):
     parser.add_argument("--models", type=flag, default=True)
     parser.add_argument("--service", type=flag, default=False)
     parser.add_argument("--accounts", type=flag, default=True)
+    parser.add_argument("--docker", type=flag, default=False, help="Installation Docker (pas de paquets système)")
     return parser.parse_args(argv)
 
 
